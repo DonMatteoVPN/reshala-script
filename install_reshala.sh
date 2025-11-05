@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3552 dev - FINAL CUT         ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3553 dev - STEALTH EDITION   ==
 # ============================================================ #
-# ==    Финальный редизайн, исправлены баги отображения.     ==
-# ==    Переработана система логирования.                    ==
+# ==    Финальный редизайн, добавлена инфа по CPU/Disk.      ==
+# ==    Исправлены все баги отображения.                     ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.3552 dev"
+readonly VERSION="v0.3553 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -38,29 +38,22 @@ get_net_status() {
 # --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
 install_script() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}❌ Эту команду — только с 'sudo'.${C_RESET}"; exit 1; fi
-    
     echo -e "${C_CYAN}🚀 Интегрирую Решалу ${VERSION} в систему...${C_RESET}"
-    
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
     if ! wget -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
         echo -e "${C_RED}❌ Не могу скачать последнюю версию. Проверь интернет или ссылку.${C_RESET}"; exit 1;
     fi
-    
     sudo cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
     rm "$TEMP_SCRIPT"
-
     if ! grep -q "alias reshala='sudo reshala'" /root/.bashrc 2>/dev/null; then
         echo "alias reshala='sudo reshala'" | sudo tee -a /root/.bashrc >/dev/null
     fi
-
     echo -e "\n${C_GREEN}✅ Готово. Решала в системе.${C_RESET}\n"
-    
     if [[ $(id -u) -eq 0 ]]; then
         echo -e "   ${C_BOLD}Команда запуска:${C_RESET} ${C_YELLOW}reshala${C_RESET}"
     else
         echo -e "   ${C_BOLD}Команда запуска:${C_RESET} ${C_YELLOW}sudo reshala${C_RESET}"
     fi
-
     echo -e "   ${C_RED}⚠️ ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала.${C_RESET}"
     if [[ "${1:-}" != "update" ]]; then
         echo -e "   Установочный файл ('$0') можешь сносить."
@@ -69,23 +62,16 @@ install_script() {
 
 # --- МОДУЛЬ ОБНОВЛЕНИЯ (С ЧИСТЫМИ ЛОГАМИ И САНАЦИЕЙ) ---
 check_for_updates() {
-    UPDATE_AVAILABLE=0
-    LATEST_VERSION=""
-    UPDATE_CHECK_STATUS="OK"
-    
+    UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"
     local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
     local curl_error_output; curl_error_output=$(mktemp)
-    
-    local response_body; response_body=$(curl -4 -L -sS --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 \
-        "$url_with_buster" 2> "$curl_error_output")
+    local response_body; response_body=$(curl -4 -L -sS --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> "$curl_error_output")
     local curl_exit_code=$?
-    
     if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
         LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 | tr -d '\r')
         if [ -n "$LATEST_VERSION" ]; then
             local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
             local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
-
             if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
                 local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
                 if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then
@@ -104,33 +90,21 @@ check_for_updates() {
 run_update() {
     read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
     if [[ "$confirm_update" != "y" && "$confirm_update" != "Y" ]]; then
-        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter
-        return
+        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter; return
     fi
-
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
     local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
-    
     if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then
-        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог.${C_RESET}"; 
-        log "wget не смог скачать $url_with_buster"
-        rm -f "$TEMP_SCRIPT"; wait_for_enter
-        return
+        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог.${C_RESET}"; log "wget не смог скачать $url_with_buster"; rm -f "$TEMP_SCRIPT"; wait_for_enter; return
     fi
-
     local downloaded_version; downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2 | tr -d '\r')
     if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then
-        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; 
-        log "Скачанный файл обновления не прошел проверку. Ожидалась версия '$LATEST_VERSION', в файле '$downloaded_version'."
-        rm -f "$TEMP_SCRIPT"; wait_for_enter
-        return
+        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; log "Скачанный файл обновления не прошел проверку. Ожидалась версия '$LATEST_VERSION', в файле '$downloaded_version'."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return
     fi
-    
     echo "   Ставлю на место старого..."
     sudo cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
     rm "$TEMP_SCRIPT"
-
     log "✅ Ахуенный пацан! Успешно обновился с $VERSION до $LATEST_VERSION."
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"
     echo "   Перезапускаю себя, чтобы мозги встали на место..."
@@ -138,82 +112,36 @@ run_update() {
     exec "$INSTALL_PATH"
 }
 
-
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (УСИЛЕННЫЙ) ---
+# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
 get_docker_version() {
-    local container_name="$1"
-    local version=""
-    version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null)
-    if [ -n "$version" ]; then echo "$version"; return; fi
-    version=$(sudo docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2)
-    if [ -n "$version" ]; then echo "$version"; return; fi
-    if sudo docker exec "$container_name" test -f /app/package.json 2>/dev/null; then
-        version=$(sudo docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null)
-        if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi
-    fi
-    if sudo docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then
-        version=$(sudo docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r')
-        if [ -n "$version" ]; then echo "$version"; return; fi
-    fi
-    local image_tag; image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
-    if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then
-        echo "$image_tag"; return;
-    fi
-    local image_id; image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
-    echo "latest (образ: ${image_id:0:7})"
+    local container_name="$1"; local version=""
+    version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null); if [ -n "$version" ]; then echo "$version"; return; fi
+    version=$(sudo docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2); if [ -n "$version" ]; then echo "$version"; return; fi
+    if sudo docker exec "$container_name" test -f /app/package.json 2>/dev/null; then version=$(sudo docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null); if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi; fi
+    if sudo docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then version=$(sudo docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r'); if [ -n "$version" ]; then echo "$version"; return; fi; fi
+    local image_tag; image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then echo "$image_tag"; return; fi
+    local image_id; image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); echo "latest (образ: ${image_id:0:7})"
 }
-
 scan_server_state() {
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
-    local panel_node_container=""
-    if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then
-        SERVER_TYPE="Панель"; panel_node_container="remnawave"
-    elif sudo docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then
-        SERVER_TYPE="Нода"; panel_node_container="remnanode"
-    fi
-    if [ -n "$panel_node_container" ]; then
-        PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_node_container" 2>/dev/null)
-        PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container")
-    fi
-    local bot_container_name="remnawave_bot"
-    if sudo docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then
-        BOT_DETECTED=1
-        local bot_compose_path; bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true)
-        if [ -n "$bot_compose_path" ]; then
-            BOT_PATH=$(dirname "$bot_compose_path")
-            if [ -f "$BOT_PATH/VERSION" ]; then
-                BOT_VERSION=$(cat "$BOT_PATH/VERSION")
-            else
-                BOT_VERSION=$(get_docker_version "$bot_container_name")
-            fi
-        else
-            BOT_VERSION=$(get_docker_version "$bot_container_name")
-        fi
-    fi
-    if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
-        local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
-        WEB_SERVER="Nginx $nginx_version (в Docker)"
-    elif sudo docker ps --format '{{.Names}}' | grep -q "caddy"; then
-        local caddy_version; caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown")
-        WEB_SERVER="Caddy $caddy_version (в Docker)"
-    elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
-        if command -v nginx &> /dev/null; then
-            local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
-            WEB_SERVER="Nginx $nginx_version (на хосте)"
-        else
-            WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
-        fi
-    fi
+    local panel_node_container=""; if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then SERVER_TYPE="Панель"; panel_node_container="remnawave"; elif sudo docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then SERVER_TYPE="Нода"; panel_node_container="remnanode"; fi
+    if [ -n "$panel_node_container" ]; then PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_node_container" 2>/dev/null); PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container"); fi
+    local bot_container_name="remnawave_bot"; if sudo docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then BOT_DETECTED=1; local bot_compose_path; bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true); if [ -n "$bot_compose_path" ]; then BOT_PATH=$(dirname "$bot_compose_path"); if [ -f "$BOT_PATH/VERSION" ]; then BOT_VERSION=$(cat "$BOT_PATH/VERSION"); else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; fi
+    if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (в Docker)"; elif sudo docker ps --format '{{.Names}}' | grep -q "caddy"; then local caddy_version; caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown"); WEB_SERVER="Caddy $caddy_version (в Docker)"; elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then if command -v nginx &> /dev/null; then local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (на хосте)"; else WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p'); fi; fi
 }
 
 # --- НОВЫЕ ФУНКЦИИ ДЛЯ СБОРА ИНФОРМАЦИИ О СЕРВЕРЕ ---
 get_cpu_info() {
-    local model; model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//')
-    local freq; freq=$(lscpu | grep "CPU MHz" | head -n1 | awk '{printf "%.2f GHz", $3/1000}')
-    echo "$model ($freq)"
+    local model; model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//'); echo "$model"
+}
+get_cpu_load() {
+    local cores; cores=$(nproc); local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1); echo "$load / $cores ядер"
 }
 get_ram_info() {
     free -m | grep Mem | awk '{printf "%.1f/%.1f GB", $3/1024, $2/1024}'
+}
+get_disk_info() {
+    local root_device; root_device=$(df / | awk 'NR==2 {print $1}'); local main_disk; main_disk=$(lsblk -no pkname "$root_device" 2>/dev/null || basename "$root_device" | sed 's/[0-9]*$//'); local disk_type="HDD"; if [ -f "/sys/block/$main_disk/queue/rotational" ]; then if [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then disk_type="SSD"; fi; elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi; local usage; usage=$(df -h / | awk 'NR==2 {print $3 "/" $2}'); echo "$disk_type ($usage)"
 }
 get_hoster_info() {
     curl -s --connect-timeout 5 ipinfo.io/org || echo "Не определён"
@@ -365,83 +293,47 @@ uninstall_script() {
 
 # --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (НОВЫЙ ДИЗАЙН) ---
 display_header() {
-    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
-    local net_status; net_status=$(get_net_status)
-    local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
-    local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
-    local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)${C_RESET}"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)${C_RESET}"; fi; else cc_status="${C_YELLOW}СТОК ($cc)${C_RESET}"; fi
-    local ipv6_status; ipv6_status=$(check_ipv6_status)
-    local cpu_info; cpu_info=$(get_cpu_info)
-    local ram_info; ram_info=$(get_ram_info)
-    local hoster_info; hoster_info=$(get_hoster_info)
-
+    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info)
     clear
-    echo -e "${C_CYAN}╔═══════════ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ═══════════╗${C_RESET}"
-    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then 
-        printf "║ ${C_YELLOW}%-64s${C_RESET} ║\n" "🔥 Новая версия на подходе: ${LATEST_VERSION}"
-    elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then 
-        printf "║ ${C_RED}%-64s${C_RESET} ║\n" "⚠️ Не могу проверить обновления. Проблемы со связью."
-    fi
-    echo -e "${C_CYAN}╠═══════════════════ ИНФО ПО СЕРВЕРУ ══════════════════════╣${C_RESET}"
-    printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_YELLOW}%-45s${C_RESET} ║\n" "IP Адрес" "$ip_addr"
-    printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_CYAN}%-45s${C_RESET} ║\n" "Хостер" "$hoster_info"
-    printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_CYAN}%-45s${C_RESET} ║\n" "Процессор" "$cpu_info"
-    printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_CYAN}%-45s${C_RESET} ║\n" "Оперативка" "$ram_info"
-    echo -e "${C_CYAN}╠════════════════════ СТАТУС СИСТЕМ ═══════════════════════╣${C_RESET}"
-    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then
-        printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_YELLOW}%-45s${C_RESET} ║\n" "Тип установки" "$SERVER_TYPE v$PANEL_NODE_VERSION"
-    else
-        printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_YELLOW}%-45s${C_RESET} ║\n" "Тип установки" "$SERVER_TYPE"
-    fi
-    if [ "$BOT_DETECTED" -eq 1 ]; then 
-        printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_CYAN}%-45s${C_RESET} ║\n" "Версия Бота" "$BOT_VERSION"
-    fi
-    if [[ "$WEB_SERVER" != "Не определён" ]]; then 
-        printf "║ ${C_GRAY}%-15s${C_RESET} : ${C_CYAN}%-45s${C_RESET} ║\n" "Веб-сервер" "$WEB_SERVER"
-    fi
-    printf "║ ${C_GRAY}%-15s${C_RESET} : %-54s ║\n" "Сетевой тюнинг" "$cc_status"
-    printf "║ ${C_GRAY}%-15s${C_RESET} : %-54s ║\n" "Статус IPv6" "$ipv6_status"
+    strip_colors() { echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g'; }
+    local info_width=68; local title="ИНСТРУМЕНТ «РЕШАЛА» ${VERSION}"; local title_len=$(strip_colors "$title" | wc -c); local padding=$(( (info_width - title_len) / 2 ));
+    
+    printf "${C_CYAN}╔%*s${title}%*s╗${C_RESET}\n" $padding "" $padding ""
+    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then local update_msg="🔥 Новая версия: ${LATEST_VERSION}"; printf "║ ${C_YELLOW}%-$(($info_width-2))s${C_RESET} ║\n" "$update_msg"; fi
+    
+    echo -e "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]═══════════════════════════════════════╣${C_RESET}"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "IP Адрес" "$ip_addr"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Хостер" "$hoster_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Процессор" "$cpu_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Нагрузка" "$cpu_load"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Оперативка" "$ram_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Диск" "$disk_info"
+    
+    echo -e "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]═════════════════════════════════════════╣${C_RESET}"
+    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "Установка" "$SERVER_TYPE"; fi
+    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Бот" "$BOT_VERSION"; fi
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Веб-сервер" "$WEB_SERVER"; fi
+    
+    echo -e "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]════════════════════════════════════╣${C_RESET}"
+    local cc_len=$(strip_colors "$cc_status" | wc -c); printf "║ ${C_GRAY}%-12s${C_RESET} : %s%*s ║\n" "Тюнинг" "$cc_status" $((info_width - 18 - cc_len)) ""
+    local ipv6_len=$(strip_colors "$ipv6_status" | wc -c); printf "║ ${C_GRAY}%-12s${C_RESET} : %s%*s ║\n" "IPv6" "$ipv6_status" $((info_width - 18 - ipv6_len)) ""
+    
     echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    echo "Чё делать будем, босс?"
-    echo ""
+    echo ""; echo "Чё делать будем, босс?"; echo ""
 }
 
 show_menu() {
     while true; do
         scan_server_state
         display_header
-        echo "   [1] Управление «Форсажем» (BBR+CAKE)"
-        echo "   [2] Управление IPv6"
-        echo "   [3] Посмотреть журнал «Форсажа»"
-        if [ "$BOT_DETECTED" -eq 1 ]; then
-            echo "   [4] Посмотреть логи Бота 🤖"
-        fi
-        if [[ "$SERVER_TYPE" == "Панель" ]]; then
-            echo "   [5] Посмотреть логи Панели 📊"
-        elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-            echo "   [5] Посмотреть логи Ноды 📊"
-        fi
+        echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Форсажа»"
+        if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
+        if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
         echo -e "   [6] Безопасность сервера ${C_YELLOW}(В разработке 🚧)${C_RESET}"
-        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
-            echo -e "   [u] ${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"
-        fi
-        echo ""
-        echo -e "   [d] ${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"
-        echo "   [q] Свалить (Выход)"
-        echo "------------------------------------------------------"
-        read -r -p "Твой выбор, босс: " choice
+        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "   [u] ${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; fi
+        echo ""; echo -e "   [d] ${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"; echo "------------------------------------------------------"; read -r -p "Твой выбор, босс: " choice
         case $choice in
-            1) apply_bbr; wait_for_enter;;
-            2) ipv6_menu;;
-            3) view_logs_realtime "$LOGFILE" "Форсажа";;
-            4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;;
-            5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
-            6) security_placeholder; wait_for_enter;;
-            [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
-            [dD]) uninstall_script;;
-            [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
-            *) echo "Ты прикалываешься?"; sleep 2;;
+            1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; 3) view_logs_realtime "$LOGFILE" "Форсажа";; 4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 6) security_placeholder; wait_for_enter;; [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; [dD]) uninstall_script;; [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; *) echo "Ты прикалываешься?"; sleep 2;;
         esac
     done
 }
@@ -451,11 +343,7 @@ if [[ "${1:-}" == "install" ]]; then
     install_script "${2:-}"
 else
     if [[ $EUID -ne 0 ]]; then 
-        if [ "$0" != "$INSTALL_PATH" ]; then
-             echo -e "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}";
-        else
-             echo -e "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}";
-        fi
+        if [ "$0" != "$INSTALL_PATH" ]; then echo -e "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}"; else echo -e "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"; fi
         exit 1;
     fi
     trap - INT TERM EXIT
