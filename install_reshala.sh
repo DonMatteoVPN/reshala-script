@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3553 dev - STEALTH EDITION   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3554 dev - STEALTH EDITION   ==
 # ============================================================ #
 # ==    Финальный редизайн, добавлена инфа по CPU/Disk.      ==
 # ==    Исправлены все баги отображения.                     ==
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.3553 dev"
+readonly VERSION="v0.3554 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -301,24 +301,24 @@ display_header() {
     printf "${C_CYAN}╔%*s${title}%*s╗${C_RESET}\n" $padding "" $padding ""
     if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then local update_msg="🔥 Новая версия: ${LATEST_VERSION}"; printf "║ ${C_YELLOW}%-$(($info_width-2))s${C_RESET} ║\n" "$update_msg"; fi
     
-    echo -e "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]═══════════════════════════════════════╣${C_RESET}"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "IP Адрес" "$ip_addr"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Хостер" "$hoster_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Процессор" "$cpu_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Нагрузка" "$cpu_load"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Оперативка" "$ram_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Диск" "$disk_info"
+    echo -e "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]═══════════════════════════════════════════╣${C_RESET}"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET}  ║\n" "IP Адрес"  "$ip_addr"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Хостер"      "$hoster_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Процессор"   "$cpu_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Нагрузка"    "$cpu_load"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Оперативка"  "$ram_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Диск"        "$disk_info"
     
-    echo -e "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]═════════════════════════════════════════╣${C_RESET}"
+    echo -e "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]═════════════════════════════════════════════╣${C_RESET}"
     if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "Установка" "$SERVER_TYPE"; fi
     if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Бот" "$BOT_VERSION"; fi
     if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Веб-сервер" "$WEB_SERVER"; fi
     
-    echo -e "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]════════════════════════════════════╣${C_RESET}"
+    echo -e "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]═════════════════════════════════════════╣${C_RESET}"
     local cc_len=$(strip_colors "$cc_status" | wc -c); printf "║ ${C_GRAY}%-12s${C_RESET} : %s%*s ║\n" "Тюнинг" "$cc_status" $((info_width - 18 - cc_len)) ""
     local ipv6_len=$(strip_colors "$ipv6_status" | wc -c); printf "║ ${C_GRAY}%-12s${C_RESET} : %s%*s ║\n" "IPv6" "$ipv6_status" $((info_width - 18 - ipv6_len)) ""
     
-    echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+    echo -e "${C_CYAN}╚═══════════════════════════════════════════════════════════════╝${C_RESET}"
     echo ""; echo "Чё делать будем, босс?"; echo ""
 }
 
