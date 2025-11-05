@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.352 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.353 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
 # ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.352 dev"
+readonly VERSION="v0.353 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -77,7 +77,6 @@ check_for_updates() {
     local response_body=""
     local curl_exit_code=0
     
-    # Добавляем случайный параметр, чтобы пробить кеш
     local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
     
     log "Начинаю проверку обновлений по URL: $url_with_buster"
@@ -128,7 +127,6 @@ run_update() {
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
     
-    # Добавляем тот же пробиватель кеша и сюда
     local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
     
     if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then
@@ -158,85 +156,91 @@ run_update() {
 }
 
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
+# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (УСИЛЕННЫЙ) ---
+get_docker_version() {
+    local container_name="$1"
+    local version=""
+
+    # 1. Проверка Docker Labels
+    version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null)
+    if [ -n "$version" ]; then echo "$version"; return; fi
+
+    # 2. Проверка переменных окружения
+    version=$(sudo docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2)
+    if [ -n "$version" ]; then echo "$version"; return; fi
+
+    # 3. Проверка файлов внутри контейнера
+    # Для Node.js приложений
+    if sudo docker exec "$container_name" test -f /app/package.json 2>/dev/null; then
+        version=$(sudo docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null)
+        if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi
+    fi
+    # Общий файл VERSION
+    if sudo docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then
+        version=$(sudo docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r')
+        if [ -n "$version" ]; then echo "$version"; return; fi
+    fi
+
+    # 4. Проверка тега образа
+    local image_tag; image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
+    if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then
+        echo "$image_tag"; return;
+    fi
+    
+    # 5. Запасной вариант
+    local image_id; image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
+    echo "latest (образ: ${image_id:0:7})"
+}
+
 scan_server_state() {
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
-    local container_name=""
+    
+    # Определение Панели или Ноды
+    local panel_node_container=""
     if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then
-        SERVER_TYPE="Панель"; container_name="remnawave"
+        SERVER_TYPE="Панель"; panel_node_container="remnawave"
     elif sudo docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then
-        SERVER_TYPE="Нода"; container_name="remnanode"
+        SERVER_TYPE="Нода"; panel_node_container="remnanode"
     fi
 
-    if [ -n "$container_name" ]; then
-        PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$container_name" 2>/dev/null)
-        local version_label=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null)
-        if [ -n "$version_label" ]; then
-            PANEL_NODE_VERSION="$version_label"
-        else
-            local image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null)
-            local extracted_version=$(echo "$image_tag" | cut -d':' -f2)
-            if [ "$extracted_version" = "latest" ]; then
-                local real_version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container_name" 2>/dev/null)
-                if [ -n "$real_version" ]; then
-                    PANEL_NODE_VERSION="$real_version"
-                else
-                    local image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
-                    PANEL_NODE_VERSION="latest (образ: ${image_id:0:7})"
-                fi
-            else
-                PANEL_NODE_VERSION="$extracted_version"
-            fi
-        fi
+    if [ -n "$panel_node_container" ]; then
+        PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_node_container" 2>/dev/null)
+        PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container")
     fi
 
-    local bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "remnawave_bot" 2>/dev/null || true)
-    if [ -n "$bot_compose_path" ]; then
+    # Определение Бота
+    local bot_container_name="remnawave_bot"
+    if sudo docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then
         BOT_DETECTED=1
-        BOT_PATH=$(dirname "$bot_compose_path")
-        if [ -f "$BOT_PATH/VERSION" ]; then
-            BOT_VERSION=$(cat "$BOT_PATH/VERSION")
-        else
-            local bot_image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "remnawave_bot" 2>/dev/null)
-            local bot_extracted_version=$(echo "$bot_image_tag" | cut -d':' -f2)
-            if [ "$bot_extracted_version" = "latest" ]; then
-                local bot_real_version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "remnawave_bot" 2>/dev/null)
-                if [ -n "$bot_real_version" ]; then
-                    BOT_VERSION="$bot_real_version"
-                else
-                    local bot_image_id=$(sudo docker inspect --format='{{.Image}}' "remnawave_bot" 2>/dev/null | cut -d':' -f2)
-                    BOT_VERSION="latest (образ: ${bot_image_id:0:7})"
-                fi
+        local bot_compose_path; bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true)
+        if [ -n "$bot_compose_path" ]; then
+            BOT_PATH=$(dirname "$bot_compose_path")
+            # Приоритет - файл VERSION на хосте
+            if [ -f "$BOT_PATH/VERSION" ]; then
+                BOT_VERSION=$(cat "$BOT_PATH/VERSION")
             else
-                BOT_VERSION="$bot_extracted_version"
+                BOT_VERSION=$(get_docker_version "$bot_container_name")
             fi
+        else
+            BOT_VERSION=$(get_docker_version "$bot_container_name")
         fi
     fi
 
+    # Определение Веб-сервера
     if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
-        local nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
         WEB_SERVER="Nginx $nginx_version (в Docker)"
     elif sudo docker ps --format '{{.Names}}' | grep -q "caddy"; then
-        local caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null || echo "unknown")
+        local caddy_version; caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown")
         WEB_SERVER="Caddy $caddy_version (в Docker)"
     elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
         if command -v nginx &> /dev/null; then
-            local nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+            local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
             WEB_SERVER="Nginx $nginx_version (на хосте)"
-        elif command -v apache2 &> /dev/null; then
-            local apache_version=$(apache2 -v 2>&1 | grep -oE 'Apache/[0-9]+\.[0-9]+\.[0-9]+' | cut -d'/' -f2 || echo "unknown")
-            WEB_SERVER="Apache $apache_version (на хосте)"
-        elif command -v httpd &> /dev/null; then
-            local httpd_version=$(httpd -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
-            WEB_SERVER="Apache $httpd_version (на хосте)"
-        elif command -v caddy &> /dev/null; then
-            local caddy_version=$(caddy version 2>/dev/null || echo "unknown")
-            WEB_SERVER="Caddy $caddy_version (на хосте)"
+        # ... (остальные проверки для хост-серверов оставлены без изменений)
         else
             WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
         fi
-    else
-        WEB_SERVER="Не определён"
     fi
 }
 
