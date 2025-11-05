@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3557 dev - ELITE EDITION    ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.36 dev - FINAL ALIGNMENT  ==
 # ============================================================ #
-# ==    Финальный редизайн, динамическое выравнивание.       ==
-# ==    Возвращена продвинутая система обновлений.           ==
+# ==    Финальное выравнивание интерфейса по самому          ==
+# ==    длинному заголовку.                                  ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.3557 dev"
+readonly VERSION="v0.36 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -198,7 +198,6 @@ display_header() {
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info)
     clear
     
-    # Динамическое выравнивание
     local labels=("IP Адрес" "Хостер" "Процессор" "Нагрузка" "Оперативка" "Диск" "Установка" "Бот" "Веб-сервер" "Тюнинг" "IPv6")
     local max_label_width=0
     for label in "${labels[@]}"; do
