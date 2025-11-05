@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.38 dev - HARD ALIGNMENT     ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.39 dev - HARD ALIGNMENT     ==
 # ============================================================ #
 # ==    Жесткое выравнивание интерфейса.                     ==
 # ==    Улучшена диагностика ошибок обновления.              ==
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.38 dev"
+readonly VERSION="v0.39 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
