@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.344 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.345 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
 # ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.344 dev"
+readonly VERSION="v0.345 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -66,35 +66,55 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (НОВЫЙ, НАДЁЖНЫЙ) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (БРОНЕБОЙНЫЙ) ---
 check_for_updates() {
     UPDATE_AVAILABLE=0
+    LATEST_VERSION=""
     UPDATE_CHECK_STATUS="OK"
-    local TEMP_REMOTE_VERSION_FILE
-    TEMP_REMOTE_VERSION_FILE=$(mktemp)
+    
+    local max_attempts=3
+    local attempt=1
+    local response_body=""
+    local curl_exit_code=0
+    
+    log "Начинаю проверку обновлений..."
+    
+    while [ $attempt -le $max_attempts ]; do
+        # Используем curl с форсированием IPv4, следованием редиректам, таймаутами и ретраями.
+        # Ошибки curl будут записаны в лог.
+        response_body=$(curl -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 \
+            "$SCRIPT_URL" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE"))
+        curl_exit_code=$?
+        
+        if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
+            LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+            if [ -n "$LATEST_VERSION" ]; then
+                log "Удалённая версия: $LATEST_VERSION. Локальная: $VERSION."
+                if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
+                    local highest_version
+                    highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
+                    if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
+                        UPDATE_AVAILABLE=1
+                        log "Обнаружена новая версия."
+                    fi
+                fi
+                return 0 # Успех
+            else
+                log "Попытка $attempt: Ответ получен, но не могу найти строку с версией."
+            fi
+        else
+            log "Попытка $attempt из $max_attempts не удалась (код выхода curl: $curl_exit_code)."
+            if [ $attempt -lt $max_attempts ]; then
+                sleep 3
+            fi
+        fi
+        
+        attempt=$((attempt + 1))
+    done
 
-    # Пытаемся скачать файл с ретраями
-    if ! curl -fsSL --retry 3 --retry-delay 2 "$SCRIPT_URL" 2>/dev/null | head -n 50 > "$TEMP_REMOTE_VERSION_FILE"; then
-        UPDATE_CHECK_STATUS="ERROR"
-        log "Ошибка проверки обновлений: не удалось скачать файл со скриптом."
-        rm -f "$TEMP_REMOTE_VERSION_FILE"
-        return
-    fi
-
-    LATEST_VERSION=$(grep -m 1 "^readonly VERSION=" "$TEMP_REMOTE_VERSION_FILE" | cut -d'"' -f2)
-    rm -f "$TEMP_REMOTE_VERSION_FILE"
-
-    if [[ -z "$LATEST_VERSION" ]]; then
-        UPDATE_CHECK_STATUS="ERROR"
-        log "Ошибка проверки обновлений: не найдена строка с версией в удалённом файле."
-        return
-    fi
-
-    # Сравнение версий
-    if [[ "$VERSION" != "$LATEST_VERSION" ]]; then
-        # Простая проверка, можно усложнить с sort -V если версии будут типа 1.2.3
-        UPDATE_AVAILABLE=1
-    fi
+    UPDATE_CHECK_STATUS="ERROR"
+    log "Ошибка проверки обновлений после $max_attempts попыток."
+    return 1
 }
 
 run_update() {
@@ -107,15 +127,21 @@ run_update() {
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
     
-    # Используем wget с таймаутами и ретраями
-    if ! wget --timeout=15 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
-        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
+    # Используем wget с форсированием IPv4, таймаутами и ретраями.
+    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
+        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог /var/log/reshala_ops.log.${C_RESET}"; 
+        log "wget не смог скачать $SCRIPT_URL"
+        rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
 
-    # Проверка, что файл не пустой и рабочий
-    if [ ! -s "$TEMP_SCRIPT" ] || ! grep -q 'readonly VERSION=' "$TEMP_SCRIPT" || ! bash -n "$TEMP_SCRIPT" 2>/dev/null; then
-        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
+    # Проверка, что файл не пустой, рабочий и содержит нужную версию.
+    local downloaded_version
+    downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2)
+    if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then
+        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; 
+        log "Скачанный файл обновления не прошел проверку. Ожидалась версия $LATEST_VERSION, в файле $downloaded_version."
+        rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
     
@@ -128,6 +154,7 @@ run_update() {
     sleep 2
     exec "$INSTALL_PATH"
 }
+
 
 # --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
 scan_server_state() {
