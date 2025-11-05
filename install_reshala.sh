@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.353 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.354 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
 # ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.353 dev"
+readonly VERSION="v0.354 dev" # Я поставил твою текущую версию для чистоты эксперимента
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -66,7 +66,7 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ПРОБИВАТЕЛЕМ КЕША) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ЖЕЛЕЗОБЕТОННЫМ СРАВНЕНИЕМ) ---
 check_for_updates() {
     UPDATE_AVAILABLE=0
     LATEST_VERSION=""
@@ -90,12 +90,18 @@ check_for_updates() {
             LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
             if [ -n "$LATEST_VERSION" ]; then
                 log "Удалённая версия: $LATEST_VERSION. Локальная: $VERSION."
-                if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
-                    local highest_version
-                    highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
-                    if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
+                
+                # ВЫЧИЩАЕМ ВЕСЬ МУСОР, ОСТАВЛЯЕМ ТОЛЬКО ЦИФРЫ И ТОЧКИ
+                local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
+                local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
+
+                # СРАВНИВАЕМ ЧИСТЫЕ ЦИФРЫ
+                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
+                    local highest_ver_num
+                    highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
+                    if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then
                         UPDATE_AVAILABLE=1
-                        log "Обнаружена новая версия."
+                        log "Обнаружена новая версия (числовое сравнение: $remote_ver_num > $local_ver_num)."
                     fi
                 fi
                 return 0
@@ -170,12 +176,10 @@ get_docker_version() {
     if [ -n "$version" ]; then echo "$version"; return; fi
 
     # 3. Проверка файлов внутри контейнера
-    # Для Node.js приложений
     if sudo docker exec "$container_name" test -f /app/package.json 2>/dev/null; then
         version=$(sudo docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null)
         if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi
     fi
-    # Общий файл VERSION
     if sudo docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then
         version=$(sudo docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r')
         if [ -n "$version" ]; then echo "$version"; return; fi
@@ -195,7 +199,6 @@ get_docker_version() {
 scan_server_state() {
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
     
-    # Определение Панели или Ноды
     local panel_node_container=""
     if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then
         SERVER_TYPE="Панель"; panel_node_container="remnawave"
@@ -208,14 +211,12 @@ scan_server_state() {
         PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container")
     fi
 
-    # Определение Бота
     local bot_container_name="remnawave_bot"
     if sudo docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then
         BOT_DETECTED=1
         local bot_compose_path; bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true)
         if [ -n "$bot_compose_path" ]; then
             BOT_PATH=$(dirname "$bot_compose_path")
-            # Приоритет - файл VERSION на хосте
             if [ -f "$BOT_PATH/VERSION" ]; then
                 BOT_VERSION=$(cat "$BOT_PATH/VERSION")
             else
@@ -226,7 +227,6 @@ scan_server_state() {
         fi
     fi
 
-    # Определение Веб-сервера
     if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
         local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
         WEB_SERVER="Nginx $nginx_version (в Docker)"
@@ -237,7 +237,6 @@ scan_server_state() {
         if command -v nginx &> /dev/null; then
             local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
             WEB_SERVER="Nginx $nginx_version (на хосте)"
-        # ... (остальные проверки для хост-серверов оставлены без изменений)
         else
             WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
         fi
