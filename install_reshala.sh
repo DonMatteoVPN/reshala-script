@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.303 dev - РАБОТА НАД ОШИБКАМИ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.304 dev - РАБОТА НАД ОШИБКАМИ ==
 # ============================================================ #
-# ==    Восстановлена база v0.29. Новые фичи интегрированы.   ==
+# ==    Восстановлена база v0.300. Новые фичи интегрированы.   ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.303 dev"
+readonly VERSION="v0.304 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -20,9 +20,9 @@ C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33
 
 # Глобальные переменные
 SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
-UPDATE_AVAILABLE=0; LATEST_VERSION="";
+UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 
-# --- УТИЛИТАРНЫЕ ФУНКЦИИ (ИЗ v0.29) ---
+# --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
@@ -34,7 +34,7 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ (ИЗ v0.29) ---
+# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
 install_script() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}❌ Эту команду — только с 'sudo'.${C_RESET}"; exit 1; fi
     echo -e "${C_CYAN}🚀 Интегрирую Решалу ${VERSION} в систему...${C_RESET}"
@@ -48,10 +48,17 @@ install_script() {
     if [[ "${1:-}" != "update" ]]; then echo -e "   Установочный файл ('$0') можешь сносить."; fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ВОССТАНОВЛЕН ИЗ v0.29) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИСПРАВЛЕННЫЙ ИЗ v0.300) ---
 check_for_updates() {
-    LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || echo "$VERSION")
     UPDATE_AVAILABLE=0
+    UPDATE_CHECK_STATUS="OK"
+    
+    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || true)
+
+    if [ -z "$LATEST_VERSION" ]; then
+        UPDATE_CHECK_STATUS="ERROR"
+        return
+    fi
     
     if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
         local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
@@ -122,7 +129,7 @@ scan_server_state() {
 }
 
 
-# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА (ИЗ v0.29) ---
+# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА ---
 apply_bbr() {
     log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."
     local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2)
@@ -180,7 +187,6 @@ manage_log_path() {
 
 security_placeholder() { clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь."; }
 
-# --- МОДУЛЬ САМОЛИКВИДАЦИИ (НОВЫЙ) ---
 uninstall_script() {
     echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
@@ -192,7 +198,7 @@ uninstall_script() {
     echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (ОБНОВЛЕННЫЕ) ---
+# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
 display_header() {
     ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
     local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)${C_RESET}"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)${C_RESET}"; fi; else cc_status="${C_YELLOW}СТОК ($cc)${C_RESET}"; fi
