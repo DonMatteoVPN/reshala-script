@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3556 dev - ELITE EDITION    ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3557 dev - ELITE EDITION    ==
 # ============================================================ #
 # ==    Финальный редизайн, динамическое выравнивание.       ==
 # ==    Возвращена продвинутая система обновлений.           ==
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.3556 dev"
+readonly VERSION="v0.3557 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
