@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.41 dev - FINAL CUT         ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.42 dev - FINAL CUT         ==
 # ============================================================ #
 # ==    Возвращена система обновлений из v0.3451.            ==
 # ==    Изменено расположение уведомления об обновлении.     ==
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.41 dev"
+readonly VERSION="v0.42 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
