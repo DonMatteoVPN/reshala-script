@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.292 dev - ПРОТОКОЛ САМОЛИКВИДАЦИИ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.293 dev - DEV-КАНАЛ ОБНОВЛЕНИЙ ==
 # ============================================================ #
-# ==    Добавлена функция полного удаления с сервера.         ==
+# ==    Переключил источник обновлений на dev-ветку.         ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.292 dev"
-readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
+readonly VERSION="v0.293 dev"
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
 INSTALL_PATH="/usr/local/bin/reshala"
