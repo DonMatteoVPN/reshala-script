@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.301 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.34 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
 # ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.301 dev"
+readonly VERSION="v0.34 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -67,23 +67,77 @@ install_script() {
 }
 
 # --- МОДУЛЬ ОБНОВЛЕНИЯ (ИСПРАВЛЕННЫЙ) ---
+# Вспомогательная функция для обработки сетевых ошибок
+handle_network_error() {
+    local error_code=$1
+    local operation=$2
+    case $error_code in
+        1) echo "General error" ;;
+        2) echo "Unsupported protocol" ;;
+        3) echo "URL malformed" ;;
+        4) echo "URL couldn't be parsed" ;;
+        6) echo "Couldn't resolve host" ;;
+        7) echo "Couldn't connect to host" ;;
+        22) echo "HTTP error (4xx or 5xx)" ;;
+        28) echo "Operation timeout" ;;
+        35) echo "SSL connect error" ;;
+        52) echo "Empty reply from server" ;;
+        56) echo "Failure in receiving network data" ;;
+        *) echo "Unknown error ($error_code)" ;;
+    esac
+}
+
 check_for_updates() {
     UPDATE_AVAILABLE=0
     UPDATE_CHECK_STATUS="OK"
     
-    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || true)
-
-    if [ -z "$LATEST_VERSION" ]; then
-        UPDATE_CHECK_STATUS="ERROR"
-        return
-    fi
+    # Проверяем подключение к интернету с таймаутом и повторными попытками
+    local max_attempts=3
+    local attempt=1
+    local curl_result=""
+    local curl_exit_code=0
     
-    if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
-        local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
-        if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
-            UPDATE_AVAILABLE=1
+    while [ $attempt -le $max_attempts ]; do
+        # Используем curl с полным таймаутом и обработкой различных ошибок
+        curl_result=$(curl -s --connect-timeout 5 --max-time 15 --retry 1 --retry-delay 2 \
+            --retry-max-time 10 --fail -w "%{http_code}" "$SCRIPT_URL" 2>/dev/null)
+        curl_exit_code=$?
+        
+        # Извлекаем HTTP код из результата
+        local http_code="${curl_result: -3}"
+        local response_body="${curl_result%???}"
+        
+        if [ $curl_exit_code -eq 0 ]; then
+            # Успешный запрос
+            LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+            if [ -n "$LATEST_VERSION" ]; then
+                if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
+                    local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
+                    if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
+                        UPDATE_AVAILABLE=1
+                    fi
+                fi
+                return
+            else
+                # Версия не найдена в ответе
+                UPDATE_CHECK_STATUS="ERROR: VERSION_NOT_FOUND"
+                log "Ошибка проверки обновлений: строка VERSION не найдена в ответе"
+                return
+            fi
+        else
+            # Ошибка curl
+            if [ $attempt -lt $max_attempts ]; then
+                log "Попытка $attempt из $max_attempts не удалась (код: $curl_exit_code, HTTP: $http_code). Повтор через 3 секунды..."
+                sleep 3
+            else
+                # Все попытки исчерпаны
+                UPDATE_CHECK_STATUS="ERROR: $(handle_network_error $curl_exit_code)"
+                log "Ошибка проверки обновлений: $(handle_network_error $curl_exit_code) (код: $curl_exit_code, HTTP: $http_code)"
+            fi
         fi
-    fi
+        
+        attempt=$((attempt + 1))
+    done
 }
 
 run_update() {
@@ -95,13 +149,49 @@ run_update() {
 
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
-    if ! wget -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
+    
+    # Параметры для повторных попыток
+    local max_attempts=3
+    local attempt=1
+    local download_success=0
+    
+    while [ $attempt -le $max_attempts ]; do
+        # Используем wget с таймаутами и ограничениями
+        if wget --timeout=15 --tries=2 --connect-timeout=10 --read-timeout=10 \
+            --waitretry=2 --retry-connrefused -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
+            download_success=1
+            break
+        else
+            if [ $attempt -lt $max_attempts ]; then
+                log "Попытка $attempt из $max_attempts не удалась. Повтор через 3 секунды..."
+                sleep 3
+            else
+                log "Ошибка загрузки обновления после $max_attempts попыток"
+            fi
+        fi
+        attempt=$((attempt + 1))
+    done
+    
+    if [ $download_success -eq 0 ]; then
         echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
 
+    # Проверяем размер файла и его целостность
+    if [ ! -s "$TEMP_SCRIPT" ]; then
+        echo -e "${C_RED}❌ Скачанный файл пуст. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
+        return
+    fi
+
+    # Проверяем, что файл содержит ожидаемую строку VERSION
     if ! grep -q 'readonly VERSION' "$TEMP_SCRIPT"; then
         echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
+        return
+    fi
+    
+    # Дополнительная проверка синтаксиса bash (без выполнения)
+    if ! bash -n "$TEMP_SCRIPT" 2>/dev/null; then
+        echo -e "${C_RED}❌ Скачанный файл содержит синтаксические ошибки. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
     
@@ -132,7 +222,21 @@ scan_server_state() {
             PANEL_NODE_VERSION="$version_label"
         else
             local image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null)
-            PANEL_NODE_VERSION=$(echo "$image_tag" | cut -d':' -f2)
+            local extracted_version=$(echo "$image_tag" | cut -d':' -f2)
+            # Проверяем, если тег latest, пытаемся получить реальную версию из метаданных
+            if [ "$extracted_version" = "latest" ]; then
+                # Получаем реальную версию из Git-тегов или коммитов, если возможно
+                local real_version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container_name" 2>/dev/null)
+                if [ -n "$real_version" ]; then
+                    PANEL_NODE_VERSION="$real_version"
+                else
+                    # Пытаемся получить версию из истории Docker-образа
+                    local image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
+                    PANEL_NODE_VERSION="latest (образ: ${image_id:0:7})"
+                fi
+            else
+                PANEL_NODE_VERSION="$extracted_version"
+            fi
         fi
     fi
 
@@ -144,16 +248,49 @@ scan_server_state() {
             BOT_VERSION=$(cat "$BOT_PATH/VERSION")
         else
             local bot_image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "remnawave_bot" 2>/dev/null)
-            BOT_VERSION="tag: $(echo "$bot_image_tag" | cut -d':' -f2)"
+            local bot_extracted_version=$(echo "$bot_image_tag" | cut -d':' -f2)
+            # Проверяем, если тег latest, пытаемся получить реальную версию
+            if [ "$bot_extracted_version" = "latest" ]; then
+                local bot_real_version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "remnawave_bot" 2>/dev/null)
+                if [ -n "$bot_real_version" ]; then
+                    BOT_VERSION="$bot_real_version"
+                else
+                    local bot_image_id=$(sudo docker inspect --format='{{.Image}}' "remnawave_bot" 2>/dev/null | cut -d':' -f2)
+                    BOT_VERSION="latest (образ: ${bot_image_id:0:7})"
+                fi
+            else
+                BOT_VERSION="$bot_extracted_version"
+            fi
         fi
     fi
 
     if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
-        WEB_SERVER="Nginx (в Docker)"
-    elif sudo docker ps --format '{{.Image}}' | grep -q "caddy"; then
-        WEB_SERVER="Caddy (в Docker)"
+        # Определяем версию Nginx
+        local nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        WEB_SERVER="Nginx $nginx_version (в Docker)"
+    elif sudo docker ps --format '{{.Names}}' | grep -q "caddy"; then
+        # Определяем версию Caddy
+        local caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null || echo "unknown")
+        WEB_SERVER="Caddy $caddy_version (в Docker)"
     elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
-        WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
+        # Пытаемся определить версию веб-сервера на хосте
+        if command -v nginx &> /dev/null; then
+            local nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+            WEB_SERVER="Nginx $nginx_version (на хосте)"
+        elif command -v apache2 &> /dev/null; then
+            local apache_version=$(apache2 -v 2>&1 | grep -oE 'Apache/[0-9]+\.[0-9]+\.[0-9]+' | cut -d'/' -f2 || echo "unknown")
+            WEB_SERVER="Apache $apache_version (на хосте)"
+        elif command -v httpd &> /dev/null; then
+            local httpd_version=$(httpd -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+            WEB_SERVER="Apache $httpd_version (на хосте)"
+        elif command -v caddy &> /dev/null; then
+            local caddy_version=$(caddy version 2>/dev/null || echo "unknown")
+            WEB_SERVER="Caddy $caddy_version (на хосте)"
+        else
+            WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
+        fi
+    else
+        WEB_SERVER="Не определён"
     fi
 }
 
@@ -270,18 +407,30 @@ view_logs_realtime() {
     local log_path="$1"; local log_name="$2"
     if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)";
+    local original_int_handler=$(trap -p INT)
     trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     (sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
-    trap - INT; return 0
+    if [ -n "$original_int_handler" ]; then
+        eval "$original_int_handler"
+    else
+        trap - INT
+    fi
+    return 0
 }
 
 view_docker_logs() {
     local service_path="$1"; local service_name="$2"
     if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi
     echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)";
+    local original_int_handler=$(trap -p INT)
     trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     (cd "$(dirname "$service_path")" && sudo docker compose logs -f) || true
-    trap - INT; return 0
+    if [ -n "$original_int_handler" ]; then
+        eval "$original_int_handler"
+    else
+        trap - INT
+    fi
+    return 0
 }
 
 security_placeholder() {
@@ -302,12 +451,12 @@ uninstall_script() {
 
 # --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
 display_header() {
-    ip_addr=$(hostname -I | awk '{print $1}')
+    local ip_addr=$(hostname -I | awk '{print $1}')
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
     local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
     local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)${C_RESET}"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)${C_RESET}"; fi; else cc_status="${C_YELLOW}СТОК ($cc)${C_RESET}"; fi
-    local ipv6_status; ipv6_status=$(check_ipv6_status)
+    local ipv6_status; ipv6_status=$(check_ipv6_status 2>/dev/null)
     clear
     echo -e "${C_CYAN}--- ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ---${C_RESET}"
     check_for_updates
@@ -323,7 +472,7 @@ display_header() {
     if [ "$BOT_DETECTED" -eq 1 ]; then echo -e "Версия Бота:  ${C_CYAN}$BOT_VERSION${C_RESET}"; fi
     if [[ "$WEB_SERVER" != "Не определён" ]]; then echo -e "Веб-сервер:   ${C_CYAN}$WEB_SERVER${C_RESET}"; fi
     echo -e "Статус BBR:   $cc_status"
-    echo -e "$ipv6_status"
+    if [ -n "$ipv6_status" ]; then echo -e "$ipv6_status"; fi
     echo "------------------------------------------------------"
     echo "Чё делать будем, босс?"
     echo ""
