@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3451 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.352 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
 # ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.3451 dev"
+readonly VERSION="v0.352 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -66,7 +66,7 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (БРОНЕБОЙНЫЙ) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ПРОБИВАТЕЛЕМ КЕША) ---
 check_for_updates() {
     UPDATE_AVAILABLE=0
     LATEST_VERSION=""
@@ -77,13 +77,14 @@ check_for_updates() {
     local response_body=""
     local curl_exit_code=0
     
-    log "Начинаю проверку обновлений..."
+    # Добавляем случайный параметр, чтобы пробить кеш
+    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
+    
+    log "Начинаю проверку обновлений по URL: $url_with_buster"
     
     while [ $attempt -le $max_attempts ]; do
-        # Используем curl с форсированием IPv4, следованием редиректам, таймаутами и ретраями.
-        # Ошибки curl будут записаны в лог.
         response_body=$(curl -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 \
-            "$SCRIPT_URL" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE"))
+            "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE"))
         curl_exit_code=$?
         
         if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
@@ -98,7 +99,7 @@ check_for_updates() {
                         log "Обнаружена новая версия."
                     fi
                 fi
-                return 0 # Успех
+                return 0
             else
                 log "Попытка $attempt: Ответ получен, но не могу найти строку с версией."
             fi
@@ -127,15 +128,16 @@ run_update() {
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
     
-    # Используем wget с форсированием IPv4, таймаутами и ретраями.
-    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
+    # Добавляем тот же пробиватель кеша и сюда
+    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
+    
+    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then
         echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог /var/log/reshala_ops.log.${C_RESET}"; 
-        log "wget не смог скачать $SCRIPT_URL"
+        log "wget не смог скачать $url_with_buster"
         rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
 
-    # Проверка, что файл не пустой, рабочий и содержит нужную версию.
     local downloaded_version
     downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2)
     if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then
