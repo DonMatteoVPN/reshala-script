@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3556 dev - OPEN DESIGN      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3556 dev - ELITE EDITION    ==
 # ============================================================ #
-# ==    Новый дизайн с открытой рамкой.                      ==
-# ==    Система обновлений откатана к первоначальной версии.  ==
+# ==    Финальный редизайн, динамическое выравнивание.       ==
+# ==    Возвращена продвинутая система обновлений.           ==
 # ============================================================ #
 
 set -euo pipefail
@@ -60,80 +60,52 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ОТКАТ К ОРИГИНАЛЬНОЙ ВЕРСИИ) ---
-handle_network_error() {
-    local error_code=$1
-    case $error_code in
-        6) echo "Couldn't resolve host" ;;
-        7) echo "Couldn't connect to host" ;;
-        28) echo "Operation timeout" ;;
-        *) echo "Unknown error ($error_code)" ;;
-    esac
-}
-
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ЧИСТЫМИ ЛОГАМИ И САНАЦИЕЙ) ---
 check_for_updates() {
-    UPDATE_AVAILABLE=0
-    UPDATE_CHECK_STATUS="OK"
-    local max_attempts=3
-    local attempt=1
-    local curl_result=""
-    local curl_exit_code=0
-    
-    while [ $attempt -le $max_attempts ]; do
-        curl_result=$(curl -s --connect-timeout 5 --max-time 15 --retry 1 --retry-delay 2 \
-            --retry-max-time 10 --fail -w "%{http_code}" "$SCRIPT_URL" 2>/dev/null)
-        curl_exit_code=$?
-        
-        local http_code="${curl_result: -3}"
-        local response_body="${curl_result%???}"
-        
-        if [ $curl_exit_code -eq 0 ]; then
-            LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
-            if [ -n "$LATEST_VERSION" ]; then
-                if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
-                    local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
-                    if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
-                        UPDATE_AVAILABLE=1
-                    fi
+    UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"
+    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
+    local curl_error_output; curl_error_output=$(mktemp)
+    local response_body; response_body=$(curl -4 -L -sS --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> "$curl_error_output")
+    local curl_exit_code=$?
+    if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
+        LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 | tr -d '\r')
+        if [ -n "$LATEST_VERSION" ]; then
+            local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
+            local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
+            if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
+                local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
+                if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then
+                    UPDATE_AVAILABLE=1
+                    log "🔥 Обнаружена новая версия: $LATEST_VERSION (Локальная: $VERSION)"
                 fi
-                return
-            else
-                UPDATE_CHECK_STATUS="ERROR: VERSION_NOT_FOUND"
-                return
-            fi
-        else
-            if [ $attempt -ge $max_attempts ]; then
-                UPDATE_CHECK_STATUS="ERROR: $(handle_network_error $curl_exit_code)"
             fi
         fi
-        attempt=$((attempt + 1))
-    done
+    else
+        UPDATE_CHECK_STATUS="ERROR"
+        log "❌ Ошибка проверки обновлений. Код: $curl_exit_code. Ответ curl: $(cat "$curl_error_output")"
+    fi
+    rm -f "$curl_error_output"
 }
 
 run_update() {
     read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
     if [[ "$confirm_update" != "y" && "$confirm_update" != "Y" ]]; then
-        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter
-        return
+        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter; return
     fi
-
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
-    
-    if ! wget --timeout=15 --tries=2 -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
-        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
-        return
+    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
+    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then
+        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог.${C_RESET}"; log "wget не смог скачать $url_with_buster"; rm -f "$TEMP_SCRIPT"; wait_for_enter; return
     fi
-
-    if ! grep -q 'readonly VERSION' "$TEMP_SCRIPT"; then
-        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
-        return
+    local downloaded_version; downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2 | tr -d '\r')
+    if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then
+        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; log "Скачанный файл обновления не прошел проверку. Ожидалась версия '$LATEST_VERSION', в файле '$downloaded_version'."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return
     fi
-    
     echo "   Ставлю на место старого..."
     sudo cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
     rm "$TEMP_SCRIPT"
-
+    log "✅ Ахуенный пацан! Успешно обновился с $VERSION до $LATEST_VERSION."
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"
     echo "   Перезапускаю себя, чтобы мозги встали на место..."
     sleep 2
@@ -226,25 +198,37 @@ display_header() {
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info)
     clear
     
-    echo -e "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» v${VERSION} ]${C_RESET}"
+    # Динамическое выравнивание
+    local labels=("IP Адрес" "Хостер" "Процессор" "Нагрузка" "Оперативка" "Диск" "Установка" "Бот" "Веб-сервер" "Тюнинг" "IPv6")
+    local max_label_width=0
+    for label in "${labels[@]}"; do
+        if (( ${#label} > max_label_width )); then
+            max_label_width=${#label}
+        fi
+    done
+
+    echo -e "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"
     if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}║ 🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; fi
     
+    echo -e "${C_CYAN}║${C_RESET}"
     echo -e "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"
     
+    echo -e "${C_CYAN}║${C_RESET}"
     echo -e "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"
-    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi
-    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi
-    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi
+    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi
+    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi
     
+    echo -e "${C_CYAN}║${C_RESET}"
     echo -e "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : %b\n" "Тюнинг" "$cc_status"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : %b\n" "IPv6" "$ipv6_status"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"
     
     echo -e "${C_CYAN}╚${C_RESET}"
     echo ""; echo "Чё делать будем, босс?"; echo ""
