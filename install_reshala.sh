@@ -1,22 +1,22 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.354 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.355 dev - РЕДИЗАЙН ИНТЕРФЕЙСА ==
 # ============================================================ #
-# ==    Починил критический баг модуля обновлений.           ==
+# ==    Переработан интерфейс, добавлена инфа по железу.     ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.354 dev" # Я поставил твою текущую версию для чистоты эксперимента
+readonly VERSION="v0.355 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
 INSTALL_PATH="/usr/local/bin/reshala"
 
 # Цвета
-C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BOLD='\033[1m';
+C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BOLD='\033[1m'; C_GRAY='\033[0;90m';
 
 # Глобальные переменные
 SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
@@ -66,7 +66,7 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ЖЕЛЕЗОБЕТОННЫМ СРАВНЕНИЕМ) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ПРОБИВАТЕЛЕМ КЕША) ---
 check_for_updates() {
     UPDATE_AVAILABLE=0
     LATEST_VERSION=""
@@ -91,11 +91,9 @@ check_for_updates() {
             if [ -n "$LATEST_VERSION" ]; then
                 log "Удалённая версия: $LATEST_VERSION. Локальная: $VERSION."
                 
-                # ВЫЧИЩАЕМ ВЕСЬ МУСОР, ОСТАВЛЯЕМ ТОЛЬКО ЦИФРЫ И ТОЧКИ
                 local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
                 local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
 
-                # СРАВНИВАЕМ ЧИСТЫЕ ЦИФРЫ
                 if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
                     local highest_ver_num
                     highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
@@ -167,15 +165,12 @@ get_docker_version() {
     local container_name="$1"
     local version=""
 
-    # 1. Проверка Docker Labels
     version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null)
     if [ -n "$version" ]; then echo "$version"; return; fi
 
-    # 2. Проверка переменных окружения
     version=$(sudo docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2)
     if [ -n "$version" ]; then echo "$version"; return; fi
 
-    # 3. Проверка файлов внутри контейнера
     if sudo docker exec "$container_name" test -f /app/package.json 2>/dev/null; then
         version=$(sudo docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null)
         if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi
@@ -185,13 +180,11 @@ get_docker_version() {
         if [ -n "$version" ]; then echo "$version"; return; fi
     fi
 
-    # 4. Проверка тега образа
     local image_tag; image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
     if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then
         echo "$image_tag"; return;
     fi
     
-    # 5. Запасной вариант
     local image_id; image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
     echo "latest (образ: ${image_id:0:7})"
 }
@@ -241,6 +234,21 @@ scan_server_state() {
             WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
         fi
     fi
+}
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ СБОРА ИНФОРМАЦИИ О СЕРВЕРЕ ---
+get_cpu_info() {
+    local model; model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//')
+    local freq; freq=$(lscpu | grep "CPU MHz" | head -n1 | awk '{printf "%.2f GHz", $3/1000}')
+    echo "$model ($freq)"
+}
+
+get_ram_info() {
+    free -m | grep Mem | awk '{printf "%.1f/%.1f GB", $3/1024, $2/1024}'
+}
+
+get_hoster_info() {
+    curl -s --connect-timeout 5 ipinfo.io/org || echo "Не определён"
 }
 
 
@@ -302,11 +310,11 @@ net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null
 # --- IPv6 МОДУЛЬ ---
 check_ipv6_status() {
     if [ ! -d "/proc/sys/net/ipv6" ]; then
-        echo -e "Статус IPv6: ${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
+        echo -e "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
     elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then
-        echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"
+        echo -e "${C_RED}КАСТРИРОВАН${C_RESET}"
     else
-        echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"
+        echo -e "${C_GREEN}ВКЛЮЧЁН${C_RESET}"
     fi
 }
 
@@ -346,7 +354,7 @@ EOL
 
 ipv6_menu() {
     while true; do
-        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; check_ipv6_status; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад в главное меню"; read -r -p "Твой выбор: " choice
+        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; echo "Статус IPv6: $(check_ipv6_status)"; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад в главное меню"; read -r -p "Твой выбор: " choice
         case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "1, 2 или 'b'. Не тупи."; sleep 2;; esac
     done
 }
@@ -398,31 +406,48 @@ uninstall_script() {
     echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
+# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (НОВЫЙ ДИЗАЙН) ---
 display_header() {
-    local ip_addr=$(hostname -I | awk '{print $1}')
+    # Сбор данных
+    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
     local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
     local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)${C_RESET}"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)${C_RESET}"; fi; else cc_status="${C_YELLOW}СТОК ($cc)${C_RESET}"; fi
-    local ipv6_status; ipv6_status=$(check_ipv6_status 2>/dev/null)
+    local ipv6_status; ipv6_status=$(check_ipv6_status)
+    local cpu_info; cpu_info=$(get_cpu_info)
+    local ram_info; ram_info=$(get_ram_info)
+    local hoster_info; hoster_info=$(get_hoster_info)
+
     clear
-    echo -e "${C_CYAN}--- ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ---${C_RESET}"
+    echo -e "${C_CYAN}┌─── ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ─────────${C_RESET}"
     check_for_updates
-    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}";
-    elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then echo -e "${C_RED}⚠️ Не могу проверить обновления. Проблемы со связью.${C_RESET}"; fi
-    echo "------------------------------------------------------"
-    echo -e "IP Сервера:   ${C_YELLOW}$ip_addr${C_RESET}"
-    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then
-        echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE v$PANEL_NODE_VERSION${C_RESET}"
-    else
-        echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE${C_RESET}"
+    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then 
+        printf "│ ${C_YELLOW}%-53s${C_RESET} │\n" "🔥 Новая версия на подходе: ${LATEST_VERSION}"
+    elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then 
+        printf "│ ${C_RED}%-53s${C_RESET} │\n" "⚠️ Не могу проверить обновления. Проблемы со связью."
     fi
-    if [ "$BOT_DETECTED" -eq 1 ]; then echo -e "Версия Бота:  ${C_CYAN}$BOT_VERSION${C_RESET}"; fi
-    if [[ "$WEB_SERVER" != "Не определён" ]]; then echo -e "Веб-сервер:   ${C_CYAN}$WEB_SERVER${C_RESET}"; fi
-    echo -e "Статус BBR:   $cc_status"
-    if [ -n "$ipv6_status" ]; then echo -e "$ipv6_status"; fi
-    echo "------------------------------------------------------"
+    echo -e "${C_CYAN}├─── ИНФО ПО СЕРВЕРУ ───────────────────────────────────${C_RESET}"
+    printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "IP Адрес" "${C_YELLOW}$ip_addr${C_RESET}"
+    printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Хостер" "${C_CYAN}$hoster_info${C_RESET}"
+    printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Процессор" "${C_CYAN}$cpu_info${C_RESET}"
+    printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Оперативка" "${C_CYAN}$ram_info${C_RESET}"
+    echo -e "${C_CYAN}├─── СТАТУС СИСТЕМ ────────────────────────────────────${C_RESET}"
+    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then
+        printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Тип установки" "${C_YELLOW}$SERVER_TYPE v$PANEL_NODE_VERSION${C_RESET}"
+    else
+        printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Тип установки" "${C_YELLOW}$SERVER_TYPE${C_RESET}"
+    fi
+    if [ "$BOT_DETECTED" -eq 1 ]; then 
+        printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Версия Бота" "${C_CYAN}$BOT_VERSION${C_RESET}"
+    fi
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then 
+        printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Веб-сервер" "${C_CYAN}$WEB_SERVER${C_RESET}"
+    fi
+    printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Сетевой тюнинг" "$cc_status"
+    printf "│ ${C_GRAY}%-15s${C_RESET} : %s\n" "Статус IPv6" "$ipv6_status"
+    echo -e "${C_CYAN}└──────────────────────────────────────────────────────${C_RESET}"
+    echo ""
     echo "Чё делать будем, босс?"
     echo ""
 }
