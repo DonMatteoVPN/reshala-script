@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.304 dev - РАБОТА НАД ОШИБКАМИ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.304 dev - ВОЗВРАТ К ИСТОКАМ   ==
 # ============================================================ #
-# ==    Восстановлена база v0.300. Новые фичи интегрированы.   ==
+# ==    Восстановлена база v0.29. Новые фичи интегрированы.   ==
 # ============================================================ #
 
 set -euo pipefail
@@ -20,9 +20,9 @@ C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33
 
 # Глобальные переменные
 SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
-UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
+UPDATE_AVAILABLE=0; LATEST_VERSION="";
 
-# --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
+# --- УТИЛИТАРНЫЕ ФУНКЦИИ (ИЗ v0.29) ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
@@ -34,7 +34,7 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
+# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ (ИЗ v0.29) ---
 install_script() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}❌ Эту команду — только с 'sudo'.${C_RESET}"; exit 1; fi
     echo -e "${C_CYAN}🚀 Интегрирую Решалу ${VERSION} в систему...${C_RESET}"
@@ -48,17 +48,10 @@ install_script() {
     if [[ "${1:-}" != "update" ]]; then echo -e "   Установочный файл ('$0') можешь сносить."; fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИСПРАВЛЕННЫЙ ИЗ v0.300) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ВОССТАНОВЛЕН ИЗ v0.29) ---
 check_for_updates() {
+    LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || echo "$VERSION")
     UPDATE_AVAILABLE=0
-    UPDATE_CHECK_STATUS="OK"
-    
-    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || true)
-
-    if [ -z "$LATEST_VERSION" ]; then
-        UPDATE_CHECK_STATUS="ERROR"
-        return
-    fi
     
     if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
         local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
@@ -129,7 +122,7 @@ scan_server_state() {
 }
 
 
-# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА ---
+# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА (ИЗ v0.29) ---
 apply_bbr() {
     log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."
     local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2)
@@ -149,13 +142,59 @@ apply_bbr() {
     echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}";
 }
 
+# --- IPv6 МОДУЛЬ (ИЗ v0.29) ---
+check_ipv6_status() {
+    if [ ! -d "/proc/sys/net/ipv6" ]; then
+        echo -e "Статус IPv6: ${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
+    elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then
+        echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"
+    else
+        echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"
+    fi
+}
+
+disable_ipv6() {
+    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi
+    if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi
+    echo "🔪 Кастрирую IPv6... Это не больно. Почти."
+    sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
+# === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOL
+    sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null
+    log "-> IPv6 кастрирован через sysctl."
+    echo -e "${C_GREEN}✅ Готово. Теперь эта тачка ездит только на нормальном топливе.${C_RESET}"
+}
+
+enable_ipv6() {
+    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего включать. Я не могу пришить то, что отрезано с корнем.${C_RESET}"; return; fi
+    if [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 0 ]; then
+        echo "✅ IPv6 и так работает. Не мешай ему."; return;
+    fi
+    echo "💉 Возвращаю всё как было... Реанимация IPv6."
+    sudo rm -f /etc/sysctl.d/98-reshala-disable-ipv6.conf
+    
+    sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<EOL
+# === КОНФИГ ОТ РЕШАЛЫ: IPv6 ВКЛЮЧЁН ===
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+EOL
+    sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null
+    sudo rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf
+    
+    log "-> IPv6 реанимирован."
+    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET}"
+}
+
 ipv6_menu() {
     while true; do
-        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "Статус IPv6: ${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; echo "--------------------------"; echo "   1. Кастрировать"; echo "   2. Реанимировать"; echo "   b. Назад"; read -r -p "Твой выбор: " choice
-        case $choice in 1) if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Нечего отключать.${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ Уже кастрирован."; else echo "🔪 Кастрирую IPv6..."; sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<< "net.ipv6.conf.all.disable_ipv6 = 1"$'\n'"net.ipv6.conf.default.disable_ipv6 = 1"; sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null; log "-> IPv6 кастрирован."; echo -e "${C_GREEN}✅ Готово.${C_RESET}"; fi; wait_for_enter;; 2) if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Нечего включать.${C_RESET}"; elif [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 0 ]; then echo "✅ И так работает."; else echo "💉 Реанимация IPv6..."; sudo rm -f /etc/sysctl.d/98-reshala-disable-ipv6.conf; sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<< "net.ipv6.conf.all.disable_ipv6 = 0"$'\n'"net.ipv6.conf.default.disable_ipv6 = 0"; sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null; sudo rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf; log "-> IPv6 реанимирован."; echo -e "${C_GREEN}✅ Готово.${C_RESET}"; fi; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac
+        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; check_ipv6_status; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад"; read -r -p "Твой выбор: " choice
+        case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac
     done
 }
 
+# --- МОДУЛЬ ЛОГОВ (ИЗ v0.29) ---
 view_logs_realtime() {
     local log_path="$1"; local log_name="$2"; if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
@@ -187,6 +226,7 @@ manage_log_path() {
 
 security_placeholder() { clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь."; }
 
+# --- МОДУЛЬ САМОЛИКВИДАЦИИ (НОВЫЙ) ---
 uninstall_script() {
     echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
@@ -198,15 +238,14 @@ uninstall_script() {
     echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
+# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (ОБНОВЛЕННЫЕ) ---
 display_header() {
     ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
     local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)${C_RESET}"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)${C_RESET}"; fi; else cc_status="${C_YELLOW}СТОК ($cc)${C_RESET}"; fi
     local ipv6_status; ipv6_status=$(check_ipv6_status); clear
     echo -e "${C_CYAN}--- ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ---${C_RESET}"
     check_for_updates
-    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}";
-    elif [[ "$UPDATE_CHECK_STATUS" == "ERROR" ]]; then echo -e "${C_RED}⚠️ Не могу проверить обновления. Проблемы со связью.${C_RESET}"; fi
+    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; fi
     echo "------------------------------------------------------"
     echo -e "IP Сервера:   ${C_YELLOW}$ip_addr${C_RESET}"
     if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE v$PANEL_NODE_VERSION${C_RESET}"; else echo -e "Тип Сервера:  ${C_YELLOW}$SERVER_TYPE${C_RESET}"; fi
