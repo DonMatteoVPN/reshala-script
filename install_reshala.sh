@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.297 dev - НОВОЕ ЗРЕНИЕ       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.299 dev - СТАБИЛЬНАЯ БАЗА + НОВЫЙ ИНТЕЛЛЕКТ ==
 # ============================================================ #
-# ==    Добавил определение веб-сервера и точную версию.     ==
+# ==    Взята рабочая основа v0.29 и дополнена автоопределением. ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.297 dev"
+readonly VERSION="v0.299 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -26,6 +26,9 @@ BOT_DETECTED=0
 BOT_VERSION=""
 BOT_PATH=""
 WEB_SERVER="Не определён"
+UPDATE_AVAILABLE=0
+LATEST_VERSION=""
+UPDATE_CHECK_STATUS="OK"
 
 # --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
@@ -71,14 +74,21 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИЗ v0.29 - НЕ ТРОНУТ) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИЗ v0.29, С УЛУЧШЕННОЙ ПРОВЕРКОЙ) ---
 check_for_updates() {
-    LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || echo "$VERSION")
     UPDATE_AVAILABLE=0
+    UPDATE_CHECK_STATUS="OK"
+    
+    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+
+    if [ -z "$LATEST_VERSION" ]; then
+        UPDATE_CHECK_STATUS="ERROR"
+        return
+    fi
     
     if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
-        HIGHEST_VERSION=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
-        if [[ "$HIGHEST_VERSION" == "$LATEST_VERSION" ]]; then
+        local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
+        if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
             UPDATE_AVAILABLE=1
         fi
     fi
@@ -113,12 +123,9 @@ run_update() {
     exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (ОБНОВЛЁННЫЙ) ---
+# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (НОВЫЙ) ---
 scan_server_state() {
-    # Сброс
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
-
-    # Определение Панели/Ноды
     local container_name=""
     if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then
         SERVER_TYPE="Панель"; container_name="remnawave"
@@ -137,7 +144,6 @@ scan_server_state() {
         fi
     fi
 
-    # Определение Бота
     local bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "remnawave_bot" 2>/dev/null || true)
     if [ -n "$bot_compose_path" ]; then
         BOT_DETECTED=1
@@ -150,7 +156,6 @@ scan_server_state() {
         fi
     fi
 
-    # Определение Веб-сервера
     if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then
         WEB_SERVER="Nginx (в Docker)"
     elif sudo docker ps --format '{{.Image}}' | grep -q "caddy"; then
@@ -280,7 +285,7 @@ view_logs_realtime() {
 
 view_docker_logs() {
     local service_path="$1"; local service_name="$2"
-    if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня, или там нет docker-compose.yml.${C_RESET}"; sleep 2; return; fi
+    if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi
     echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)";
     trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     (cd "$(dirname "$service_path")" && sudo docker compose logs -f) || true
@@ -291,7 +296,7 @@ security_placeholder() {
     clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь.";
 }
 
-# --- МОДУЛЬ САМОЛИКВИДАЦИИ ---
+# --- МОДУЛЬ САМОЛИКВИДАЦИИ (НОВЫЙ) ---
 uninstall_script() {
     echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
@@ -314,7 +319,8 @@ display_header() {
     clear
     echo -e "${C_CYAN}--- ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ---${C_RESET}"
     check_for_updates
-    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; fi
+    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}";
+    elif [[ "$UPDATE_CHECK_STATUS" == "ERROR" ]]; then echo -e "${C_RED}⚠️ Не могу проверить обновления. Проблемы со связью.${C_RESET}"; fi
     echo "------------------------------------------------------"
     echo -e "IP Сервера:   ${C_YELLOW}$ip_addr${C_RESET}"
     if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then
