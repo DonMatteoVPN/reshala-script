@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==         ИНСТРУМЕНТ «РЕШАЛА» v0.22 - САМООБНОВЛЯЕМЫЙ      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.23 - САМООБНОВЛЯЕМЫЙ         ==
 # ============================================================ #
 # ==       Теперь он сам себя обновляет и чинит.             ==
 # ============================================================ #
@@ -9,13 +9,11 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.22"
+readonly VERSION="v0.23"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
 INSTALL_PATH="/usr/local/bin/reshala"
-GRUB_FILE="/etc/default/grub"
-GRUB_BACKUP_FILE="/etc/default/grub.reshala_backup"
 
 # Цвета
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[0;33m'; C_CYAN='\033[0;36m'; C_BOLD='\033[1m';
@@ -64,15 +62,14 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (Новый, нормальный) ---
 check_for_updates() {
-    LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+    LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || echo "$VERSION")
     UPDATE_AVAILABLE=0
     if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "$VERSION" ]]; then
         return
     fi
     
-    # Сравниваем версии как мужики, а не как хипстеры
     local current_ver_num=${VERSION//v/}
     local latest_ver_num=${LATEST_VERSION//v/}
 
@@ -82,23 +79,21 @@ check_for_updates() {
 }
 
 run_update() {
-    read -p "   Обновляемся до версии $LATEST_VERSION, или дальше на старье пердеть будем? (y/n): " confirm_update
+    read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
     if [[ "$confirm_update" != "y" && "$confirm_update" != "Y" ]]; then
-        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"
+        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter
         return
     fi
 
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
     if ! wget -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
-        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет.${C_RESET}"
-        rm -f "$TEMP_SCRIPT"
+        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
 
     if ! grep -q 'readonly VERSION' "$TEMP_SCRIPT"; then
-        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"
-        rm -f "$TEMP_SCRIPT"
+        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
         return
     fi
     
@@ -145,25 +140,37 @@ net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null
     echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"
     echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}";
 }
-check_ipv6_status() { if grep -q 'ipv6.disable=1' "$GRUB_FILE" 2>/dev/null; then echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; }
-disable_ipv6() { 
-    if grep -q 'ipv6.disable=1' "$GRUB_FILE" 2>/dev/null; then echo "⚠️ IPv6 уже кастрирован."; return; fi
-    log "🔪 Начинаю кастрацию IPv6..."; sudo cp "$GRUB_FILE" "$GRUB_BACKUP_FILE"; log "-> Создан бэкап GRUB."; 
-    local current; current=$(grep '^GRUB_CMDLINE_LINUX=' "$GRUB_FILE" 2>/dev/null | cut -d'"' -f2); 
-    local new="ipv6.disable=1 $current"
-    sudo sed -i "s|^GRUB_CMDLINE_LINUX=\".*\"|GRUB_CMDLINE_LINUX=\"$new\"|" "$GRUB_FILE"
-    sudo update-grub; log "-> IPv6 выпилен из GRUB."; 
-    echo -e "${C_GREEN}✅ КАСТРАЦИЯ ЗАВЕРШЕНА.${C_RESET} ${C_YELLOW}Перезагрузись ('sudo reboot').${C_RESET}"; 
+
+# --- IPv6 МОДУЛЬ (Новый, чистый) ---
+check_ipv6_status() { if [ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" -eq 1 ]; then echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; }
+
+disable_ipv6() {
+    if [ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi
+    echo "🔪 Кастрирую IPv6... Это не больно. Почти."
+    sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
+# === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOL
+    sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null
+    log "-> IPv6 кастрирован через sysctl."
+    echo -e "${C_GREEN}✅ Готово. Теперь эта тачка ездит только на нормальном топливе.${C_RESET}"
 }
-enable_ipv6() { 
-    if [ ! -f "$GRUB_BACKUP_FILE" ]; then echo "❌ Бэкапа нет. Не могу включить то, что не я выключал."; return; fi
-    log "💉 Начинаю реанимацию IPv6..."; 
-    sudo cp "$GRUB_BACKUP_FILE" "$GRUB_FILE"; 
-    sudo update-grub; 
-    sudo rm "$GRUB_BACKUP_FILE"; 
-    log "-> IPv6 восстановлен из бэкапа."; 
-    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET} ${C_YELLOW}Перезагрузись ('sudo reboot').${C_RESET}"; 
+
+enable_ipv6() {
+    if [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ]; then echo "❌ Я его не отключал. Ищи, кто это сделал, и разбирайся с ним."; return; fi
+    echo "💉 Возвращаю всё как было... Реанимация IPv6."
+    sudo rm /etc/sysctl.d/98-reshala-disable-ipv6.conf
+    
+    # Чтобы не требовать перезагрузку, временно включаем обратно до неё
+    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null
+    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null
+    
+    log "-> IPv6 реанимирован."
+    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET} ${C_YELLOW}Чтобы наверняка, лучше перезагрузись ('sudo reboot'), но и так должно работать.${C_RESET}"
 }
+
 ipv6_menu() {
     while true; do
         clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; check_ipv6_status; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад в главное меню"; read -r -p "Твой выбор: " choice
@@ -232,10 +239,10 @@ show_menu() {
         echo "   [5] Посмотреть логи Панели 📊"
         echo -e "   [6] Безопасность сервера ${C_YELLOW}(В разработке 🚧)${C_RESET}"
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
-            echo -e "   [u] ${C_YELLOW}ОБНОВИТЬСЯ НАХУЙ${C_RESET}"
+            echo -e "   [u] ${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"
         fi
         echo ""
-        echo "   [q] Свалить (Выход)"
+        echo "   [q] Свалить нахуй (Выход)"
         echo "------------------------------------------------------"
         read -r -p "Твой выбор, босс: " choice
         case $choice in
