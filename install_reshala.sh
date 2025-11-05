@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.345 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3451 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
 # ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.345 dev"
+readonly VERSION="v0.3451 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
