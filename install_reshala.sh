@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.23 - САМООБНОВЛЯЕМЫЙ         ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.24 - ИСПРАВЛЕНО             ==
 # ============================================================ #
 # ==       Теперь он сам себя обновляет и чинит.             ==
 # ============================================================ #
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.23"
+readonly VERSION="v0.24"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -62,19 +62,19 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (Новый, нормальный) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИСПРАВЛЕННЫЙ) ---
 check_for_updates() {
     LATEST_VERSION=$(wget -qO- "$SCRIPT_URL" 2>/dev/null | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || echo "$VERSION")
     UPDATE_AVAILABLE=0
-    if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "$VERSION" ]]; then
-        return
-    fi
     
-    local current_ver_num=${VERSION//v/}
-    local latest_ver_num=${LATEST_VERSION//v/}
-
-    if [[ "$(printf '%s\n' "$latest_ver_num" "$current_ver_num" | sort -V | head -n1)" == "$current_ver_num" && "$current_ver_num" != "$latest_ver_num" ]]; then
-        UPDATE_AVAILABLE=1
+    # Сравниваем версии, если они не идентичны
+    if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
+        # Находим "старшую" версию
+        HIGHEST_VERSION=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
+        # Если старшая - это та, что на сервере, значит, есть обнова
+        if [[ "$HIGHEST_VERSION" == "$LATEST_VERSION" ]]; then
+            UPDATE_AVAILABLE=1
+        fi
     fi
 }
 
@@ -141,11 +141,22 @@ net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null
     echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}";
 }
 
-# --- IPv6 МОДУЛЬ (Новый, чистый) ---
-check_ipv6_status() { if [ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" -eq 1 ]; then echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; }
+# --- IPv6 МОДУЛЬ (ИСПРАВЛЕННЫЙ) ---
+check_ipv6_status() {
+    if [ ! -f "/proc/sys/net/ipv6/conf/all/disable_ipv6" ]; then
+        echo -e "Статус IPv6: ${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
+    elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then
+        echo -e "Статус IPv6: ${C_RED}КАСТРИРОВАН${C_RESET}"
+    else
+        echo -e "Статус IPv6: ${C_GREEN}ВКЛЮЧЁН${C_RESET}"
+    fi
+}
 
 disable_ipv6() {
-    if [ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi
+    if [ ! -f "/proc/sys/net/ipv6/conf/all/disable_ipv6" ]; then
+        echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return;
+    fi
+    if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi
     echo "🔪 Кастрирую IPv6... Это не больно. Почти."
     sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
 # === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
@@ -159,16 +170,23 @@ EOL
 }
 
 enable_ipv6() {
+    if [ ! -f "/proc/sys/net/ipv6/conf/all/disable_ipv6" ]; then
+        echo -e "❌ ${C_YELLOW}Тут нечего включать. Я не могу пришить то, что отрезано с корнем.${C_RESET}"; return;
+    fi
     if [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ]; then echo "❌ Я его не отключал. Ищи, кто это сделал, и разбирайся с ним."; return; fi
     echo "💉 Возвращаю всё как было... Реанимация IPv6."
     sudo rm /etc/sysctl.d/98-reshala-disable-ipv6.conf
     
-    # Чтобы не требовать перезагрузку, временно включаем обратно до неё
-    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null
-    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null
+    sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<EOL
+# === КОНФИГ ОТ РЕШАЛЫ: IPv6 ВКЛЮЧЁН ===
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+EOL
+    sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null
+    sudo rm /etc/sysctl.d/98-reshala-enable-ipv6.conf
     
     log "-> IPv6 реанимирован."
-    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET} ${C_YELLOW}Чтобы наверняка, лучше перезагрузись ('sudo reboot'), но и так должно работать.${C_RESET}"
+    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET}"
 }
 
 ipv6_menu() {
