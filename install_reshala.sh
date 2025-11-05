@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.299 dev - СТАБИЛЬНАЯ БАЗА + НОВЫЙ ИНТЕЛЛЕКТ ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.300 dev - ИСПРАВЛЕНИЕ ЗАПУСКА ==
 # ============================================================ #
-# ==    Взята рабочая основа v0.29 и дополнена автоопределением. ==
+# ==    Починил критический баг модуля обновлений.           ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.299 dev"
+readonly VERSION="v0.300 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -18,17 +18,9 @@ INSTALL_PATH="/usr/local/bin/reshala"
 # Цвета
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BOLD='\033[1m';
 
-# Глобальные переменные для автоопределения
-SERVER_TYPE="Чистый сервак"
-PANEL_NODE_VERSION=""
-PANEL_NODE_PATH=""
-BOT_DETECTED=0
-BOT_VERSION=""
-BOT_PATH=""
-WEB_SERVER="Не определён"
-UPDATE_AVAILABLE=0
-LATEST_VERSION=""
-UPDATE_CHECK_STATUS="OK"
+# Глобальные переменные
+SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
+UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 
 # --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
@@ -74,12 +66,12 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИЗ v0.29, С УЛУЧШЕННОЙ ПРОВЕРКОЙ) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИСПРАВЛЕННЫЙ) ---
 check_for_updates() {
     UPDATE_AVAILABLE=0
     UPDATE_CHECK_STATUS="OK"
     
-    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+    LATEST_VERSION=$(curl -s --connect-timeout 5 "$SCRIPT_URL" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 || true)
 
     if [ -z "$LATEST_VERSION" ]; then
         UPDATE_CHECK_STATUS="ERROR"
@@ -123,7 +115,7 @@ run_update() {
     exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ (НОВЫЙ) ---
+# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
 scan_server_state() {
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
     local container_name=""
@@ -296,7 +288,7 @@ security_placeholder() {
     clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь.";
 }
 
-# --- МОДУЛЬ САМОЛИКВИДАЦИИ (НОВЫЙ) ---
+# --- МОДУЛЬ САМОЛИКВИДАЦИИ ---
 uninstall_script() {
     echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
@@ -308,7 +300,7 @@ uninstall_script() {
     echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (ОБНОВЛЕННЫЕ) ---
+# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
 display_header() {
     ip_addr=$(hostname -I | awk '{print $1}')
     local net_status; net_status=$(get_net_status)
