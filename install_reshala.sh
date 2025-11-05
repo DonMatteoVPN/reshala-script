@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3554 dev - STEALTH EDITION   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.3555 dev - OPEN DESIGN      ==
 # ============================================================ #
-# ==    Финальный редизайн, добавлена инфа по CPU/Disk.      ==
-# ==    Исправлены все баги отображения.                     ==
+# ==    Новый дизайн с открытой рамкой.                      ==
+# ==    Система обновлений откатана к первоначальной версии.  ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.3554 dev"
+readonly VERSION="v0.3555 dev"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -60,52 +60,80 @@ install_script() {
     fi
 }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (С ЧИСТЫМИ ЛОГАМИ И САНАЦИЕЙ) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ (ОТКАТ К ОРИГИНАЛЬНОЙ ВЕРСИИ) ---
+handle_network_error() {
+    local error_code=$1
+    case $error_code in
+        6) echo "Couldn't resolve host" ;;
+        7) echo "Couldn't connect to host" ;;
+        28) echo "Operation timeout" ;;
+        *) echo "Unknown error ($error_code)" ;;
+    esac
+}
+
 check_for_updates() {
-    UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"
-    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
-    local curl_error_output; curl_error_output=$(mktemp)
-    local response_body; response_body=$(curl -4 -L -sS --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> "$curl_error_output")
-    local curl_exit_code=$?
-    if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
-        LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2 | tr -d '\r')
-        if [ -n "$LATEST_VERSION" ]; then
-            local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
-            local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
-            if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
-                local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
-                if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then
-                    UPDATE_AVAILABLE=1
-                    log "🔥 Обнаружена новая версия: $LATEST_VERSION (Локальная: $VERSION)"
+    UPDATE_AVAILABLE=0
+    UPDATE_CHECK_STATUS="OK"
+    local max_attempts=3
+    local attempt=1
+    local curl_result=""
+    local curl_exit_code=0
+    
+    while [ $attempt -le $max_attempts ]; do
+        curl_result=$(curl -s --connect-timeout 5 --max-time 15 --retry 1 --retry-delay 2 \
+            --retry-max-time 10 --fail -w "%{http_code}" "$SCRIPT_URL" 2>/dev/null)
+        curl_exit_code=$?
+        
+        local http_code="${curl_result: -3}"
+        local response_body="${curl_result%???}"
+        
+        if [ $curl_exit_code -eq 0 ]; then
+            LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+            if [ -n "$LATEST_VERSION" ]; then
+                if [[ "$LATEST_VERSION" != "$VERSION" ]]; then
+                    local highest_version; highest_version=$(printf '%s\n%s' "$VERSION" "$LATEST_VERSION" | sort -V | tail -n1)
+                    if [[ "$highest_version" == "$LATEST_VERSION" ]]; then
+                        UPDATE_AVAILABLE=1
+                    fi
                 fi
+                return
+            else
+                UPDATE_CHECK_STATUS="ERROR: VERSION_NOT_FOUND"
+                return
+            fi
+        else
+            if [ $attempt -ge $max_attempts ]; then
+                UPDATE_CHECK_STATUS="ERROR: $(handle_network_error $curl_exit_code)"
             fi
         fi
-    else
-        UPDATE_CHECK_STATUS="ERROR"
-        log "❌ Ошибка проверки обновлений. Код: $curl_exit_code. Ответ curl: $(cat "$curl_error_output")"
-    fi
-    rm -f "$curl_error_output"
+        attempt=$((attempt + 1))
+    done
 }
 
 run_update() {
     read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
     if [[ "$confirm_update" != "y" && "$confirm_update" != "Y" ]]; then
-        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter; return
+        echo -e "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter
+        return
     fi
+
     echo -e "${C_CYAN}🔄 Качаю свежак...${C_RESET}"
     local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
-    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
-    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then
-        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог.${C_RESET}"; log "wget не смог скачать $url_with_buster"; rm -f "$TEMP_SCRIPT"; wait_for_enter; return
+    
+    if ! wget --timeout=15 --tries=2 -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
+        echo -e "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
+        return
     fi
-    local downloaded_version; downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2 | tr -d '\r')
-    if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then
-        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; log "Скачанный файл обновления не прошел проверку. Ожидалась версия '$LATEST_VERSION', в файле '$downloaded_version'."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return
+
+    if ! grep -q 'readonly VERSION' "$TEMP_SCRIPT"; then
+        echo -e "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; rm -f "$TEMP_SCRIPT"; wait_for_enter
+        return
     fi
+    
     echo "   Ставлю на место старого..."
     sudo cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
     rm "$TEMP_SCRIPT"
-    log "✅ Ахуенный пацан! Успешно обновился с $VERSION до $LATEST_VERSION."
+
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"
     echo "   Перезапускаю себя, чтобы мозги встали на место..."
     sleep 2
@@ -130,7 +158,7 @@ scan_server_state() {
     if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (в Docker)"; elif sudo docker ps --format '{{.Names}}' | grep -q "caddy"; then local caddy_version; caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown"); WEB_SERVER="Caddy $caddy_version (в Docker)"; elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then if command -v nginx &> /dev/null; then local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (на хосте)"; else WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p'); fi; fi
 }
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ СБОРА ИНФОРМАЦИИ О СЕРВЕРЕ ---
+# --- ФУНКЦИИ ДЛЯ СБОРА ИНФОРМАЦИИ О СЕРВЕРЕ ---
 get_cpu_info() {
     local model; model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//'); echo "$model"
 }
@@ -149,176 +177,76 @@ get_hoster_info() {
 
 # --- ОСНОВНЫЕ МОДУЛИ СКРИПТА ---
 apply_bbr() {
-    log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."
-    local net_status; net_status=$(get_net_status)
-    local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1)
-    local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2)
-    local cake_available; cake_available=$(modprobe sch_cake &>/dev/null && echo "true" || echo "false")
-
-    echo "--- ДИАГНОСТИКА ТВОЕГО ДВИГАТЕЛЯ ---"; echo "Алгоритм: $current_cc"; echo "Планировщик: $current_qdisc"; echo "------------------------------------"
-
-    if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "cake" ]]; then
-        echo -e "${C_GREEN}✅ Ты уже на максимальном форсаже (BBR+CAKE). Не мешай машине работать.${C_RESET}"; log "Проверка «Форсаж»: Максимум."; return
-    fi
-
-    if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "fq" && "$cake_available" == "true" ]]; then
-        echo -e "${C_YELLOW}⚠️ У тебя неплохо (BBR+FQ), но можно лучше. CAKE доступен.${C_RESET}"
-        read -p "   Хочешь проапгрейдиться до CAKE? Это топчик. (y/n): " upgrade_confirm
-        if [[ "$upgrade_confirm" != "y" && "$upgrade_confirm" != "Y" ]]; then
-            echo "Как скажешь. Остаёмся на FQ."; return
-        fi
-        echo "Красава. Делаем как надо."
-    elif [[ "$current_cc" != "bbr" && "$current_cc" != "bbr2" ]]; then
-        echo "Хм, ездишь на стоке. Пора залить ракетное топливо."
-    fi
-
-    local available_cc; available_cc=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | awk -F'= ' '{print $2}')
-    local preferred_cc="bbr"; if [[ "$available_cc" == *"bbr2"* ]]; then preferred_cc="bbr2"; fi
-    
-    local preferred_qdisc="fq"
-    if [[ "$cake_available" == "true" ]]; then 
-        preferred_qdisc="cake"
-    else
-        log "⚠️ 'cake' не найден, ставлю 'fq'."
-        modprobe sch_fq &>/dev/null
-    fi
-
-    local tcp_fastopen_val=0; [[ $(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo 0) -ge 1 ]] && tcp_fastopen_val=3
-    local CONFIG_SYSCTL="/etc/sysctl.d/99-reshala-boost.conf"
-    log "🧹 Чищу старое говно..."; sudo rm -f /etc/sysctl.d/*bbr*.conf /etc/sysctl.d/*network-optimizations*.conf
-    if [ -f /etc/sysctl.conf.bak ]; then sudo rm /etc/sysctl.conf.bak; fi
-    sudo sed -i.bak -E 's/^[[:space:]]*(net.core.default_qdisc|net.ipv4.tcp_congestion_control)/#&/' /etc/sysctl.conf
-    log "✍️  Устанавливаю новые, пиздатые настройки..."
-    echo "# === КОНФИГ «ФОРСАЖ» ОТ РЕШАЛЫ — НЕ ТРОГАТЬ ===
+    log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."; local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2); local cake_available; cake_available=$(modprobe sch_cake &>/dev/null && echo "true" || echo "false"); echo "--- ДИАГНОСТИКА ТВОЕГО ДВИГАТЕЛЯ ---"; echo "Алгоритм: $current_cc"; echo "Планировщик: $current_qdisc"; echo "------------------------------------"; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "cake" ]]; then echo -e "${C_GREEN}✅ Ты уже на максимальном форсаже (BBR+CAKE). Не мешай машине работать.${C_RESET}"; log "Проверка «Форсаж»: Максимум."; return; fi; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "fq" && "$cake_available" == "true" ]]; then echo -e "${C_YELLOW}⚠️ У тебя неплохо (BBR+FQ), но можно лучше. CAKE доступен.${C_RESET}"; read -p "   Хочешь проапгрейдиться до CAKE? Это топчик. (y/n): " upgrade_confirm; if [[ "$upgrade_confirm" != "y" && "$upgrade_confirm" != "Y" ]]; then echo "Как скажешь. Остаёмся на FQ."; return; fi; echo "Красава. Делаем как надо."; elif [[ "$current_cc" != "bbr" && "$current_cc" != "bbr2" ]]; then echo "Хм, ездишь на стоке. Пора залить ракетное топливо."; fi; local available_cc; available_cc=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | awk -F'= ' '{print $2}'); local preferred_cc="bbr"; if [[ "$available_cc" == *"bbr2"* ]]; then preferred_cc="bbr2"; fi; local preferred_qdisc="fq"; if [[ "$cake_available" == "true" ]]; then preferred_qdisc="cake"; else log "⚠️ 'cake' не найден, ставлю 'fq'."; modprobe sch_fq &>/dev/null; fi; local tcp_fastopen_val=0; [[ $(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo 0) -ge 1 ]] && tcp_fastopen_val=3; local CONFIG_SYSCTL="/etc/sysctl.d/99-reshala-boost.conf"; log "🧹 Чищу старое говно..."; sudo rm -f /etc/sysctl.d/*bbr*.conf /etc/sysctl.d/*network-optimizations*.conf; if [ -f /etc/sysctl.conf.bak ]; then sudo rm /etc/sysctl.conf.bak; fi; sudo sed -i.bak -E 's/^[[:space:]]*(net.core.default_qdisc|net.ipv4.tcp_congestion_control)/#&/' /etc/sysctl.conf; log "✍️  Устанавливаю новые, пиздатые настройки..."; echo "# === КОНФИГ «ФОРСАЖ» ОТ РЕШАЛЫ — НЕ ТРОГАТЬ ===
 net.ipv4.tcp_congestion_control = $preferred_cc
 net.core.default_qdisc = $preferred_qdisc
 net.ipv4.tcp_fastopen = $tcp_fastopen_val
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null
-    log "🔥 Применяю настройки..."; sudo sysctl -p "$CONFIG_SYSCTL" >/dev/null
-    echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"
-    echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}";
+net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null; log "🔥 Применяю настройки..."; sudo sysctl -p "$CONFIG_SYSCTL" >/dev/null; echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"; echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}";
 }
-
 check_ipv6_status() {
-    if [ ! -d "/proc/sys/net/ipv6" ]; then
-        echo -e "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
-    elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then
-        echo -e "${C_RED}КАСТРИРОВАН${C_RESET}"
-    else
-        echo -e "${C_GREEN}ВКЛЮЧЁН${C_RESET}"
-    fi
+    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo -e "${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi
 }
 disable_ipv6() {
-    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi
-    if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi
-    echo "🔪 Кастрирую IPv6... Это не больно. Почти."
-    sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
+    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi; if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi; echo "🔪 Кастрирую IPv6... Это не больно. Почти."; sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
 # === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 EOL
-    sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null
-    log "-> IPv6 кастрирован через sysctl."
-    echo -e "${C_GREEN}✅ Готово. Теперь эта тачка ездит только на нормальном топливе.${C_RESET}"
+    sudo sysctl -p /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null; log "-> IPv6 кастрирован через sysctl."; echo -e "${C_GREEN}✅ Готово. Теперь эта тачка ездит только на нормальном топливе.${C_RESET}"
 }
 enable_ipv6() {
-    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего включать. Я не могу пришить то, что отрезано с корнем.${C_RESET}"; return; fi
-    if [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 0 ]; then
-        echo "✅ IPv6 и так работает. Не мешай ему."; return;
-    fi
-    echo "💉 Возвращаю всё как было... Реанимация IPv6."
-    sudo rm -f /etc/sysctl.d/98-reshala-disable-ipv6.conf
-    
-    sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<EOL
+    if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего включать. Я не могу пришить то, что отрезано с корнем.${C_RESET}"; return; fi; if [ ! -f /etc/sysctl.d/98-reshala-disable-ipv6.conf ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 0 ]; then echo "✅ IPv6 и так работает. Не мешай ему."; return; fi; echo "💉 Возвращаю всё как было... Реанимация IPv6."; sudo rm -f /etc/sysctl.d/98-reshala-disable-ipv6.conf; sudo tee /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null <<EOL
 # === КОНФИГ ОТ РЕШАЛЫ: IPv6 ВКЛЮЧЁН ===
 net.ipv6.conf.all.disable_ipv6 = 0
 net.ipv6.conf.default.disable_ipv6 = 0
 EOL
-    sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null
-    sudo rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf
-    
-    log "-> IPv6 реанимирован."
-    echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET}"
+    sudo sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null; sudo rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf; log "-> IPv6 реанимирован."; echo -e "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET}"
 }
 ipv6_menu() {
-    while true; do
-        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; echo -e "Статус IPv6: $(check_ipv6_status)"; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад в главное меню"; read -r -p "Твой выбор: " choice
-        case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "1, 2 или 'b'. Не тупи."; sleep 2;; esac
-    done
+    while true; do clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; echo -e "Статус IPv6: $(check_ipv6_status)"; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад в главное меню"; read -r -p "Твой выбор: " choice; case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "1, 2 или 'b'. Не тупи."; sleep 2;; esac; done
 }
 view_logs_realtime() {
-    local log_path="$1"; local log_name="$2"
-    if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi
-    echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)";
-    local original_int_handler=$(trap -p INT)
-    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
-    (sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
-    if [ -n "$original_int_handler" ]; then
-        eval "$original_int_handler"
-    else
-        trap - INT
-    fi
-    return 0
+    local log_path="$1"; local log_name="$2"; if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0
 }
 view_docker_logs() {
-    local service_path="$1"; local service_name="$2"
-    if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi
-    echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)";
-    local original_int_handler=$(trap -p INT)
-    trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
-    (cd "$(dirname "$service_path")" && sudo docker compose logs -f) || true
-    if [ -n "$original_int_handler" ]; then
-        eval "$original_int_handler"
-    else
-        trap - INT
-    fi
-    return 0
+    local service_path="$1"; local service_name="$2"; if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (cd "$(dirname "$service_path")" && sudo docker compose logs -f) || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0
 }
 security_placeholder() {
     clear; echo -e "${C_RED}Написано же, блядь — ${C_YELLOW}В РАЗРАБОТКЕ${C_RESET}. Не лезь.";
 }
 uninstall_script() {
-    echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
-    echo "Прощай, босс. Начинаю самоликвидацию...";
-    if [ -f "$INSTALL_PATH" ]; then sudo rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi
-    if [ -f "/root/.bashrc" ]; then sudo sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi
-    if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi
-    if [ -f "$LOGFILE" ]; then sudo rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi
-    echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
+    echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm; if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi; echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then sudo rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then sudo sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then sudo rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
 # --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ (НОВЫЙ ДИЗАЙН) ---
 display_header() {
-    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ ($cc + $qdisc)"; else cc_status="${C_GREEN}АКТИВЕН ($cc + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info)
+    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info)
     clear
-    strip_colors() { echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g'; }
-    local info_width=68; local title="ИНСТРУМЕНТ «РЕШАЛА» ${VERSION}"; local title_len=$(strip_colors "$title" | wc -c); local padding=$(( (info_width - title_len) / 2 ));
     
-    printf "${C_CYAN}╔%*s${title}%*s╗${C_RESET}\n" $padding "" $padding ""
-    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then local update_msg="🔥 Новая версия: ${LATEST_VERSION}"; printf "║ ${C_YELLOW}%-$(($info_width-2))s${C_RESET} ║\n" "$update_msg"; fi
+    echo -e "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» v${VERSION} ]${C_RESET}"
+    if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "${C_YELLOW}║ 🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; fi
     
-    echo -e "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]═══════════════════════════════════════════╣${C_RESET}"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET}  ║\n" "IP Адрес"  "$ip_addr"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Хостер"      "$hoster_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Процессор"   "$cpu_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Нагрузка"    "$cpu_load"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Оперативка"  "$ram_info"
-    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET}    ║\n" "Диск"        "$disk_info"
+    echo -e "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"
     
-    echo -e "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]═════════════════════════════════════════════╣${C_RESET}"
-    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%-$(($info_width-19))s${C_RESET} ║\n" "Установка" "$SERVER_TYPE"; fi
-    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Бот" "$BOT_VERSION"; fi
-    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%-$(($info_width-19))s${C_RESET} ║\n" "Веб-сервер" "$WEB_SERVER"; fi
+    echo -e "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"
+    if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi
+    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-12s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi
     
-    echo -e "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]═════════════════════════════════════════╣${C_RESET}"
-    local cc_len=$(strip_colors "$cc_status" | wc -c); printf "║ ${C_GRAY}%-12s${C_RESET} : %s%*s ║\n" "Тюнинг" "$cc_status" $((info_width - 18 - cc_len)) ""
-    local ipv6_len=$(strip_colors "$ipv6_status" | wc -c); printf "║ ${C_GRAY}%-12s${C_RESET} : %s%*s ║\n" "IPv6" "$ipv6_status" $((info_width - 18 - ipv6_len)) ""
+    echo -e "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : %b\n" "Тюнинг" "$cc_status"
+    printf "║ ${C_GRAY}%-12s${C_RESET} : %b\n" "IPv6" "$ipv6_status"
     
-    echo -e "${C_CYAN}╚═══════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo -e "${C_CYAN}╚${C_RESET}"
     echo ""; echo "Чё делать будем, босс?"; echo ""
 }
 
