@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.61 dev - REFACTORED         == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.62 dev - REFACTORED         == #
 # ============================================================ #
 # ==  Рефакторинг: убраны дубли, улучшена читаемость, добавлен
 # ==  детект/попытка установки BBR2/BBR3 (модуль/модули пытаются
@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-readonly VERSION="v0.61 dev (refactor)"
+readonly VERSION="v0.62 dev (refactor)"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -107,18 +107,29 @@ get_docker_version(){ local container_name="$1"; local version="";
     echo "latest (образ: ${image_id:0:7})"
 }
 
+# ----------------- Состояние -----------------
 scan_server_state(){
     SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
     local docker_names
     docker_names=$(sudo docker ps --format '{{.Names}}' 2>/dev/null || true)
-    if echo "$docker_names" | grep -q "^remnawave$"; then SERVER_TYPE="Панель"; PANEL_NODE_VERSION=$(get_docker_version remnawave); PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' remnawave 2>/dev/null || true); fi
-    if echo "$docker_names" | grep -q "^remnanode$"; then SERVER_TYPE="Нода"; PANEL_NODE_VERSION=$(get_docker_version remnanode); PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' remnanode 2>/dev/null || true; fi
-    if echo "$docker_names" | grep -q "remnawave_bot"; then BOT_DETECTED=1; BOT_VERSION=$(get_docker_version remnawave_bot); BOT_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' remnawave_bot 2>/dev/null || true); fi
 
-    if echo "$docker_names" | grep -q "remnawave-nginx"; then local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (в Docker)"
-    elif echo "$docker_names" | grep -q "caddy"; then local caddy_version; caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown"); WEB_SERVER="Caddy $caddy_version (в Docker)"
-    elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
-        if command -v nginx &>/dev/null; then local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (на хосте)"; fi
+    if echo "$docker_names" | grep -q "^remnawave$"; then
+        SERVER_TYPE="Панель"
+        PANEL_NODE_VERSION=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' remnawave 2>/dev/null || true)
+        PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' remnawave 2>/dev/null || true)
+    fi
+
+    # FIXED: missing parenthesis
+    if echo "$docker_names" | grep -q "^remnanode$"; then
+        SERVER_TYPE="Нода"
+        PANEL_NODE_VERSION=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' remnanode 2>/dev/null || true)
+        PANEL_NODE_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' remnanode 2>/dev/null || true)
+    fi
+
+    if echo "$docker_names" | grep -q "remnawave_bot"; then
+        BOT_DETECTED=1
+        BOT_VERSION=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' remnawave_bot 2>/dev/null || true)
+        BOT_PATH=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' remnawave_bot 2>/dev/null || true)
     fi
 }
 
