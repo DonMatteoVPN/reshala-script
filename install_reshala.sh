@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.9 - CUSTOM FIREWALL        ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.0 - STABLE AS FUCK         ==
 # ============================================================ #
-# ==    Полный код с интерактивным фаерволом и фиксами.     ==
-# ==    Переработан DonMatteo для реальных задач.           ==
+# ==    Финальная версия с асинхронной проверкой обнов,     ==
+# ==    исправленными багами и улучшенным UX.               ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.9"
+readonly VERSION="v1.0"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -38,18 +38,19 @@ show_wait_message() {
 get_confirmation() {
     local prompt="$1"; local result_var="$2"; local default_val="${3:-n}"
     local input
-    read -r -p "$prompt [y/n, default: $default_val]: " input
-    input=$(echo "$input" | tr '[:upper:]' '[:lower:]' | sed 's/[^yn]//g')
-    if [[ "$input" == "y" ]]; then
-        eval "$result_var=y"
-    elif [[ "$input" == "n" ]]; then
-        eval "$result_var=n"
-    elif [[ -z "$input" ]]; then
-        eval "$result_var=$default_val"
-    else
-        echo -e "${C_RED}Не понял. Введи 'y' или 'n'.${C_RESET}"
-        get_confirmation "$prompt" "$result_var" "$default_val"
-    fi
+    while true; do
+        read -r -p "$prompt [y/n, default: $default_val]: " input
+        input=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+        if [[ "$input" == "y" || "$input" == "д" ]]; then
+            eval "$result_var=y"; break
+        elif [[ "$input" == "n" || "$input" == "н" ]]; then
+            eval "$result_var=n"; break
+        elif [[ -z "$input" ]]; then
+            eval "$result_var=$default_val"; break
+        else
+            echo -e "${C_RED}Не понял. Введи 'y' или 'n'.${C_RESET}"
+        fi
+    done
 }
 
 # --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
@@ -78,28 +79,34 @@ get_disk_info() { local root_device; root_device=$(df / | awk 'NR==2 {print $1}'
 get_hoster_info() { curl -s --connect-timeout 5 ipinfo.io/org || echo "Не определён"; }
 
 # --- МОДУЛЬ ОБНОВЛЕНИЯ ---
-check_for_updates() {
-    UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"
-    local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0
-    local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
-    # log "Начинаю проверку обновлений по URL: $url_with_buster"
-    while [ $attempt -le $max_attempts ]; do
-        response_body=$(curl -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE"))
-        curl_exit_code=$?
-        if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
-            LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
-            if [ -n "$LATEST_VERSION" ]; then
-                local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
-                local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
-                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
-                    local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
-                    if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; log "Обнаружена новая версия (числовое сравнение: $remote_ver_num > $local_ver_num)."; fi
-                fi; return 0
-            else log "Попытка $attempt: Ответ получен, но не могу найти строку с версией."; fi
-        else log "Попытка $attempt из $max_attempts не удалась (код выхода curl: $curl_exit_code)."; if [ $attempt -lt $max_attempts ]; then sleep 3; fi; fi
-        attempt=$((attempt + 1))
-    done
-    UPDATE_CHECK_STATUS="ERROR"; log "Ошибка проверки обновлений после $max_attempts попыток."; return 1
+check_for_updates_background() {
+    (
+        UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"
+        local max_attempts=2; local attempt=1; local response_body=""; local curl_exit_code=0
+        local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
+        while [ $attempt -le $max_attempts ]; do
+            response_body=$(curl -s -4 -L --connect-timeout 5 --max-time 10 --retry 1 "$url_with_buster" 2>/dev/null)
+            curl_exit_code=$?
+            if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
+                LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
+                if [ -n "$LATEST_VERSION" ]; then
+                    local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g')
+                    local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
+                    if [[ "$local_ver_num" != "$remote_ver_num" ]]; then
+                        local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1)
+                        if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then echo "UPDATE_AVAILABLE=1"; echo "LATEST_VERSION='$LATEST_VERSION'"; fi
+                    fi; return 0
+                fi
+            fi; attempt=$((attempt + 1)); sleep 2
+        done
+        echo "UPDATE_CHECK_STATUS='ERROR'"
+    ) > "/tmp/reshala_update_check" &
+}
+process_update_check_result() {
+    if [ -f "/tmp/reshala_update_check" ]; then
+        source "/tmp/reshala_update_check"
+        rm "/tmp/reshala_update_check"
+    fi
 }
 run_update() {
     local confirm_update; get_confirmation "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем?" confirm_update y
@@ -117,7 +124,7 @@ run_update() {
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛЬ СЕТЕВОГО ТЮНИНГА ---
+# --- МОДУЛИ СКРИПТА (ВСЕ ФУНКЦИИ ОБЪЯВЛЕНЫ ДО МЕНЮ) ---
 apply_ulimit_tuning() {
     local ulimit_val=65535; local sysctl_file="/etc/sysctl.d/99-reshala-ulimit.conf"
     log "⚙️ Применяю тюнинг ulimit и TCP-параметров."
@@ -155,7 +162,6 @@ net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null
     log "🔥 Применяю настройки..."; sudo sysctl -p "$CONFIG_SYSCTL" >/dev/null
     echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"; echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}"; apply_ulimit_tuning
 }
-check_ipv6_status() { if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo -e "${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; }
 disable_ipv6() { show_wait_message; if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi; if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi; echo "🔪 Кастрирую IPv6... Это не больно. Почти."; sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
 # === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
 net.ipv6.conf.all.disable_ipv6 = 1
@@ -186,22 +192,6 @@ update_system() {
     sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; log "-> Обновление системы завершено."
     echo -e "${C_GREEN}✅ Система обновлена.${C_RESET}"
 }
-ufw_menu() {
-    while true; do
-        clear; echo "--- 🛡️ УПРАВЛЕНИЕ ФАЕРВОЛОМ (UFW) ---"; local ufw_status; ufw_status=$(sudo ufw status | head -n 1 | sed 's/Status: //'); if [[ "$ufw_status" == "inactive" ]]; then ufw_status="${C_RED}ОТКЛЮЧЁН${C_RESET}"; else ufw_status="${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi
-        echo -e "Статус: $ufw_status"; echo "---------------------------------------"
-        echo "   1. Посмотреть текущие правила"; echo "   2. Включить фаервол (с правилом для SSH)"; echo "   3. Отключить фаервол"; echo "   4. Добавить новое правило (мастер)"; echo "   5. Удалить правило по номеру"
-        echo "   b. Назад"; read -r -p "Твой выбор: " choice
-        case $choice in
-            1) echo "--- ТЕКУЩИЕ ПРАВИЛА ---"; sudo ufw status numbered; wait_for_enter;;
-            2) show_wait_message; echo "Включаю..."; sudo ufw allow ssh >/dev/null; sudo ufw --force enable >/dev/null; log "-> UFW включен."; echo "✅ Фаервол активен, SSH-порт открыт."; sleep 2;;
-            3) show_wait_message; echo "Отключаю..."; sudo ufw --force disable >/dev/null; log "-> UFW отключен."; echo "✅ Фаервол деактивирован."; sleep 2;;
-            4) add_ufw_rule;;
-            5) delete_ufw_rule;;
-            [bB]) break;; *) echo "Не тупи."; sleep 2;;
-        esac
-    done
-}
 add_ufw_rule() {
     echo "--- МАСТЕР ДОБАВЛЕНИЯ ПРАВИЛ UFW ---"
     read -p "Действие (allow/deny) [allow]: " action; action=${action:-allow}
@@ -226,6 +216,22 @@ delete_ufw_rule() {
         else echo "Отмена."; fi
     elif [[ "$rule_num" != "q" ]]; then echo "${C_RED}Это не номер.${C_RESET}"; fi
     wait_for_enter
+}
+ufw_menu() {
+    while true; do
+        clear; echo "--- 🛡️ УПРАВЛЕНИЕ ФАЕРВОЛОМ (UFW) ---"; local ufw_status; ufw_status=$(sudo ufw status | head -n 1 | sed 's/Status: //'); if [[ "$ufw_status" == "inactive" ]]; then ufw_status="${C_RED}ОТКЛЮЧЁН${C_RESET}"; else ufw_status="${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi
+        echo -e "Статус: $ufw_status"; echo "---------------------------------------"
+        echo "   1. Посмотреть текущие правила"; echo "   2. Включить фаервол (с правилом для SSH)"; echo "   3. Отключить фаервол"; echo "   4. Добавить новое правило (мастер)"; echo "   5. Удалить правило по номеру"
+        echo "   b. Назад"; read -r -p "Твой выбор: " choice
+        case $choice in
+            1) echo "--- ТЕКУЩИЕ ПРАВИЛА ---"; sudo ufw status numbered; wait_for_enter;;
+            2) show_wait_message; echo "Включаю..."; sudo ufw allow ssh >/dev/null; sudo ufw --force enable >/dev/null; log "-> UFW включен."; echo "✅ Фаервол активен, SSH-порт открыт."; sleep 2;;
+            3) show_wait_message; echo "Отключаю..."; sudo ufw --force disable >/dev/null; log "-> UFW отключен."; echo "✅ Фаервол деактивирован."; sleep 2;;
+            4) add_ufw_rule;;
+            5) delete_ufw_rule;;
+            [bB]) break;; *) echo "Не тупи."; sleep 2;;
+        esac
+    done
 }
 fail2ban_menu() {
     while true; do
@@ -253,7 +259,10 @@ uninstall_script() {
     echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then sudo rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then sudo sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then sudo rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
 
-# --- МЕНЮ ---
+# --- МЕНЮ (ОБЪЯВЛЕНЫ ДО ГЛАВНОГО МЕНЮ) ---
+ipv6_menu() {
+    while true; do clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; echo -e "Статус IPv6: $(check_ipv6_status)"; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад"; read -r -p "Твой выбор: " choice; case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac; done
+}
 network_tuning_menu() {
     while true; do clear; echo "--- 🚀 СЕТЕВОЙ ТЮНИНГ ---"; echo "--------------------------"; echo "   1. Управление «Форсажем» (BBR+CAKE)"; echo "   2. Управление IPv6"; echo "   b. Назад"; read -r -p "Твой выбор: " choice; case $choice in 1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac; done
 }
@@ -298,9 +307,10 @@ display_header() {
 }
 show_menu() {
     trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
+    check_for_updates_background
     while true; do
         scan_server_state; display_header
-        check_for_updates
+        process_update_check_result
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then echo -e "\n${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; fi
         echo -e "\nЧё делать будем, босс?\n"
         echo "   [1] Сетевой тюнинг (BBR, IPv6)"; echo "   [2] Обслуживание и безопасность (UFW, NTP, Updates)"; echo "   [3] Диагностика и логи"
