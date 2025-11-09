@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.2 - FINAL STRUCTURE        ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.1 - ORDER AND LAW          ==
 # ============================================================ #
-# ==    Исправлена финальная ошибка порядка вызовов.        ==
-# ==    Теперь всё должно работать как швейцарские часы.     ==
+# ==    Финальная версия с исправленной структурой вызовов.   ==
+# ==    Больше никаких 'command not found'.                   ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v1.2"
+readonly VERSION="v1.1"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -24,7 +24,7 @@ SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=
 UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 
 # ============================================================ #
-# ==      БЛОК ОБЪЯВЛЕНИЯ ВСЕХ, БЛЯДЬ, ФУНКЦИЙ              ==
+# ==      ВСЕ ФУНКЦИИ ОБЪЯВЛЕНЫ ЗДЕСЬ (ДО ГЛАВНОГО МОЗГА)    ==
 # ============================================================ #
 
 # --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
@@ -263,6 +263,8 @@ uninstall_script() {
     if [[ "$confirm_uninstall" != "y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
     echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then sudo rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then sudo sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then sudo rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
 }
+
+# --- МЕНЮ (ОБЪЯВЛЕНЫ ДО ГЛАВНОГО МЕНЮ) ---
 ipv6_menu() {
     while true; do clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; echo -e "Статус IPv6: $(check_ipv6_status)"; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад"; read -r -p "Твой выбор: " choice; case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac; done
 }
