@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.2 - FINAL STRUCTURE        ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.3 - IDIOT-PROOF EDITION    ==
 # ============================================================ #
-# ==    Исправлена финальная ошибка порядка вызовов.        ==
-# ==    Теперь всё должно работать как швейцарские часы.     ==
+# ==    Железобетонная структура с функцией main().           ==
+# ==    Исправлены все ошибки порядка вызовов. Навсегда.      ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v1.2"
+readonly VERSION="v1.3"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -328,10 +328,21 @@ show_menu() {
 }
 
 # --- ГЛАВНЫЙ МОЗГ ---
-if [[ "${1:-}" == "install" ]]; then
-    install_script "${2:-}"
-else
-    if [[ $EUID -ne 0 ]]; then if [ "$0" != "$INSTALL_PATH" ]; then echo -e "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}"; else echo -e "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"; fi; exit 1; fi
-    trap - INT TERM EXIT
-    show_menu
-fi
+main() {
+    if [[ "${1:-}" == "install" ]]; then
+        install_script "${2:-}"
+    else
+        if [[ $EUID -ne 0 ]]; then
+            if [ "$0" != "$INSTALL_PATH" ]; then
+                echo -e "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}"
+            else
+                echo -e "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"
+            fi
+            exit 1;
+        fi
+        trap - INT TERM EXIT
+        show_menu
+    fi
+}
+
+main "$@"
