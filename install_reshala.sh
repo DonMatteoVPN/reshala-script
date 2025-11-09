@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.8 - ULTIMATE TUNE-UP       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v0.9 - CUSTOM FIREWALL        ==
 # ============================================================ #
-# ==    Полный код с модулями безопасности и тюнинга.       ==
+# ==    Полный код с интерактивным фаерволом и фиксами.     ==
 # ==    Переработан DonMatteo для реальных задач.           ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v0.8"
+readonly VERSION="v0.9"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -39,7 +39,7 @@ get_confirmation() {
     local prompt="$1"; local result_var="$2"; local default_val="${3:-n}"
     local input
     read -r -p "$prompt [y/n, default: $default_val]: " input
-    input=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+    input=$(echo "$input" | tr '[:upper:]' '[:lower:]' | sed 's/[^yn]//g')
     if [[ "$input" == "y" ]]; then
         eval "$result_var=y"
     elif [[ "$input" == "n" ]]; then
@@ -77,12 +77,12 @@ get_ram_info() { free -m | grep Mem | awk '{printf "%.1f/%.1f GB", $3/1024, $2/1
 get_disk_info() { local root_device; root_device=$(df / | awk 'NR==2 {print $1}'); local main_disk; main_disk=$(lsblk -no pkname "$root_device" 2>/dev/null || basename "$root_device" | sed 's/[0-9]*$//'); local disk_type="HDD"; if [ -f "/sys/block/$main_disk/queue/rotational" ]; then if [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then disk_type="SSD"; fi; elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi; local usage; usage=$(df -h / | awk 'NR==2 {print $3 "/" $2}'); echo "$disk_type ($usage)"; }
 get_hoster_info() { curl -s --connect-timeout 5 ipinfo.io/org || echo "Не определён"; }
 
-# --- МОДУЛЬ ОБНОВЛЕНИЯ (ИЗ v0.3451) ---
+# --- МОДУЛЬ ОБНОВЛЕНИЯ ---
 check_for_updates() {
     UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"
     local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0
     local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
-    log "Начинаю проверку обновлений по URL: $url_with_buster"
+    # log "Начинаю проверку обновлений по URL: $url_with_buster"
     while [ $attempt -le $max_attempts ]; do
         response_body=$(curl -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE"))
         curl_exit_code=$?
@@ -182,7 +182,7 @@ update_system() {
     echo -e "${C_YELLOW}⚠️ Найдены следующие обновы:${C_RESET}"; echo "$updates"; echo ""
     get_confirmation "   Ставим?" confirm_update n
     if [[ "$confirm_update" != "y" ]]; then echo "Твоё дело. Но помни, дырявая система — подарок для врага."; return; fi
-    echo -e "${C_CYAN}🚀 Погнали обновляться...${C_RESET}"; log "-> Запуск обновления системы."
+    show_wait_message; echo -e "${C_CYAN}🚀 Погнали обновляться...${C_RESET}"; log "-> Запуск обновления системы."
     sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; log "-> Обновление системы завершено."
     echo -e "${C_GREEN}✅ Система обновлена.${C_RESET}"
 }
@@ -190,22 +190,42 @@ ufw_menu() {
     while true; do
         clear; echo "--- 🛡️ УПРАВЛЕНИЕ ФАЕРВОЛОМ (UFW) ---"; local ufw_status; ufw_status=$(sudo ufw status | head -n 1 | sed 's/Status: //'); if [[ "$ufw_status" == "inactive" ]]; then ufw_status="${C_RED}ОТКЛЮЧЁН${C_RESET}"; else ufw_status="${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi
         echo -e "Статус: $ufw_status"; echo "---------------------------------------"
-        echo "   1. Посмотреть текущие правила"; echo "   2. Включить фаервол (с правилом для SSH)"; echo "   3. Отключить фаервол"; echo "   4. Добавить базовые правила для Панели/Ноды"
+        echo "   1. Посмотреть текущие правила"; echo "   2. Включить фаервол (с правилом для SSH)"; echo "   3. Отключить фаервол"; echo "   4. Добавить новое правило (мастер)"; echo "   5. Удалить правило по номеру"
         echo "   b. Назад"; read -r -p "Твой выбор: " choice
         case $choice in
-            1) echo "--- ТЕКУЩИЕ ПРАВИЛА ---"; sudo ufw status verbose; wait_for_enter;;
+            1) echo "--- ТЕКУЩИЕ ПРАВИЛА ---"; sudo ufw status numbered; wait_for_enter;;
             2) show_wait_message; echo "Включаю..."; sudo ufw allow ssh >/dev/null; sudo ufw --force enable >/dev/null; log "-> UFW включен."; echo "✅ Фаервол активен, SSH-порт открыт."; sleep 2;;
             3) show_wait_message; echo "Отключаю..."; sudo ufw --force disable >/dev/null; log "-> UFW отключен."; echo "✅ Фаервол деактивирован."; sleep 2;;
-            4)
-                show_wait_message;
-                if [[ "$SERVER_TYPE" == "Панель" ]]; then
-                    echo "Добавляю правила для Панели (80, 443, 3000, 3001, 3002, 8080)..."; sudo ufw allow 80/tcp; sudo ufw allow 443/tcp; sudo ufw allow 3000/tcp; sudo ufw allow 3001/tcp; sudo ufw allow 3002/tcp; sudo ufw allow 8080/tcp; log "-> Открыты порты для Панели."
-                elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-                    echo "Добавляю правила для Ноды (2222, 443)..."; sudo ufw allow 2222/tcp; sudo ufw allow 443/tcp; log "-> Открыты порты 2222, 443 для Ноды."
-                else echo "Не могу определить тип сервера. Сначала разверни софт."; fi; wait_for_enter;;
+            4) add_ufw_rule;;
+            5) delete_ufw_rule;;
             [bB]) break;; *) echo "Не тупи."; sleep 2;;
         esac
     done
+}
+add_ufw_rule() {
+    echo "--- МАСТЕР ДОБАВЛЕНИЯ ПРАВИЛ UFW ---"
+    read -p "Действие (allow/deny) [allow]: " action; action=${action:-allow}
+    read -p "Порт (например, 443): " port
+    read -p "Протокол (tcp/udp/any) [any]: " proto; proto=${proto:-any}
+    read -p "Источник IP ('any' или конкретный IP) [any]: " from_ip; from_ip=${from_ip:-any}
+    read -p "Комментарий (имя правила, на английском): " comment
+    if [ -z "$port" ]; then echo "${C_RED}Порт не может быть пустым.${C_RESET}"; sleep 2; return; fi
+    local rule="sudo ufw $action from $from_ip to any port $port"; if [[ "$proto" != "any" ]]; then rule="$rule proto $proto"; fi
+    if [ -n "$comment" ]; then rule="$rule comment '$comment'"; fi
+    echo -e "Выполняю: ${C_YELLOW}$rule${C_RESET}"; eval "$rule"; log "-> Добавлено правило UFW: $rule"
+    echo -e "${C_GREEN}✅ Правило добавлено.${C_RESET}"; wait_for_enter
+}
+delete_ufw_rule() {
+    echo "--- УДАЛЕНИЕ ПРАВИЛА UFW ---"; sudo ufw status numbered
+    read -p "Введи номер правила для удаления (или 'q' для отмены): " rule_num
+    if [[ "$rule_num" =~ ^[0-9]+$ ]]; then
+        local confirm_delete; get_confirmation "   Точно сносим правило номер $rule_num?" confirm_delete n
+        if [[ "$confirm_delete" == "y" ]]; then
+            show_wait_message; sudo ufw --force delete "$rule_num"; log "-> Удалено правило UFW #$rule_num"
+            echo -e "${C_GREEN}✅ Правило снесено.${C_RESET}"
+        else echo "Отмена."; fi
+    elif [[ "$rule_num" != "q" ]]; then echo "${C_RED}Это не номер.${C_RESET}"; fi
+    wait_for_enter
 }
 fail2ban_menu() {
     while true; do
@@ -221,6 +241,22 @@ fail2ban_menu() {
         esac
     done
 }
+view_logs_realtime() {
+    local log_path="$1"; local log_name="$2"; if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0
+}
+view_docker_logs() {
+    local service_path="$1"; local service_name="$2"; if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня. Не могу найти docker-compose.yml.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (cd "$(dirname "$service_path")" && sudo docker compose logs -f) || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0
+}
+uninstall_script() {
+    local confirm_uninstall; get_confirmation "${C_RED}Точно хочешь выгнать Решалу? Это снесёт скрипт, конфиги и алиасы." confirm_uninstall n
+    if [[ "$confirm_uninstall" != "y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi
+    echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then sudo rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then sudo sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then sudo rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
+}
+
+# --- МЕНЮ ---
+network_tuning_menu() {
+    while true; do clear; echo "--- 🚀 СЕТЕВОЙ ТЮНИНГ ---"; echo "--------------------------"; echo "   1. Управление «Форсажем» (BBR+CAKE)"; echo "   2. Управление IPv6"; echo "   b. Назад"; read -r -p "Твой выбор: " choice; case $choice in 1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; [bB]) break;; *) echo "Не тупи."; sleep 2;; esac; done
+}
 maintenance_security_menu() {
     while true; do
         clear; echo "--- 🛠️ ОБСЛУЖИВАНИЕ И БЕЗОПАСНОСТЬ ---"; echo "---------------------------------------"
@@ -230,9 +266,6 @@ maintenance_security_menu() {
             1) ufw_menu;; 2) fail2ban_menu;; 3) sync_time; wait_for_enter;; 4) update_system; wait_for_enter;; [bB]) break;; *) echo "Не тупи."; sleep 2;;
         esac
     done
-}
-ipv6_menu() {
-    while true; do clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; echo -e "Статус IPv6: $(check_ipv6_status)"; echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад в главное меню"; read -r -p "Твой выбор: " choice; case $choice in 1) disable_ipv6; wait_for_enter;; 2) enable_ipv6; wait_for_enter;; [bB]) break;; *) echo "1, 2 или 'b'. Не тупи."; sleep 2;; esac; done
 }
 diagnostics_menu() {
     while true; do
@@ -249,17 +282,6 @@ diagnostics_menu() {
         esac
     done
 }
-view_logs_realtime() {
-    local log_path="$1"; local log_name="$2"; if [ ! -f "$log_path" ]; then echo -e "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (sudo tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0
-}
-view_docker_logs() {
-    local service_path="$1"; local service_name="$2"; if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then echo -e "❌ ${C_RED}Путь — хуйня. Не могу найти docker-compose.yml.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "echo -e '\n${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (cd "$(dirname "$service_path")" && sudo docker compose logs -f) || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0
-}
-uninstall_script() {
-    echo -e "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm; if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi; echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then sudo rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then sudo sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then sudo rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; echo -e "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0
-}
-
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
 display_header() {
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info)
     clear; local max_label_width=11
