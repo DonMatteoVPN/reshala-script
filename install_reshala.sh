@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.0 - STABLE AS FUCK         ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.1 - ORDER AND LAW          ==
 # ============================================================ #
-# ==    Финальная версия с асинхронной проверкой обнов,     ==
-# ==    исправленными багами и улучшенным UX.               ==
+# ==    Финальная версия с исправленной структурой вызовов.   ==
+# ==    Больше никаких 'command not found'.                   ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v1.0"
+readonly VERSION="v1.1"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -22,6 +22,10 @@ C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33
 # Глобальные переменные
 SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
 UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
+
+# ============================================================ #
+# ==      ВСЕ ФУНКЦИИ ОБЪЯВЛЕНЫ ЗДЕСЬ (ДО ГЛАВНОГО МОЗГА)    ==
+# ============================================================ #
 
 # --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | sudo tee -a "$LOGFILE"; }
@@ -53,30 +57,30 @@ get_confirmation() {
     done
 }
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
-get_docker_version() {
-    local container_name="$1"; local version=""
-    version=$(sudo docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null); if [ -n "$version" ]; then echo "$version"; return; fi
-    version=$(sudo docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2); if [ -n "$version" ]; then echo "$version"; return; fi
-    if sudo docker exec "$container_name" test -f /app/package.json 2>/dev/null; then version=$(sudo docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null); if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi; fi
-    if sudo docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then version=$(sudo docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r'); if [ -n "$version" ]; then echo "$version"; return; fi; fi
-    local image_tag; image_tag=$(sudo docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then echo "$image_tag"; return; fi
-    local image_id; image_id=$(sudo docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); echo "latest (образ: ${image_id:0:7})"
+# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
+install_script() {
+    if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}❌ Эту команду — только с 'sudo'.${C_RESET}"; exit 1; fi
+    echo -e "${C_CYAN}🚀 Интегрирую Решалу ${VERSION} в систему...${C_RESET}"
+    local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
+    if ! wget -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then
+        echo -e "${C_RED}❌ Не могу скачать последнюю версию. Проверь интернет или ссылку.${C_RESET}"; exit 1;
+    fi
+    sudo cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
+    rm "$TEMP_SCRIPT"
+    if ! grep -q "alias reshala='sudo reshala'" /root/.bashrc 2>/dev/null; then
+        echo "alias reshala='sudo reshala'" | sudo tee -a /root/.bashrc >/dev/null
+    fi
+    echo -e "\n${C_GREEN}✅ Готово. Решала в системе.${C_RESET}\n"
+    if [[ $(id -u) -eq 0 ]]; then
+        echo -e "   ${C_BOLD}Команда запуска:${C_RESET} ${C_YELLOW}reshala${C_RESET}"
+    else
+        echo -e "   ${C_BOLD}Команда запуска:${C_RESET} ${C_YELLOW}sudo reshala${C_RESET}"
+    fi
+    echo -e "   ${C_RED}⚠️ ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала.${C_RESET}"
+    if [[ "${1:-}" != "update" ]]; then
+        echo -e "   Установочный файл ('$0') можешь сносить."
+    fi
 }
-scan_server_state() {
-    SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"
-    local panel_node_container=""; if sudo docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then SERVER_TYPE="Панель"; panel_node_container="remnawave"; elif sudo docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then SERVER_TYPE="Нода"; panel_node_container="remnanode"; fi
-    if [ -n "$panel_node_container" ]; then local compose_path; compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_node_container" 2>/dev/null); if [ -n "$compose_path" ]; then PANEL_NODE_PATH=$(readlink -f "$compose_path"); fi; PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container"); fi
-    local bot_container_name="remnawave_bot"; if sudo docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then BOT_DETECTED=1; local bot_compose_path; bot_compose_path=$(sudo docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true); if [ -n "$bot_compose_path" ]; then BOT_PATH=$(dirname "$(readlink -f "$bot_compose_path")"); if [ -f "$BOT_PATH/VERSION" ]; then BOT_VERSION=$(cat "$BOT_PATH/VERSION"); else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; fi
-    if sudo docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then local nginx_version; nginx_version=$(sudo docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (в Docker)"; elif sudo docker ps --format '{{.Names}}' | grep -q "caddy"; then local caddy_version; caddy_version=$(sudo docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown"); WEB_SERVER="Caddy $caddy_version (в Docker)"; elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then if command -v nginx &> /dev/null; then local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (на хосте)"; else WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p'); fi; fi
-}
-
-# --- ФУНКЦИИ ДЛЯ СБОРА ИНФОРМАЦИИ О СЕРВЕРЕ ---
-get_cpu_info() { lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//'; }
-get_cpu_load() { local cores; cores=$(nproc); local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1); echo "$load / $cores ядер"; }
-get_ram_info() { free -m | grep Mem | awk '{printf "%.1f/%.1f GB", $3/1024, $2/1024}'; }
-get_disk_info() { local root_device; root_device=$(df / | awk 'NR==2 {print $1}'); local main_disk; main_disk=$(lsblk -no pkname "$root_device" 2>/dev/null || basename "$root_device" | sed 's/[0-9]*$//'); local disk_type="HDD"; if [ -f "/sys/block/$main_disk/queue/rotational" ]; then if [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then disk_type="SSD"; fi; elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi; local usage; usage=$(df -h / | awk 'NR==2 {print $3 "/" $2}'); echo "$disk_type ($usage)"; }
-get_hoster_info() { curl -s --connect-timeout 5 ipinfo.io/org || echo "Не определён"; }
 
 # --- МОДУЛЬ ОБНОВЛЕНИЯ ---
 check_for_updates_background() {
@@ -124,7 +128,7 @@ run_update() {
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛИ СКРИПТА (ВСЕ ФУНКЦИИ ОБЪЯВЛЕНЫ ДО МЕНЮ) ---
+# --- МОДУЛИ СКРИПТА ---
 apply_ulimit_tuning() {
     local ulimit_val=65535; local sysctl_file="/etc/sysctl.d/99-reshala-ulimit.conf"
     log "⚙️ Применяю тюнинг ulimit и TCP-параметров."
@@ -162,6 +166,7 @@ net.ipv4.tcp_wmem = 4096 65536 16777216" | sudo tee "$CONFIG_SYSCTL" > /dev/null
     log "🔥 Применяю настройки..."; sudo sysctl -p "$CONFIG_SYSCTL" >/dev/null
     echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"; echo -e "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}"; apply_ulimit_tuning
 }
+check_ipv6_status() { if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo -e "${C_RED}КАСТРИРОВАН${C_RESET}"; else echo -e "${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; }
 disable_ipv6() { show_wait_message; if [ ! -d "/proc/sys/net/ipv6" ]; then echo -e "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi; if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi; echo "🔪 Кастрирую IPv6... Это не больно. Почти."; sudo tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
 # === КОНФИГ ОТ РЕШАЛЫ: IPv6 ОТКЛЮЧЁН ===
 net.ipv6.conf.all.disable_ipv6 = 1
