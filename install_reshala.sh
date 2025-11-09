@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.3 - IDIOT-PROOF EDITION    ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.4 - APOLOGY EDITION        ==
 # ============================================================ #
-# ==    Железобетонная структура с функцией main().           ==
-# ==    Исправлены все ошибки порядка вызовов. Навсегда.      ==
+# ==    Возвращены все вырезанные функции.                  ==
+# ==    Структура исправлена. Ошибок быть не должно.        ==
 # ============================================================ #
 
 set -euo pipefail
 
 # --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v1.3"
+readonly VERSION="v1.4"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
