@@ -1,28 +1,34 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.0 - RELEASE VERSION     ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.1 - INTERACTIVE         ==
 # ============================================================ #
-# ==    Полностью исправлено и стандартизировано форматирование. ==
+# ==    Интерактивное управление nano, очистка, рефакторинг. ==
 # ============================================================ #
 
 set -euo pipefail
 
-# --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
-readonly VERSION="v1.0"
+# ============================================================ #
+#                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
+# ============================================================ #
+readonly VERSION="v1.1"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
 INSTALL_PATH="/usr/local/bin/reshala"
 
-# Цвета (стандартные, работают везде)
-C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BOLD='\033[1m'; C_GRAY='\033[0;90m';
+# --- Цвета ---
+C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m';
+C_CYAN='\033[0;36m'; C_BOLD='\033[1m'; C_GRAY='\033[0;90m';
 
-# Глобальные переменные
-SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён";
-UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
+# --- Глобальные переменные ---
+SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0;
+BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"; UPDATE_AVAILABLE=0;
+LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 
-# --- УТИЛИТАРНЫЕ ФУНКЦИИ ---
+# ============================================================ #
+#                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
+# ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE"; }
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
@@ -30,7 +36,9 @@ save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^
 load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
 get_net_status() { local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "n/a"); local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "n/a"); if [ -z "$qdisc" ] || [ "$qdisc" = "pfifo_fast" ]; then qdisc=$(tc qdisc show 2>/dev/null | grep -Eo 'cake|fq' | head -n 1) || qdisc="n/a"; fi; echo "$cc|$qdisc"; }
 
-# --- ФУНКЦИЯ УСТАНОВКИ / ОБНОВЛЕНИЯ ---
+# ============================================================ #
+#                 УСТАНОВКА И ОБНОВЛЕНИЕ СКРИПТА               #
+# ============================================================ #
 install_script() {
     if [[ $EUID -ne 0 ]]; then printf "%b\n" "${C_RED}❌ Эту команду — только с 'sudo'.${C_RESET}"; exit 1; fi
     printf "%b\n" "${C_CYAN}🚀 Интегрирую Решалу ${VERSION} в систему...${C_RESET}"; local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp)
@@ -40,8 +48,6 @@ install_script() {
     printf "\n%b\n\n" "${C_GREEN}✅ Готово. Решала в системе.${C_RESET}"; if [[ $(id -u) -eq 0 ]]; then printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}reshala${C_RESET}"; else printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"; fi
     printf "   %b\n" "${C_RED}⚠️ ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала.${C_RESET}"; if [[ "${1:-}" != "update" ]]; then printf "   %s\n" "Установочный файл ('$0') можешь сносить."; fi
 }
-
-# --- МОДУЛЬ ОБНОВЛЕНИЯ ---
 check_for_updates() {
     UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"; local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0; local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"; log "Начинаю проверку обновлений по URL: $url_with_buster"
     while [ $attempt -le $max_attempts ]; do
@@ -65,18 +71,20 @@ run_update() {
     echo "   Ставлю на место старого..."; run_cmd cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && run_cmd chmod +x "$INSTALL_PATH"; rm "$TEMP_SCRIPT"; printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
-# --- МОДУЛЬ АВТООПРЕДЕЛЕНИЯ ---
+# ============================================================ #
+#                 СБОР ИНФОРМАЦИИ О СИСТЕМЕ                    #
+# ============================================================ #
 get_docker_version() { local container_name="$1"; local version=""; version=$(run_cmd docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null); if [ -n "$version" ]; then echo "$version"; return; fi; version=$(run_cmd docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2); if [ -n "$version" ]; then echo "$version"; return; fi; if run_cmd docker exec "$container_name" test -f /app/package.json 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null); if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi; fi; if run_cmd docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r'); if [ -n "$version" ]; then echo "$version"; return; fi; fi; local image_tag; image_tag=$(run_cmd docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then echo "$image_tag"; return; fi; local image_id; image_id=$(run_cmd docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); echo "latest (образ: ${image_id:0:7})"; }
 scan_server_state() { SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"; local panel_node_container=""; if run_cmd docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then SERVER_TYPE="Панель"; panel_node_container="remnawave"; elif run_cmd docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then SERVER_TYPE="Нода"; panel_node_container="remnanode"; fi; if [ -n "$panel_node_container" ]; then PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_node_container" 2>/dev/null); PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container"); fi; local bot_container_name="remnawave_bot"; if run_cmd docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then BOT_DETECTED=1; local bot_compose_path; bot_compose_path=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true); if [ -n "$bot_compose_path" ]; then BOT_PATH=$(dirname "$bot_compose_path"); if [ -f "$BOT_PATH/VERSION" ]; then BOT_VERSION=$(cat "$BOT_PATH/VERSION"); else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; fi; if run_cmd docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then local nginx_version; nginx_version=$(run_cmd docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (в Docker)"; elif run_cmd docker ps --format '{{.Names}}' | grep -q "caddy"; then local caddy_version; caddy_version=$(run_cmd docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown"); WEB_SERVER="Caddy $caddy_version (в Docker)"; elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then if command -v nginx &> /dev/null; then local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (на хосте)"; else WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p'); fi; fi; }
-
-# --- ФУНКЦИИ ДЛЯ СБОРА ИНФОРМАЦИИ О СЕРВЕРЕ ---
 get_cpu_info() { local model; model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//'); echo "$model"; }
 get_cpu_load() { local cores; cores=$(nproc); local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1); echo "$load / $cores ядер"; }
 get_ram_info() { free -m | grep Mem | awk '{printf "%.1f/%.1f GB", $3/1024, $2/1024}'; }
 get_disk_info() { local root_device; root_device=$(df / | awk 'NR==2 {print $1}'); local main_disk; main_disk=$(lsblk -no pkname "$root_device" 2>/dev/null || basename "$root_device" | sed 's/[0-9]*$//'); local disk_type="HDD"; if [ -f "/sys/block/$main_disk/queue/rotational" ]; then if [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then disk_type="SSD"; fi; elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi; local usage; usage=$(df -h / | awk 'NR==2 {print $3 "/" $2}'); echo "$disk_type ($usage)"; }
 get_hoster_info() { curl -s --connect-timeout 5 ipinfo.io/org || echo "Не определён"; }
 
-# --- ОСНОВНЫЕ МОДУЛИ СКРИПТА ---
+# ============================================================ #
+#                       ОСНОВНЫЕ МОДУЛИ                        #
+# ============================================================ #
 apply_bbr() { log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."; local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2); local cake_available; cake_available=$(modprobe sch_cake &>/dev/null && echo "true" || echo "false"); echo "--- ДИАГНОСТИКА ТВОЕГО ДВИГАТЕЛЯ ---"; echo "Алгоритм: $current_cc"; echo "Планировщик: $current_qdisc"; echo "------------------------------------"; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "cake" ]]; then printf "%b\n" "${C_GREEN}✅ Ты уже на максимальном форсаже (BBR+CAKE). Не мешай машине работать.${C_RESET}"; log "Проверка «Форсаж»: Максимум."; return; fi; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "fq" && "$cake_available" == "true" ]]; then printf "%b\n" "${C_YELLOW}⚠️ У тебя неплохо (BBR+FQ), но можно лучше. CAKE доступен.${C_RESET}"; read -p "   Хочешь проапгрейдиться до CAKE? Это топчик. (y/n): " upgrade_confirm; if [[ "$upgrade_confirm" != "y" && "$upgrade_confirm" != "Y" ]]; then echo "Как скажешь. Остаёмся на FQ."; return; fi; echo "Красава. Делаем как надо."; elif [[ "$current_cc" != "bbr" && "$current_cc" != "bbr2" ]]; then echo "Хм, ездишь на стоке. Пора залить ракетное топливо."; fi; local available_cc; available_cc=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | awk -F'= ' '{print $2}'); local preferred_cc="bbr"; if [[ "$available_cc" == *"bbr2"* ]]; then preferred_cc="bbr2"; fi; local preferred_qdisc="fq"; if [[ "$cake_available" == "true" ]]; then preferred_qdisc="cake"; else log "⚠️ 'cake' не найден, ставлю 'fq'."; modprobe sch_fq &>/dev/null; fi; local tcp_fastopen_val=0; [[ $(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo 0) -ge 1 ]] && tcp_fastopen_val=3; local CONFIG_SYSCTL="/etc/sysctl.d/99-reshala-boost.conf"; log "🧹 Чищу старое говно..."; run_cmd rm -f /etc/sysctl.d/*bbr*.conf /etc/sysctl.d/*network-optimizations*.conf; if [ -f /etc/sysctl.conf.bak ]; then run_cmd rm /etc/sysctl.conf.bak; fi; run_cmd sed -i.bak -E 's/^[[:space:]]*(net.core.default_qdisc|net.ipv4.tcp_congestion_control)/#&/' /etc/sysctl.conf; log "✍️  Устанавливаю новые, пиздатые настройки..."; echo "# === КОНФИГ «ФОРСАЖ» ОТ РЕШАЛЫ — НЕ ТРОГАТЬ ===
 net.ipv4.tcp_congestion_control = $preferred_cc
 net.core.default_qdisc = $preferred_qdisc
@@ -103,14 +111,68 @@ view_logs_realtime() { local log_path="$1"; local log_name="$2"; if [ ! -f "$log
 view_docker_logs() { local service_path="$1"; local service_name="$2"; if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then printf "%b\n" "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (cd "$(dirname "$service_path")" && run_cmd docker compose logs -f) || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0; }
 uninstall_script() { printf "%b\n" "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm; if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi; echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then run_cmd rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then run_cmd sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then run_cmd rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; printf "%b\n" "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0; }
 
-# --- МОДУЛЬ БЕЗОПАСНОСТИ ---
+# ============================================================ #
+#                       МОДУЛЬ БЕЗОПАСНОСТИ                      #
+# ============================================================ #
+_ensure_nano_installed() {
+    if ! command -v nano &> /dev/null; then
+        printf "%b\n" "${C_YELLOW}Редактор 'nano' не найден. Устанавливаю...${C_RESET}"
+        if [ -f /etc/debian_version ]; then
+            run_cmd apt-get update >/dev/null
+            run_cmd apt-get install -y nano
+        elif [ -f /etc/redhat-release ]; then
+            run_cmd yum install -y nano
+        else
+            printf "%b\n" "${C_RED}Не могу автоматически установить 'nano' для твоей ОС. Установи вручную и попробуй снова.${C_RESET}"
+            return 1
+        fi
+    fi
+    return 0
+}
 ssh_key_manager() {
-    clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ ДОБАВЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль поможет тебе закинуть твой SSH-ключ на все твои серверы."; printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Подготовь публичный ключ ]${C_RESET}"; printf "%b\n" "Эти команды нужно выполнять на ${C_YELLOW}ТВОЁМ ЛИЧНОМ КОМПЬЮТЕРЕ${C_RESET}, а не на этом сервере."; printf "\n%b\n" "${C_CYAN}--- Для Windows ---${C_RESET}"; printf "%s\n" "1. Открой 'Командную строку' (cmd) или 'PowerShell'."; printf "%s\n" "2. Если ключ не создан, выполни команду (просто нажимай Enter на все вопросы):"; printf "   %b\n" "${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Чтобы посмотреть и скопировать твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ, выполни:"; printf "   %b\n" "${C_GREEN}type %USERPROFILE%\\.ssh\\id_ed25519.pub${C_RESET}"; printf "%s\n" "   (Если команда выдаёт ошибку, значит ключ не найден. Вернись к пункту 2)."; printf "\n%b\n" "${C_CYAN}--- Для Linux или macOS ---${C_RESET}"; printf "%s\n" "1. Открой терминал."; printf "%b\n" "2. Если ключ не создан, выполни: ${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Посмотри и скопируй твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ: ${C_GREEN}cat ~/.ssh/id_ed25519.pub${C_RESET}"; printf "\n%s\n" "Скопируй всю строку, которая начинается с 'ssh-ed25519...'."; read -p $'\nТы скопировал свой ПУБЛИЧНЫЙ ключ и готов продолжить? (y/n): ' confirm_key; if [[ "$confirm_key" != "y" && "$confirm_key" != "Y" ]]; then printf "%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return; fi; printf "\n%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY; if ! [[ "$PUBKEY" =~ ^ssh-(rsa|dss|ed25519|ecdsa) ]]; then printf "%b\n" "${C_RED}❌ Это не похоже на SSH-ключ. Давай по новой.${C_RESET}"; wait_for_enter; return; fi; local SERVERS_FILE="servers.txt"; printf "\n%b\n" "${C_BOLD}[ ШАГ 3: Подготовь список серверов ]${C_RESET}"; printf "%s\n" "Теперь на этом сервере, в текущей директории, создай файл с именем ${C_YELLOW}${SERVERS_FILE}${C_RESET}"; printf "%b\n" "Внутри файла укажи каждый сервер на новой строке в формате ${C_GREEN}пользователь@адрес${C_RESET}."; printf "%s\n" "Пример: root@1.2.3.4 или admin@mydomain.com"; read -p $'\nТы создал файл servers.txt и готов к установке? (y/n): ' confirm_servers; if [[ "$confirm_servers" != "y" && "$confirm_servers" != "Y" ]]; then printf "%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return; fi; if [ ! -f "$SERVERS_FILE" ]; then printf "%b\n" "${C_RED}❌ Файл '${SERVERS_FILE}' не найден. Убедись, что он в той же папке, откуда запущен Решала.${C_RESET}"; wait_for_enter; return; fi; printf "\n%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; printf "%b\n" "${C_YELLOW}Тебе нужно будет ввести пароль для каждого сервера.${C_RESET}"; wait_for_enter; if command -v ssh-copy-id &> /dev/null; then
-        echo "Использую 'ssh-copy-id' (безопасный метод)..."; local TEMP_KEY_FILE; TEMP_KEY_FILE=$(mktemp); echo "$PUBKEY" > "$TEMP_KEY_FILE"
-        while IFS= read -r host || [[ -n "$host" ]]; do if [[ -z "$host" ]] || [[ "$host" =~ ^# ]]; then continue; fi; printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"; if ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; else printf "    %b\n" "${C_RED}❌ Ошибка. Проверь пароль или доступность хоста.${C_RESET}"; fi; done < "$SERVERS_FILE"; rm "$TEMP_KEY_FILE"
+    clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ ДОБАВЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль поможет тебе закинуть твой SSH-ключ на все твои серверы.";
+    
+    # --- ШАГ 1: Инструкции ---
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Подготовь публичный ключ ]${C_RESET}"; printf "%b\n" "Эти команды нужно выполнять на ${C_YELLOW}ТВОЁМ ЛИЧНОМ КОМПЬЮТЕРЕ${C_RESET}, а не на этом сервере."; printf "\n%b\n" "${C_CYAN}--- Для Windows ---${C_RESET}"; printf "%s\n" "1. Открой 'Командную строку' (cmd) или 'PowerShell'."; printf "%s\n" "2. Если ключ не создан, выполни команду (просто нажимай Enter на все вопросы):"; printf "   %b\n" "${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Чтобы посмотреть и скопировать твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ, выполни:"; printf "   %b\n" "${C_GREEN}type %USERPROFILE%\\.ssh\\id_ed25519.pub${C_RESET}"; printf "%s\n" "   (Если команда выдаёт ошибку, значит ключ не найден. Вернись к пункту 2)."; printf "\n%b\n" "${C_CYAN}--- Для Linux или macOS ---${C_RESET}"; printf "%s\n" "1. Открой терминал."; printf "%b\n" "2. Если ключ не создан, выполни: ${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Посмотри и скопируй твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ: ${C_GREEN}cat ~/.ssh/id_ed25519.pub${C_RESET}"; printf "\n%s\n" "Скопируй всю строку, которая начинается с 'ssh-ed25519...'.";
+    
+    # --- ШАГ 2: Получение ключа ---
+    read -p $'\nТы скопировал свой ПУБЛИЧНЫЙ ключ и готов продолжить? (y/n): ' confirm_key; if [[ "$confirm_key" != "y" && "$confirm_key" != "Y" ]]; then printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return; fi; printf "\n%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY; if ! [[ "$PUBKEY" =~ ^ssh-(rsa|dss|ed25519|ecdsa) ]]; then printf "\n%b\n" "${C_RED}❌ Это не похоже на SSH-ключ. Давай по новой.${C_RESET}"; return; fi;
+    
+    # --- ШАГ 3: Управление списком серверов ---
+    local SERVERS_FILE_PATH; SERVERS_FILE_PATH="$(pwd)/servers.txt"
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 3: Управление списком серверов ]${C_RESET}"
+    if [ -f "$SERVERS_FILE_PATH" ]; then
+        printf "%b\n" "Найден существующий файл со списком серверов: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
+        read -p "Что делаем? (1 - Редактировать, 2 - Продолжить с текущим, любая другая клавиша - Отмена): " choice
+        case $choice in
+            1) _ensure_nano_installed && nano "$SERVERS_FILE_PATH" || return ;;
+            2) printf "%b\n" "Продолжаю с текущим списком..." ;;
+            *) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; return ;;
+        esac
     else
-        echo "ВНИМАНИЕ: 'ssh-copy-id' не найден. Использую ручной метод (менее надёжный)."; while IFS= read -r host || [[ -n "$host" ]]; do if [[ -z "$host" ]] || [[ "$host" =~ ^# ]]; then continue; fi; printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"; local ssh_command="mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && grep -q -F '$PUBKEY' ~/.ssh/authorized_keys || echo '$PUBKEY' >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"; if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$ssh_command"; then printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; else printf "    %b\n" "${C_RED}❌ Ошибка. Проверь пароль или доступность хоста.${C_RESET}"; fi; done < "$SERVERS_FILE"
-    fi; printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}";
+        printf "%b\n" "Файл со списком серверов не найден. Давай создадим его."
+        read -p "Нажми Enter, чтобы открыть редактор 'nano' для добавления серверов..."
+        _ensure_nano_installed && nano "$SERVERS_FILE_PATH" || return
+        printf "%b\n" "Файл сохранён здесь: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
+    fi
+    if [ ! -s "$SERVERS_FILE_PATH" ]; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст. Операция прервана.${C_RESET}"; return; fi
+
+    # --- ШАГ 4: Установка ключей ---
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; printf "%b\n" "${C_YELLOW}Тебе нужно будет ввести пароль для каждого сервера.${C_RESET}"; wait_for_enter;
+    if command -v ssh-copy-id &> /dev/null; then
+        echo "Использую 'ssh-copy-id' (безопасный метод)..."; local TEMP_KEY_FILE; TEMP_KEY_FILE=$(mktemp); echo "$PUBKEY" > "$TEMP_KEY_FILE"
+        while IFS= read -r host || [[ -n "$host" ]]; do if [[ -z "$host" ]] || [[ "$host" =~ ^# ]]; then continue; fi; printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"; if ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; else printf "    %b\n" "${C_RED}❌ Ошибка. Проверь пароль или доступность хоста.${C_RESET}"; fi; done < "$SERVERS_FILE_PATH"; rm "$TEMP_KEY_FILE"
+    else
+        echo "ВНИМАНИЕ: 'ssh-copy-id' не найден. Использую ручной метод (менее надёжный)."; while IFS= read -r host || [[ -n "$host" ]]; do if [[ -z "$host" ]] || [[ "$host" =~ ^# ]]; then continue; fi; printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"; local ssh_command="mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && grep -q -F '$PUBKEY' ~/.ssh/authorized_keys || echo '$PUBKEY' >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"; if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$ssh_command"; then printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; else printf "    %b\n" "${C_RED}❌ Ошибка. Проверь пароль или доступность хоста.${C_RESET}"; fi; done < "$SERVERS_FILE_PATH"
+    fi;
+    
+    # --- ШАГ 5: Очистка ---
+    printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
+    read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
+    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then
+        rm -f "$SERVERS_FILE_PATH"
+        printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"
+    fi
 }
 security_menu() {
     while true; do
@@ -119,7 +181,9 @@ security_menu() {
     done
 }
 
-# --- ИНФО-ПАНЕЛЬ И ГЛАВНОЕ МЕНЮ ---
+# ============================================================ #
+#                   ГЛАВНОЕ МЕНЮ И ИНФО-ПАНЕЛЬ                 #
+# ============================================================ #
 display_header() {
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info); clear; local max_label_width=11; printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"; if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi; if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi; if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"; printf "%b\n" "${C_CYAN}╚${C_RESET}";
 }
@@ -139,7 +203,9 @@ show_menu() {
     done
 }
 
-# --- ГЛАВНЫЙ МОЗГ ---
+# ============================================================ #
+#                       ТОЧКА ВХОДА В СКРИПТ                   #
+# ============================================================ #
 if [[ "${1:-}" == "install" ]]; then
     install_script "${2:-}"
 else
