@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.6 - CRITICAL FIX        ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.7 - UX & LOGS FIX       ==
 # ============================================================ #
-# ==    Исправлен вылет скрипта и утечка логов в консоль.     ==
+# ==    Улучшена валидация ввода и очищены логи от мусора.    ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.6"
+readonly VERSION="v1.7"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -51,7 +51,7 @@ install_script() {
 check_for_updates() {
     UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"; local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0; local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"; log "Начинаю проверку обновлений по URL: $url_with_buster"
     while [ $attempt -le $max_attempts ]; do
-        response_body=$(curl -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE")); curl_exit_code=$?
+        response_body=$(curl -s -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE")); curl_exit_code=$?
         if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
             LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
             if [ -n "$LATEST_VERSION" ]; then
@@ -185,7 +185,16 @@ ssh_key_manager() {
     
     printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Подготовь публичный ключ ]${C_RESET}"; printf "%b\n" "Эти команды нужно выполнять на ${C_YELLOW}ТВОЁМ ЛИЧНОМ КОМПЬЮТЕРЕ${C_RESET}, а не на этом сервере."; printf "\n%b\n" "${C_CYAN}--- Для Windows ---${C_RESET}"; printf "%s\n" "1. Открой 'Командную строку' (cmd) или 'PowerShell'."; printf "%s\n" "2. Если ключ не создан, выполни команду (просто нажимай Enter на все вопросы):"; printf "   %b\n" "${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Чтобы посмотреть и скопировать твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ, выполни:"; printf "   %b\n" "${C_GREEN}type %USERPROFILE%\\.ssh\\id_ed25519.pub${C_RESET}"; printf "%s\n" "   (Если команда выдаёт ошибку, значит ключ не найден. Вернись к пункту 2)."; printf "\n%b\n" "${C_CYAN}--- Для Linux или macOS ---${C_RESET}"; printf "%s\n" "1. Открой терминал."; printf "%b\n" "2. Если ключ не создан, выполни: ${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Посмотри и скопируй твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ: ${C_GREEN}cat ~/.ssh/id_ed25519.pub${C_RESET}"; printf "\n%s\n" "Скопируй всю строку, которая начинается с 'ssh-ed25519...'.";
     
-    read -p $'\nТы скопировал свой ПУБЛИЧНЫЙ ключ и готов продолжить? (y/n): ' confirm_key; if [[ "$confirm_key" != "y" && "$confirm_key" != "Y" ]]; then printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return; fi; printf "\n%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY; if ! [[ "$PUBKEY" =~ ^ssh-(rsa|dss|ed25519|ecdsa) ]]; then printf "\n%b\n" "${C_RED}❌ Это не похоже на SSH-ключ. Давай по новой.${C_RESET}"; return; fi;
+    while true; do
+        read -p $'\nТы скопировал свой ПУБЛИЧНЫЙ ключ и готов продолжить? (y/n): ' confirm_key
+        case "$confirm_key" in
+            [yY]) break ;;
+            [nN]) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return ;;
+            *) printf "\n%b\n" "${C_RED}Хуйню не вводи. Напиши 'y' (да) или 'n' (нет).${C_RESET}" ;;
+        esac
+    done
+    
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY; if ! [[ "$PUBKEY" =~ ^ssh-(rsa|dss|ed25519|ecdsa) ]]; then printf "\n%b\n" "${C_RED}❌ Это не похоже на SSH-ключ. Давай по новой.${C_RESET}"; return; fi;
     
     local SERVERS_FILE_PATH; SERVERS_FILE_PATH="$(pwd)/servers.txt"
     printf "\n%b\n" "${C_BOLD}[ ШАГ 3: Управление списком серверов ]${C_RESET}"
@@ -284,13 +293,17 @@ show_menu() {
 # ============================================================ #
 #                       ТОЧКА ВХОДА В СКРИПТ                   #
 # ============================================================ #
-if [[ "${1:-}" == "install" ]]; then
-    install_script "${2:-}"
-else
-    if [[ $EUID -ne 0 ]]; then 
-        if [ "$0" != "$INSTALL_PATH" ]; then printf "%b\n" "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}"; else printf "%b\n" "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"; fi
-        exit 1;
+main() {
+    if [[ "${1:-}" == "install" ]]; then
+        install_script "${2:-}"
+    else
+        if [[ $EUID -ne 0 ]]; then 
+            if [ "$0" != "$INSTALL_PATH" ]; then printf "%b\n" "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}"; else printf "%b\n" "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"; fi
+            exit 1;
+        fi
+        trap "rm -f /tmp/tmp.*" EXIT
+        show_menu
     fi
-    trap "rm -f /tmp/tmp.*" EXIT
-    show_menu
-fi
+}
+
+main "$@"
