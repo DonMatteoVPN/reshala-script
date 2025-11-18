@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.4 - LOCALHOST SUPPORT   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.5 - RELIABILITY PATCH   ==
 # ============================================================ #
-# ==    Добавлена поддержка localhost и улучшены шаблоны.     ==
+# ==    Исправлены ошибки SSH, отрисовки меню и валидации.    ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.4"
+readonly VERSION="v1.5"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -222,18 +222,16 @@ ssh_key_manager() {
 
         printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"
         
-        local ssh_copy_id_cmd="ssh-copy-id -i $TEMP_KEY_FILE -o ConnectTimeout=10 -o StrictHostKeyChecking=no '$host'"
-        
         if [ -n "$password" ]; then
             printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
-            if ! sshpass -p "$password" sh -c "$ssh_copy_id_cmd"; then
+            if ! SSHPASS="$password" sshpass -e ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Автоматический вход не удался. Проверь пароль в файле.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
             fi
         else
             printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
-            if ! sh -c "$ssh_copy_id_cmd"; then
+            if ! ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Проверь введённый пароль или доступность хоста.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
@@ -249,7 +247,11 @@ ssh_key_manager() {
 security_menu() {
     while true; do
         clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "Здесь собраны инструменты для укрепления твоего сервера."; echo "----------------------------------"; echo "   [1] Массовое добавление SSH-ключей 🔑"; echo "   [b] Назад в главное меню"; echo "----------------------------------"; read -r -p "Твой выбор: " choice
-        case $choice in 1) ssh_key_manager; wait_for_enter;; [bB]) break;; *) echo "Не та кнопка, босс."; sleep 2;; esac
+        case $choice in
+            1) ssh_key_manager; wait_for_enter;;
+            [bB]) break;;
+            *) printf "%b\n" "${C_RED}Не та кнопка, босс. Попробуй ещё раз.${C_RESET}"; sleep 2;;
+        esac
     done
 }
 
@@ -261,13 +263,16 @@ display_header() {
 }
 show_menu() {
     while true; do
-        scan_server_state; display_header; check_for_updates
-        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "\n%b\n" "${C_YELLOW}🔥 Новая версия на подходе: ${LATEST_VERSION}${C_RESET}"; elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"; fi
+        scan_server_state; display_header;
+        
         printf "\n%s\n\n" "Чё делать будем, босс?"; echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Форсажа»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
         printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(На начальной стадии)${C_RESET}"
-        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "   [u] %b\n" "${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; fi
+        
+        check_for_updates
+        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "   [u] %b\n" "${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"; fi
+        
         echo ""; printf "   [d] %b\n" "${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"; echo "------------------------------------------------------"; read -r -p "Твой выбор, босс: " choice
         case $choice in
             1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; 3) view_logs_realtime "$LOGFILE" "Форсажа";; 4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 6) security_menu;; [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; [dD]) uninstall_script;; [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; *) echo "Ты прикалываешься?"; sleep 2;;
@@ -285,6 +290,6 @@ else
         if [ "$0" != "$INSTALL_PATH" ]; then printf "%b\n" "${C_RED}❌ Запускать с 'sudo'.${C_RESET} Используй: ${C_YELLOW}sudo ./$0 install${C_RESET}"; else printf "%b\n" "${C_RED}❌ Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"; fi
         exit 1;
     fi
-    trap - INT TERM EXIT
+    trap "rm -f /tmp/tmp.*" EXIT
     show_menu
 fi
