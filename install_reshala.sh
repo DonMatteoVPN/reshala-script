@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.82 - SSH COPY FIX        ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.9 - FINAL SSH FIX       ==
 # ============================================================ #
-# ==    Исправлена критическая ошибка передачи ключа с sshpass. ==
+# ==    Исправлена логика работы с ssh-copy-id и temp-файлами. ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.82"
+readonly VERSION="v1.9"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -219,7 +219,7 @@ _ssh_add_keys() {
     if ! grep -q -E '[^[:space:]]' "$SERVERS_FILE_PATH" || ! grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH" | read -r; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст или содержит только комментарии. Операция прервана.${C_RESET}"; return; fi
 
     clear; printf "%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; _ensure_package_installed "sshpass" || return; wait_for_enter;
-    local TEMP_KEY_FILE; TEMP_KEY_FILE=$(mktemp); echo "$PUBKEY" > "$TEMP_KEY_FILE"
+    local TEMP_KEY_BASE; TEMP_KEY_BASE=$(mktemp); local TEMP_KEY_FILE="${TEMP_KEY_BASE}.pub"; echo "$PUBKEY" > "$TEMP_KEY_FILE"
     
     while read -r -a parts; do
         [[ -z "${parts[0]}" ]] || [[ "${parts[0]}" =~ ^# ]] && continue
@@ -241,7 +241,7 @@ _ssh_add_keys() {
         
         if [ -n "$password" ]; then
             printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
-            if ! sshpass -p "$password" ssh-copy-id -i "$TEMP_KEY_FILE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
+            if ! sshpass -p "$password" ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Автоматический вход не удался. Проверь пароль в файле.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
@@ -249,7 +249,7 @@ _ssh_add_keys() {
             fi
         else
             printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
-            if ! ssh-copy-id -i "$TEMP_KEY_FILE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
+            if ! ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Проверь введённый пароль или доступность хоста.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
@@ -257,7 +257,7 @@ _ssh_add_keys() {
             fi
         fi
     done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
-    rm "$TEMP_KEY_FILE"
+    rm -f "$TEMP_KEY_BASE" "$TEMP_KEY_FILE"
     
     printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
     read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
