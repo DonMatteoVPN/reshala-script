@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.2 - AUTOMATION          ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.4 - LOCALHOST SUPPORT   ==
 # ============================================================ #
-# ==    Добавлена поддержка паролей и автосоздание конфига.   ==
+# ==    Добавлена поддержка localhost и улучшены шаблоны.     ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.2"
+readonly VERSION="v1.4"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -132,34 +132,61 @@ _ensure_package_installed() {
 }
 _create_servers_file_template() {
     local file_path="$1"
-    cat > "$file_path" << EOL
+    cat << 'EOL' > "$file_path"
 # --- СПИСОК СЕРВЕРОВ ДЛЯ ДОБАВЛЕНИЯ SSH-КЛЮЧА ---
 #
-# Формат: пользователь@адрес [пароль]
+# --- ПРИМЕРЫ ---
 #
-# 1. Без пароля (будет запрошен вручную):
-# root@1.2.3.4
+# 1. Простой IP, без пароля (запросит вручную)
+# root@11.22.33.44
 #
-# 2. С паролем (вход произойдет автоматически):
-# admin@mydomain.com MySecurePa\\$\\$w0rd
+# 2. Сервер с простым паролем (авто-вход)
+# user@myserver.com MyPassword123
 #
-# ВАЖНО: Если в пароле есть спецсимволы ($, !, & и т.д.),
-# экранируй их обратным слэшем (\\) или возьми пароль в одинарные кавычки.
+# 3. Пароль со спецсимволом '$' (нужно экранирование)
+# user@problem.server MyPa\$\$wordWithDollar
 #
-# Добавь свои серверы ниже:
+# 4. Пароль с пробелами и спецсимволами (лучше в кавычках)
+# user@super.server 'My Crazy Password !@# %'
+#
+# --- ДОБАВЛЕНИЕ КЛЮЧА НА ТЕКУЩИЙ СЕРВЕР ---
+#
+# Чтобы добавить ключ на этот же сервер, где запущен "Решала",
+# используй специальный адрес 'localhost'. Пароль не нужен.
+# root@localhost
+#
+# ВНИМАНИЕ: Не добавляйте в этот список IP-адрес ТЕКУЩЕГО сервера,
+# на котором запущен "Решала". Это бессмысленно и может вызвать ошибки.
+#
+# --- ДОБАВЬ СВОИ СЕРВЕРЫ НИЖЕ ---
 
 EOL
+}
+_add_key_locally() {
+    local pubkey="$1"
+    local auth_keys_file="/root/.ssh/authorized_keys"
+    printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на текущий сервер (localhost)...${C_RESET}"
+    
+    mkdir -p /root/.ssh
+    touch "$auth_keys_file"
+    
+    if grep -q -F "$pubkey" "$auth_keys_file"; then
+        printf "    %b\n" "${C_YELLOW}⚠️ Ключ уже существует. Пропускаю.${C_RESET}"
+    else
+        echo "$pubkey" >> "$auth_keys_file"
+        printf "    %b\n" "${C_GREEN}✅ Успех! Ключ добавлен локально.${C_RESET}"
+    fi
+    
+    chmod 700 /root/.ssh
+    chmod 600 "$auth_keys_file"
 }
 ssh_key_manager() {
     clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ ДОБАВЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль поможет тебе закинуть твой SSH-ключ на все твои серверы.";
     
-    # --- ШАГ 1: Инструкции ---
     printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Подготовь публичный ключ ]${C_RESET}"; printf "%b\n" "Эти команды нужно выполнять на ${C_YELLOW}ТВОЁМ ЛИЧНОМ КОМПЬЮТЕРЕ${C_RESET}, а не на этом сервере."; printf "\n%b\n" "${C_CYAN}--- Для Windows ---${C_RESET}"; printf "%s\n" "1. Открой 'Командную строку' (cmd) или 'PowerShell'."; printf "%s\n" "2. Если ключ не создан, выполни команду (просто нажимай Enter на все вопросы):"; printf "   %b\n" "${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Чтобы посмотреть и скопировать твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ, выполни:"; printf "   %b\n" "${C_GREEN}type %USERPROFILE%\\.ssh\\id_ed25519.pub${C_RESET}"; printf "%s\n" "   (Если команда выдаёт ошибку, значит ключ не найден. Вернись к пункту 2)."; printf "\n%b\n" "${C_CYAN}--- Для Linux или macOS ---${C_RESET}"; printf "%s\n" "1. Открой терминал."; printf "%b\n" "2. Если ключ не создан, выполни: ${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Посмотри и скопируй твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ: ${C_GREEN}cat ~/.ssh/id_ed25519.pub${C_RESET}"; printf "\n%s\n" "Скопируй всю строку, которая начинается с 'ssh-ed25519...'.";
     
-    # --- ШАГ 2: Получение ключа ---
     read -p $'\nТы скопировал свой ПУБЛИЧНЫЙ ключ и готов продолжить? (y/n): ' confirm_key; if [[ "$confirm_key" != "y" && "$confirm_key" != "Y" ]]; then printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return; fi; printf "\n%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY; if ! [[ "$PUBKEY" =~ ^ssh-(rsa|dss|ed25519|ecdsa) ]]; then printf "\n%b\n" "${C_RED}❌ Это не похоже на SSH-ключ. Давай по новой.${C_RESET}"; return; fi;
     
-    # --- ШАГ 3: Управление списком серверов ---
     local SERVERS_FILE_PATH; SERVERS_FILE_PATH="$(pwd)/servers.txt"
     printf "\n%b\n" "${C_BOLD}[ ШАГ 3: Управление списком серверов ]${C_RESET}"
     if [ -f "$SERVERS_FILE_PATH" ]; then
@@ -168,7 +195,7 @@ ssh_key_manager() {
         case $choice in
             1) _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
             2) printf "%b\n" "Продолжаю с текущим списком..." ;;
-            3) rm "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
+            3) rm -f "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
             *) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; return ;;
         esac
     else
@@ -180,18 +207,22 @@ ssh_key_manager() {
     printf "%b\n" "Файл готов. Он лежит здесь: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
     if ! grep -q -E '[^[:space:]]' "$SERVERS_FILE_PATH" || ! grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH" | read -r; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст или содержит только комментарии. Операция прервана.${C_RESET}"; return; fi
 
-    # --- ШАГ 4: Установка ключей ---
     printf "\n%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; _ensure_package_installed "sshpass" || return; wait_for_enter;
     local TEMP_KEY_FILE; TEMP_KEY_FILE=$(mktemp); echo "$PUBKEY" > "$TEMP_KEY_FILE"
     
     while read -r -a parts; do
         [[ -z "${parts[0]}" ]] || [[ "${parts[0]}" =~ ^# ]] && continue
         local host="${parts[0]}"
-        local password="${parts[1]:-}"
+        local password="${parts[*]:1}"
         
+        if [[ "$host" == "root@localhost" || "$host" == "root@127.0.0.1" ]]; then
+            _add_key_locally "$PUBKEY"
+            continue
+        fi
+
         printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"
         
-        local ssh_copy_id_cmd="ssh-copy-id -i '$TEMP_KEY_FILE' -o ConnectTimeout=10 -o StrictHostKeyChecking=no '$host'"
+        local ssh_copy_id_cmd="ssh-copy-id -i $TEMP_KEY_FILE -o ConnectTimeout=10 -o StrictHostKeyChecking=no '$host'"
         
         if [ -n "$password" ]; then
             printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
@@ -211,7 +242,6 @@ ssh_key_manager() {
     done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
     rm "$TEMP_KEY_FILE"
     
-    # --- ШАГ 5: Очистка ---
     printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
     read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
     if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"; fi
