@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.1 - INTERACTIVE         ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.2 - AUTOMATION          ==
 # ============================================================ #
-# ==    Интерактивное управление nano, очистка, рефакторинг. ==
+# ==    Добавлена поддержка паролей и автосоздание конфига.   ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.1"
+readonly VERSION="v1.2"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -114,20 +114,41 @@ uninstall_script() { printf "%b\n" "${C_RED}Точно хочешь выгнат
 # ============================================================ #
 #                       МОДУЛЬ БЕЗОПАСНОСТИ                      #
 # ============================================================ #
-_ensure_nano_installed() {
-    if ! command -v nano &> /dev/null; then
-        printf "%b\n" "${C_YELLOW}Редактор 'nano' не найден. Устанавливаю...${C_RESET}"
+_ensure_package_installed() {
+    local package_name="$1"
+    if ! command -v "$package_name" &> /dev/null; then
+        printf "%b\n" "${C_YELLOW}Утилита '${package_name}' не найдена. Устанавливаю...${C_RESET}"
         if [ -f /etc/debian_version ]; then
             run_cmd apt-get update >/dev/null
-            run_cmd apt-get install -y nano
+            run_cmd apt-get install -y "$package_name"
         elif [ -f /etc/redhat-release ]; then
-            run_cmd yum install -y nano
+            run_cmd yum install -y "$package_name"
         else
-            printf "%b\n" "${C_RED}Не могу автоматически установить 'nano' для твоей ОС. Установи вручную и попробуй снова.${C_RESET}"
+            printf "%b\n" "${C_RED}Не могу автоматически установить '${package_name}' для твоей ОС. Установи вручную и попробуй снова.${C_RESET}"
             return 1
         fi
     fi
     return 0
+}
+_create_servers_file_template() {
+    local file_path="$1"
+    cat > "$file_path" << EOL
+# --- СПИСОК СЕРВЕРОВ ДЛЯ ДОБАВЛЕНИЯ SSH-КЛЮЧА ---
+#
+# Формат: пользователь@адрес [пароль]
+#
+# 1. Без пароля (будет запрошен вручную):
+# root@1.2.3.4
+#
+# 2. С паролем (вход произойдет автоматически):
+# admin@mydomain.com MySecurePa\\$\\$w0rd
+#
+# ВАЖНО: Если в пароле есть спецсимволы ($, !, & и т.д.),
+# экранируй их обратным слэшем (\\) или возьми пароль в одинарные кавычки.
+#
+# Добавь свои серверы ниже:
+
+EOL
 }
 ssh_key_manager() {
     clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ ДОБАВЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль поможет тебе закинуть твой SSH-ключ на все твои серверы.";
@@ -143,36 +164,57 @@ ssh_key_manager() {
     printf "\n%b\n" "${C_BOLD}[ ШАГ 3: Управление списком серверов ]${C_RESET}"
     if [ -f "$SERVERS_FILE_PATH" ]; then
         printf "%b\n" "Найден существующий файл со списком серверов: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
-        read -p "Что делаем? (1 - Редактировать, 2 - Продолжить с текущим, любая другая клавиша - Отмена): " choice
+        read -p "Что делаем? (1-Редактировать, 2-Использовать как есть, 3-Удалить и создать заново): " choice
         case $choice in
-            1) _ensure_nano_installed && nano "$SERVERS_FILE_PATH" || return ;;
+            1) _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
             2) printf "%b\n" "Продолжаю с текущим списком..." ;;
+            3) rm "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
             *) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; return ;;
         esac
     else
-        printf "%b\n" "Файл со списком серверов не найден. Давай создадим его."
+        printf "%b\n" "Файл со списком серверов не найден. Создаю новый с инструкциями."
+        _create_servers_file_template "$SERVERS_FILE_PATH"
         read -p "Нажми Enter, чтобы открыть редактор 'nano' для добавления серверов..."
-        _ensure_nano_installed && nano "$SERVERS_FILE_PATH" || return
-        printf "%b\n" "Файл сохранён здесь: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
+        _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return
     fi
-    if [ ! -s "$SERVERS_FILE_PATH" ]; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст. Операция прервана.${C_RESET}"; return; fi
+    printf "%b\n" "Файл готов. Он лежит здесь: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
+    if ! grep -q -E '[^[:space:]]' "$SERVERS_FILE_PATH" || ! grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH" | read -r; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст или содержит только комментарии. Операция прервана.${C_RESET}"; return; fi
 
     # --- ШАГ 4: Установка ключей ---
-    printf "\n%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; printf "%b\n" "${C_YELLOW}Тебе нужно будет ввести пароль для каждого сервера.${C_RESET}"; wait_for_enter;
-    if command -v ssh-copy-id &> /dev/null; then
-        echo "Использую 'ssh-copy-id' (безопасный метод)..."; local TEMP_KEY_FILE; TEMP_KEY_FILE=$(mktemp); echo "$PUBKEY" > "$TEMP_KEY_FILE"
-        while IFS= read -r host || [[ -n "$host" ]]; do if [[ -z "$host" ]] || [[ "$host" =~ ^# ]]; then continue; fi; printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"; if ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; else printf "    %b\n" "${C_RED}❌ Ошибка. Проверь пароль или доступность хоста.${C_RESET}"; fi; done < "$SERVERS_FILE_PATH"; rm "$TEMP_KEY_FILE"
-    else
-        echo "ВНИМАНИЕ: 'ssh-copy-id' не найден. Использую ручной метод (менее надёжный)."; while IFS= read -r host || [[ -n "$host" ]]; do if [[ -z "$host" ]] || [[ "$host" =~ ^# ]]; then continue; fi; printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"; local ssh_command="mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && grep -q -F '$PUBKEY' ~/.ssh/authorized_keys || echo '$PUBKEY' >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"; if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$ssh_command"; then printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; else printf "    %b\n" "${C_RED}❌ Ошибка. Проверь пароль или доступность хоста.${C_RESET}"; fi; done < "$SERVERS_FILE_PATH"
-    fi;
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; _ensure_package_installed "sshpass" || return; wait_for_enter;
+    local TEMP_KEY_FILE; TEMP_KEY_FILE=$(mktemp); echo "$PUBKEY" > "$TEMP_KEY_FILE"
+    
+    while read -r -a parts; do
+        [[ -z "${parts[0]}" ]] || [[ "${parts[0]}" =~ ^# ]] && continue
+        local host="${parts[0]}"
+        local password="${parts[1]:-}"
+        
+        printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host...${C_RESET}"
+        
+        local ssh_copy_id_cmd="ssh-copy-id -i '$TEMP_KEY_FILE' -o ConnectTimeout=10 -o StrictHostKeyChecking=no '$host'"
+        
+        if [ -n "$password" ]; then
+            printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
+            if ! sshpass -p "$password" sh -c "$ssh_copy_id_cmd"; then
+                printf "    %b\n" "${C_RED}❌ Ошибка. Автоматический вход не удался. Проверь пароль в файле.${C_RESET}"
+            else
+                printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
+            fi
+        else
+            printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
+            if ! sh -c "$ssh_copy_id_cmd"; then
+                printf "    %b\n" "${C_RED}❌ Ошибка. Проверь введённый пароль или доступность хоста.${C_RESET}"
+            else
+                printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
+            fi
+        fi
+    done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
+    rm "$TEMP_KEY_FILE"
     
     # --- ШАГ 5: Очистка ---
     printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
     read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
-    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then
-        rm -f "$SERVERS_FILE_PATH"
-        printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"
-    fi
+    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"; fi
 }
 security_menu() {
     while true; do
