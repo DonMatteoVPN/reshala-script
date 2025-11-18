@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.7 - UX & LOGS FIX       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.7 - STABILITY & LOGS    ==
 # ============================================================ #
-# ==    Улучшена валидация ввода и очищены логи от мусора.    ==
+# ==    Исправлен вылет, гонка состояний, очищены логи.       ==
 # ============================================================ #
 
 set -euo pipefail
@@ -49,17 +49,18 @@ install_script() {
     printf "   %b\n" "${C_RED}⚠️ ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала.${C_RESET}"; if [[ "${1:-}" != "update" ]]; then printf "   %s\n" "Установочный файл ('$0') можешь сносить."; fi
 }
 check_for_updates() {
+    set +e # Временно отключаем падение при ошибке
     UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"; local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0; local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"; log "Начинаю проверку обновлений по URL: $url_with_buster"
     while [ $attempt -le $max_attempts ]; do
-        response_body=$(curl -s -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE")); curl_exit_code=$?
+        response_body=$(curl --no-progress-meter -s -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE")); curl_exit_code=$?
         if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
             LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
             if [ -n "$LATEST_VERSION" ]; then
                 log "Удалённая версия: $LATEST_VERSION. Локальная: $VERSION."; local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g'); local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
-                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1); if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; log "Обнаружена новая версия (числовое сравнение: $remote_ver_num > $local_ver_num)."; fi; fi; return 0
+                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1); if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; log "Обнаружена новая версия (числовое сравнение: $remote_ver_num > $local_ver_num)."; fi; fi; set -e; return 0
             else log "Попытка $attempt: Ответ получен, но не могу найти строку с версией."; fi
         else log "Попытка $attempt из $max_attempts не удалась (код выхода curl: $curl_exit_code)."; if [ $attempt -lt $max_attempts ]; then sleep 3; fi; fi; attempt=$((attempt + 1))
-    done; UPDATE_CHECK_STATUS="ERROR"; log "Ошибка проверки обновлений после $max_attempts попыток."; return 1
+    done; UPDATE_CHECK_STATUS="ERROR"; log "Ошибка проверки обновлений после $max_attempts попыток."; set -e; return 1
 }
 run_update() {
     read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
@@ -272,14 +273,14 @@ display_header() {
 }
 show_menu() {
     while true; do
-        scan_server_state; display_header;
+        scan_server_state
+        check_for_updates
+        display_header
         
         printf "\n%s\n\n" "Чё делать будем, босс?"; echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Форсажа»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
         printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(На начальной стадии)${C_RESET}"
-        
-        (check_for_updates || true) &
         
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "   [u] %b\n" "${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"; fi
         
