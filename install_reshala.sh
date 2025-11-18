@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.8 - MAJOR OVERHAUL      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.82 - SSH COPY FIX        ==
 # ============================================================ #
-# ==    Исправлены все баги, добавлен новый функционал SSH.   ==
+# ==    Исправлена критическая ошибка передачи ключа с sshpass. ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.8"
+readonly VERSION="v1.82"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
