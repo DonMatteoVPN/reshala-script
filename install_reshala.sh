@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.7 - STABILITY & LOGS    ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.8 - SSH COPY FIX        ==
 # ============================================================ #
-# ==    Исправлен вылет, гонка состояний, очищены логи.       ==
+# ==    Исправлена критическая ошибка передачи ключа с sshpass. ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.7"
+readonly VERSION="v1.8"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -234,7 +234,7 @@ ssh_key_manager() {
         
         if [ -n "$password" ]; then
             printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
-            if ! SSHPASS="$password" sshpass -e ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
+            if ! sshpass -p "$password" ssh-copy-id -i "$TEMP_KEY_FILE" -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Автоматический вход не удался. Проверь пароль в файле.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
