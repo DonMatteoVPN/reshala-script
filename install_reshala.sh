@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.5 - RELIABILITY PATCH   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.6 - CRITICAL FIX        ==
 # ============================================================ #
-# ==    Исправлены ошибки SSH, отрисовки меню и валидации.    ==
+# ==    Исправлен вылет скрипта и утечка логов в консоль.     ==
 # ============================================================ #
 
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.5"
+readonly VERSION="v1.6"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -30,7 +30,7 @@ LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 #                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null; }
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
 load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
@@ -270,7 +270,8 @@ show_menu() {
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
         printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(На начальной стадии)${C_RESET}"
         
-        check_for_updates
+        (check_for_updates || true) &
+        
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "   [u] %b\n" "${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"; fi
         
         echo ""; printf "   [d] %b\n" "${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"; echo "------------------------------------------------------"; read -r -p "Твой выбор, босс: " choice
