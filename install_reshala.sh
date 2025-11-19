@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.991 - BACK TO BASICS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.992 - FIX      ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -13,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.991"
+readonly VERSION="v1.992"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -141,7 +141,6 @@ ipv6_menu() {
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
-# ВОТ ОНА - СТАРАЯ ДОБРАЯ ФУНКЦИЯ ПРОСМОТРА ЛОГОВ ИЗ v1.92
 view_logs_realtime() { 
     local log_path="$1"; local log_name="$2"; 
     
@@ -152,12 +151,13 @@ view_logs_realtime() {
     fi
     
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"
+    printf "%b[+] Лог-файл: %s${C_RESET}\n" "${C_CYAN}" "$log_path"
     
     local original_int_handler=$(trap -p INT)
     trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     
-    # Просто tail -f, как в старые добрые времена
-    (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
+    # Простой tail -f, без обработки — как в v1.92 (надёжно!)
+    run_cmd tail -f -n 50 "$log_path"
     
     if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi
     return 0
@@ -425,6 +425,11 @@ show_menu() {
         check_for_updates
         display_header
 
+        # === НОВЫЙ БАННЕР ОБНОВЛЕНИЯ ===
+        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
+            printf "\n%b‼️ ДОСТУПНО ОБНОВЛЕНИЕ ДЛЯ «РЕШАЛЫ»! УСТАНОВИ НОВУЮ ВЕРСИЮ — СТАРЬЁ РЖАВЕЕТ! ‼️%b\n\n" "${C_BOLD}${C_RED}" "${C_RESET}"
+        fi
+
         printf "\n%s\n\n" "Чё делать будем, босс?";
         printf "   [0] %b\n" "🔄 Обновить систему (apt update & upgrade)"
         echo "   [1] 🚀 Управление «Форсажем» (BBR+CAKE)"
@@ -435,7 +440,7 @@ show_menu() {
         printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
-            printf "   [u] %b\n" "‼️ОБНОВИТЬ РЕШАЛУ‼️"
+            printf "   %b[u] ‼️ОБНОВИТЬ РЕШАЛУ‼️%b\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
         elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then
             printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"
         fi
