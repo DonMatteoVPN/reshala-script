@@ -4,8 +4,8 @@
 # ==      ИНСТРУМЕНТ «РЕШАЛА» v2.05 - USER FRIENDLY       ==
 # ============================================================ #
 # ==    1. Возвращены подробные инструкции и комментарии.   ==
-# ==    2. Интерфейс стал дружелюбным и понятным.           ==
-# ==    3. Сохранена архитектура High-Load + TinyAuth First.==
+# ==    2. Исправлена генерация хеша TinyAuth (Docker).     ==
+# ==    3. Интерфейс стал дружелюбным и понятным.           ==
 # ============================================================ #
 
 set -uo pipefail
@@ -329,13 +329,19 @@ install_panel_wizard() {
 
     echo "Генерация хеша для TinyAuth через Docker..."
     # Pull image first to ensure it exists
+    echo "Скачивание образа TinyAuth..."
     docker pull ghcr.io/maposia/remnawave-tinyauth:latest >/dev/null 2>&1
     
     # Generate hash using the official method
-    TINYAUTH_HASH=$(docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --username "$TINYAUTH_USER" --password "$TINYAUTH_PASS" --format docker 2>/dev/null | cut -d':' -f2)
+    # Output format is username:hash
+    TINYAUTH_ENTRY=$(docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --username "$TINYAUTH_USER" --password "$TINYAUTH_PASS" --format docker 2>/dev/null)
+    
+    # Extract hash (everything after the first colon)
+    TINYAUTH_HASH=$(echo "$TINYAUTH_ENTRY" | cut -d':' -f2-)
     
     if [ -z "$TINYAUTH_HASH" ]; then
         echo "${C_RED}⚠️ Ошибка генерации хеша. Проверьте Docker.${C_RESET}"
+        echo "Попробуйте запустить вручную: docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --interactive"
         return 1
     fi
     
@@ -345,12 +351,15 @@ install_panel_wizard() {
     # 2. Выбор компонентов
     echo ""
     echo -e "${C_YELLOW}--- Выбор компонентов ---${C_RESET}"
+    echo "Выберите дополнительные модули для установки:"
     read -p "Установить Maposhi Mini App (Telegram Web App)? (y/n): " INSTALL_MINIAPP
     read -p "Установить встроенную Ноду (на этом же сервере)? (y/n): " INSTALL_NODE
 
     # 3. Сбор доменов
     echo ""
     echo -e "${C_YELLOW}--- Настройка доменов ---${C_RESET}"
+    echo "Вам понадобятся домены, направленные на IP этого сервера."
+    
     while true; do
         read -p "Введите домен для ПАНЕЛИ (например: panel.example.com): " PANEL_DOMAIN
         if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен! Только латиница, цифры, точки и дефисы.${C_RESET}"; fi
@@ -385,6 +394,7 @@ install_panel_wizard() {
     # 4. Сбор данных (Telegram и Пароли)
     echo ""
     echo -e "${C_YELLOW}--- Настройка доступов ---${C_RESET}"
+    echo "Эти данные нужны для уведомлений и работы панели."
     
     while true; do
         read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
@@ -405,8 +415,9 @@ install_panel_wizard() {
     # 5. SSL Сертификаты
     echo ""
     echo -e "${C_YELLOW}--- Настройка SSL ---${C_RESET}"
-    echo "1. Cloudflare API (рекомендуется, нужен токен)"
-    echo "2. Standalone (нужны открытые порты 80/443)"
+    echo "Выберите способ получения SSL-сертификатов:"
+    echo "1. Cloudflare API (рекомендуется, если домен на Cloudflare. Нужен API Token)."
+    echo "2. Standalone (использует Let's Encrypt, нужны открытые порты 80/443)."
     read -p "Выберите метод (1/2): " SSL_METHOD
 
     # Собираем список доменов для сертификата
@@ -811,16 +822,32 @@ EOF
     docker compose up -d
     
     echo ""
-    printf "%b\n" "${C_GREEN}✅ Установка завершена!${C_RESET}"
-    echo "Панель: https://${PANEL_DOMAIN}"
-    echo "TinyAuth Логин: ${TINYAUTH_USER}"
-    echo "TinyAuth Пароль: ${TINYAUTH_PASS}"
+    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║               УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!                   ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo ""
+    echo -e "${C_GREEN}Ваши данные для доступа:${C_RESET}"
+    echo "--------------------------------------------------"
+    echo -e "🔗 Панель управления:   ${C_YELLOW}https://${PANEL_DOMAIN}${C_RESET}"
+    echo -e "🔗 Страница подписки:   ${C_YELLOW}https://${SUB_DOMAIN}${C_RESET}"
+    echo -e "🔗 Авторизация (Auth):  ${C_YELLOW}https://${AUTH_DOMAIN}${C_RESET}"
+    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
+        echo -e "🔗 Mini App:            ${C_YELLOW}https://${MINIAPP_DOMAIN}${C_RESET}"
+    fi
+    echo "--------------------------------------------------"
+    echo -e "👤 TinyAuth Логин:      ${C_CYAN}${TINYAUTH_USER}${C_RESET}"
+    echo -e "🔑 TinyAuth Пароль:     ${C_CYAN}${TINYAUTH_PASS}${C_RESET}"
+    echo "--------------------------------------------------"
     
     if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        echo "ВНИМАНИЕ: Для встроенной ноды сгенерирован временный ключ."
-        echo "Зайдите в панель -> Создайте ноду -> Скопируйте ключ ->"
-        echo "Отредактируйте docker-compose.yml и замените SECRET_KEY -> Перезагрузите (пункт 5)."
+        echo -e "${C_RED}ВНИМАНИЕ: Встроенная нода установлена.${C_RESET}"
+        echo "1. Зайдите в панель -> Создайте ноду."
+        echo "2. Скопируйте полученный Secret Key."
+        echo "3. Отредактируйте файл: ${C_YELLOW}nano /opt/remnawave/docker-compose.yml${C_RESET}"
+        echo "4. Замените SECRET_KEY на ваш ключ."
+        echo "5. Перезагрузите панель через меню (пункт 5)."
     fi
+    
     log "Установка Remnawave завершена."
     wait_for_enter
     
