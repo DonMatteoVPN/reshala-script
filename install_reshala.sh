@@ -1,39 +1,33 @@
 #!/bin/bash
-
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21112 - FIX                ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21113 - FIX                ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
 # ==    3. Оставлен функционал обновлений системы.          ==
 # ==    4. Добавлено меню очистки Docker.                   ==
+# ==    5. Улучшено определение версий и типа сервера.      ==
 # ============================================================ #
-
 set -uo pipefail
-
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21112"
+readonly VERSION="v2.21113"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
-
 # --- Цвета ---
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m';
 C_CYAN='\033[0;36m'; C_BOLD='\033[1m'; C_GRAY='\033[0;90m';
-
 # --- Глобальные переменные ---
 SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0;
 BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"; UPDATE_AVAILABLE=0;
 LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
-
 # ============================================================ #
 #                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
-
 # Простая и надежная функция лога (как в v1.92)
 log() { 
     # Если файла нет, создаем его и даем права (на всякий случай)
@@ -43,11 +37,92 @@ log() {
     fi
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null
 }
-
-wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
+wait_for_enter() { read -p $'
+Нажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
 load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
 get_net_status() { local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "n/a"); local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "n/a"); if [ -z "$qdisc" ] || [ "$qdisc" = "pfifo_fast" ]; then qdisc=$(tc qdisc show 2>/dev/null | grep -Eo 'cake|fq' | head -n 1) || qdisc="n/a"; fi; echo "$cc|$qdisc"; }
+
+# === НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОПРЕДЕЛЕНИЯ ВЕРСИЙ ===
+# Проверяет, относится ли имя контейнера к экосистеме Remnawave
+is_remnawave_container() {
+    local name="$1"
+    case "$name" in
+        remnawave-*|remnanode*|remnawave_bot|tinyauth|support-*)
+            return 0  # Это Remnawave-контейнер
+            ;;
+        *)
+            return 1  # Сторонний
+            ;;
+    esac
+}
+
+# Извлекает версию ноды и Xray из логов
+get_node_version_from_logs() {
+    local container="$1"
+    local logs
+    logs=$(run_cmd docker logs "$container" 2>/dev/null | tail -n 100)
+    
+    local node_ver
+    node_ver=$(echo "$logs" | grep -oE 'Remnawave Node v[0-9.]*' | head -n1 | sed 's/Remnawave Node v//')
+    
+    local xray_ver
+    xray_ver=$(echo "$logs" | grep -oE 'XRay Core: v[0-9.]*' | head -n1 | sed 's/XRay Core: v//')
+    
+    if [ -n "$node_ver" ]; then
+        if [ -n "$xray_ver" ]; then
+            echo "v${node_ver} (Xray: v${xray_ver})"
+        else
+            echo "v${node_ver}"
+        fi
+    else
+        echo "latest"
+    fi
+}
+
+# Извлекает версию панели, сканируя логи всех remnawave- контейнеров
+get_panel_version_from_logs() {
+    local container_names
+    container_names=$(run_cmd docker ps --format '{{.Names}}' 2>/dev/null | grep "^remnawave-")
+    
+    if [ -z "$container_names" ]; then
+        echo "latest"
+        return
+    fi
+
+    local name
+    while IFS= read -r name; do
+        # Пропускаем вспомогательные контейнеры, которые не логируют версию
+        case "$name" in
+            *-nginx|*-redis|*-db|*-bot|*-scheduler|*-processor|*-subscription-page|*-telegram-mini-app|*-tinyauth)
+                continue
+                ;;
+        esac
+
+        # Проверяем логи этого контейнера
+        local logs
+        logs=$(run_cmd docker logs "$name" 2>/dev/null | tail -n 150)
+        local panel_ver
+        panel_ver=$(echo "$logs" | grep -oE 'Remnawave Backend v[0-9.]*' | head -n1 | sed 's/Remnawave Backend v//')
+        
+        if [ -n "$panel_ver" ]; then
+            echo "v${panel_ver}"
+            return
+        fi
+    done <<< "$container_names"
+
+    # Fallback: subscription-page (если основной бэкенд не найден)
+    if run_cmd docker ps --format '{{.Names}}' | grep -q "remnawave-subscription-page"; then
+        local sub_ver
+        sub_ver=$(run_cmd docker logs remnawave-subscription-page 2>/dev/null | grep -oE 'Remnawave Subscription Page v[0-9.]*' | head -n1 | sed 's/Remnawave Subscription Page v//')
+        if [ -n "$sub_ver" ]; then
+            echo "v${sub_ver} (sub-page)"
+            return
+        fi
+    fi
+
+    echo "latest"
+}
 
 # ============================================================ #
 #                 УСТАНОВКА И ОБНОВЛЕНИЕ СКРИПТА               #
@@ -90,7 +165,9 @@ run_update() {
 # ============================================================ #
 #                 СБОР ИНФОРМАЦИИ О СИСТЕМЕ                    #
 # ============================================================ #
-get_docker_version() { local container_name="$1"; local version=""; version=$(run_cmd docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null); if [ -n "$version" ]; then echo "$version"; return; fi; version=$(run_cmd docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2); if [ -n "$version" ]; then echo "$version"; return; fi; if run_cmd docker exec "$container_name" test -f /app/package.json 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null); if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi; fi; if run_cmd docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r'); if [ -n "$version" ]; then echo "$version"; return; fi; fi; local image_tag; image_tag=$(run_cmd docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then echo "$image_tag"; return; fi; local image_id; image_id=$(run_cmd docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); echo "latest (образ: ${image_id:0:7})"; }
+get_docker_version() { local container_name="$1"; local version=""; version=$(run_cmd docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null); if [ -n "$version" ]; then echo "$version"; return; fi; version=$(run_cmd docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2); if [ -n "$version" ]; then echo "$version"; return; fi; if run_cmd docker exec "$container_name" test -f /app/package.json 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null); if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi; fi; if run_cmd docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '
+\r'); if [ -n "$version" ]; then echo "$version"; return; fi; fi; local image_tag; image_tag=$(run_cmd docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then echo "$image_tag"; return; fi; local image_id; image_id=$(run_cmd docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); echo "latest (образ: ${image_id:0:7})"; }
+
 scan_server_state() {
     SERVER_TYPE="Чистый сервак"
     PANEL_NODE_VERSION=""
@@ -103,28 +180,70 @@ scan_server_state() {
     # Получаем список имён контейнеров
     local container_names
     container_names=$(run_cmd docker ps --format '{{.Names}}' 2>/dev/null)
+    
+    # Если контейнеров нет вообще
+    if [ -z "$container_names" ]; then
+        SERVER_TYPE="Чистый сервак"
+        return
+    fi
 
-    # Определяем тип установки по наличию префиксов
+    # Проверяем, есть ли НЕ Remnawave-контейнеры
+    local has_foreign=0
+    local name
+    while IFS= read -r name; do
+        if ! is_remnawave_container "$name"; then
+            has_foreign=1
+            break
+        fi
+    done <<< "$container_names"
+
+    # Определяем тип установки
     if echo "$container_names" | grep -q "^remnawave-"; then
-        SERVER_TYPE="Панель"
-        # Попробуем найти compose-файл для панели (ищем любой контейнер с префиксом)
+        if [ "$has_foreign" = "1" ]; then
+            SERVER_TYPE="Сервак не целка"
+        else
+            SERVER_TYPE="Панель"
+        fi
+        
+        # Находим любой remnawave- контейнер для пути
         local panel_container
         panel_container=$(echo "$container_names" | grep "^remnawave-" | head -n1)
         if [ -n "$panel_container" ]; then
             PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_container" 2>/dev/null)
             PANEL_NODE_VERSION=$(get_docker_version "$panel_container")
+            # Если версия "latest", пробуем логи всех remnawave-контейнеров
+            if [ "$PANEL_NODE_VERSION" = "latest" ] || [[ "$PANEL_NODE_VERSION" == *"latest ("* ]]; then
+                PANEL_NODE_VERSION=$(get_panel_version_from_logs)
+            fi
         fi
     elif echo "$container_names" | grep -q "^remnanode"; then
-        SERVER_TYPE="Нода"
+        if [ "$has_foreign" = "1" ]; then
+            SERVER_TYPE="Сервак не целка"
+        else
+            SERVER_TYPE="Нода"
+        fi
+        
         local node_container
         node_container=$(echo "$container_names" | grep "^remnanode" | head -n1)
         if [ -n "$node_container" ]; then
             PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$node_container" 2>/dev/null)
             PANEL_NODE_VERSION=$(get_docker_version "$node_container")
+            # Если версия "latest", парсим логи — там точно есть
+            if [ "$PANEL_NODE_VERSION" = "latest" ] || [[ "$PANEL_NODE_VERSION" == *"latest ("* ]]; then
+                PANEL_NODE_VERSION=$(get_node_version_from_logs "$node_container")
+            fi
+        fi
+    else
+        # Есть контейнеры, но не панель и не нода
+        if [ "$has_foreign" = "1" ]; then
+            SERVER_TYPE="Сервак не целка"
+        else
+            # Возможно, только бот?
+            SERVER_TYPE="Чистый сервак"
         fi
     fi
 
-    # Обнаружение бота
+    # Обнаружение бота (независимо от типа)
     if echo "$container_names" | grep -q "^remnawave_bot$"; then
         BOT_DETECTED=1
         local bot_compose_path
@@ -213,22 +332,20 @@ ipv6_menu() {
 # ВОТ ОНА - ИСПРАВЛЕННАЯ ФУНКЦИЯ ПРОСМОТРА ЛОГОВ (БЕЗ AWK!)
 view_logs_realtime() { 
     local log_path="$1"; local log_name="$2"; 
-    
     # Если файла нет, создаем его, чтобы tail не ругался
     if [ ! -f "$log_path" ]; then 
         run_cmd touch "$log_path"
         run_cmd chmod 666 "$log_path"
     fi
-    
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"
-    printf "%b[+] Лог-файл: %s${C_RESET}\n" "${C_CYAN}" "$log_path"
-    
+    printf "%b[+] Лог-файл: %s${C_RESET}
+" "${C_CYAN}" "$log_path"
     local original_int_handler=$(trap -p INT)
-    trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
-    
+    trap "printf '
+%b
+' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     # Просто tail -f, как в старые добрые времена — без обработки!
     run_cmd tail -f -n 50 "$log_path"
-    
     if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi
     return 0
 }
