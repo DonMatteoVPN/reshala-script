@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.99 - BACK TO BASICS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.991 - BACK TO BASICS      ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -13,8 +13,8 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.99"
-readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
+readonly VERSION="v1.991"
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
@@ -419,38 +419,47 @@ display_header() {
 }
 show_menu() {
     trap 'printf "\n%b\n" "${C_YELLOW}⚠️  Не убивай меня! Используй пункт [q] для выхода.${C_RESET}"; sleep 1' INT
-    
+
     while true; do
         scan_server_state
         check_for_updates
         display_header
-        
-        printf "\n%s\n\n" "Чё делать будем, босс?"; 
+
+        printf "\n%s\n\n" "Чё делать будем, босс?";
         printf "   [0] %b\n" "🔄 Обновить систему (apt update & upgrade)"
-        echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Решалы»"
-        if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
-        if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
-        printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
-        
-        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "   [u] %b\n" "${C_YELLOW}‼️ОБНОВИТЬ РЕШАЛУ‼️${C_RESET}"; elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"; fi
-        
-        echo ""; printf "   [d] %b\n" "${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"; echo "------------------------------------------------------"; 
+        echo "   [1] 🚀 Управление «Форсажем» (BBR+CAKE)"
+        echo "   [2] 🌐 Управление IPv6"
+        echo "   [3] 📜 Посмотреть журнал «Решалы»"
+        if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] 🤖 Посмотреть логи Бота"; fi
+        if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] 📊 Посмотреть логи Панели"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] 📊 Посмотреть логи Ноды"; fi
+        printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
+
+        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
+            printf "   [u] %b\n" "‼️ОБНОВИТЬ РЕШАЛУ‼️"
+        elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then
+            printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"
+        fi
+
+        echo ""
+        printf "   [d] %b\n" "${C_RED}🗑️ Снести Решалу нахуй (Удаление)${C_RESET}"
+        echo "   [q] 🚪 Свалить (Выход)"
+        echo "------------------------------------------------------"
         read -r -p "Твой выбор, босс: " choice || continue
-        
+
         # Логируем выбор пользователя
         log "Пользователь выбрал пункт меню: $choice"
-        
+
         case $choice in
             0) system_update_wizard;;
-            1) apply_bbr; wait_for_enter;; 
-            2) ipv6_menu;; 
-            3) view_logs_realtime "$LOGFILE" "Решалы";; 
-            4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 
-            5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 
-            6) security_menu;; 
-            [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; 
-            [dD]) uninstall_script;; 
-            [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; 
+            1) apply_bbr; wait_for_enter;;
+            2) ipv6_menu;;
+            3) view_logs_realtime "$LOGFILE" "Решалы";;
+            4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;;
+            5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
+            6) security_menu;;
+            [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
+            [dD]) uninstall_script;;
+            [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
             *) echo "Ты прикалываешься?"; sleep 2;;
         esac
     done
