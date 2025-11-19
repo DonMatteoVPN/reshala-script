@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.03 - HIGH-LOAD STACK     ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.04 - TINYAUTH FIRST      ==
 # ============================================================ #
-# ==    1. Docker Compose High-Load (API/Scheduler/TinyAuth)==
-# ==    2. Опциональная установка Mini App.                 ==
-# ==    3. Строгая валидация доменов (только латиница).     ==
-# ==    4. Правильная генерация Nginx и TinyAuth Hash.      ==
+# ==    1. TinyAuth настраивается первым (через Docker).    ==
+# ==    2. Удален Бот, оставлен только Maposhi Mini App.    ==
+# ==    3. Nginx конфиг строго по документации TinyAuth.    ==
 # ============================================================ #
 
 set -uo pipefail
@@ -14,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.03"
+readonly VERSION="v2.04"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -312,19 +311,48 @@ install_panel_wizard() {
     
     install_docker_stack
 
-    # 1. Выбор компонентов
-    echo "--- Выбор компонентов ---"
-    read -p "Установить встроенную Ноду (на этом же сервере)? (y/n): " INSTALL_NODE
-    read -p "Установить Telegram Бота? (y/n): " INSTALL_BOT
-    read -p "Установить Telegram Mini App? (y/n): " INSTALL_MINIAPP
-    read -p "Установить TinyAuth (защита входа)? (y/n): " INSTALL_TINYAUTH
+    # 1. TinyAuth Setup (First Priority)
+    echo ""
+    echo "--- Настройка защиты входа (TinyAuth) ---"
+    echo "TinyAuth будет установлен обязательно для защиты панели."
+    
+    while true; do
+        read -p "Придумайте логин для TinyAuth (например, admin): " TINYAUTH_USER
+        if [ -n "$TINYAUTH_USER" ]; then break; fi
+    done
+    
+    while true; do
+        read -p "Придумайте пароль для TinyAuth: " TINYAUTH_PASS
+        if [ -n "$TINYAUTH_PASS" ]; then break; fi
+    done
 
-    # 2. Сбор доменов
+    echo "Генерация хеша для TinyAuth через Docker..."
+    # Pull image first to ensure it exists
+    docker pull ghcr.io/maposia/remnawave-tinyauth:latest >/dev/null 2>&1
+    
+    # Generate hash using the official method
+    TINYAUTH_HASH=$(docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --username "$TINYAUTH_USER" --password "$TINYAUTH_PASS" --format docker 2>/dev/null | cut -d':' -f2)
+    
+    if [ -z "$TINYAUTH_HASH" ]; then
+        echo "${C_RED}⚠️ Ошибка генерации хеша. Проверьте Docker.${C_RESET}"
+        return 1
+    fi
+    
+    TINYAUTH_SECRET=$(generate_hex 32)
+    echo "${C_GREEN}✅ Хеш успешно сгенерирован.${C_RESET}"
+
+    # 2. Выбор компонентов
+    echo ""
+    echo "--- Выбор компонентов ---"
+    read -p "Установить Maposhi Mini App (Telegram Web App)? (y/n): " INSTALL_MINIAPP
+    read -p "Установить встроенную Ноду (на этом же сервере)? (y/n): " INSTALL_NODE
+
+    # 3. Сбор доменов
     echo ""
     echo "--- Настройка доменов ---"
     while true; do
         read -p "Введите домен для ПАНЕЛИ (например: panel.example.com): " PANEL_DOMAIN
-        if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен! Только латиница, цифры, точки и дефисы.${C_RESET}"; fi
+        if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
     done
 
     while true; do
@@ -332,27 +360,10 @@ install_panel_wizard() {
         if validate_domain "$SUB_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
     done
 
-    NODE_DOMAIN=""
-    if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        while true; do
-            read -p "Введите домен для НОДЫ (например: node.example.com): " NODE_DOMAIN
-            if validate_domain "$NODE_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-        done
-    fi
-
-    BOT_HOOK_DOMAIN=""
-    BOT_API_DOMAIN=""
-    if [[ "$INSTALL_BOT" == "y" || "$INSTALL_BOT" == "Y" ]]; then
-        while true; do
-            read -p "Введите домен для ВЕБХУКОВ бота (например: hooks.example.com): " BOT_HOOK_DOMAIN
-            if validate_domain "$BOT_HOOK_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-        done
-        # API домен для бота нужен, если есть MiniApp или внешние запросы
-        while true; do
-            read -p "Введите домен для API бота (например: api.example.com): " BOT_API_DOMAIN
-            if validate_domain "$BOT_API_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-        done
-    fi
+    while true; do
+        read -p "Введите домен для АВТОРИЗАЦИИ (TinyAuth) (например: auth.example.com): " AUTH_DOMAIN
+        if validate_domain "$AUTH_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
+    done
 
     MINIAPP_DOMAIN=""
     if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
@@ -362,121 +373,26 @@ install_panel_wizard() {
         done
     fi
 
-    AUTH_DOMAIN=""
-    if [[ "$INSTALL_TINYAUTH" == "y" || "$INSTALL_TINYAUTH" == "Y" ]]; then
+    NODE_DOMAIN=""
+    if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
         while true; do
-            read -p "Введите домен для АВТОРИЗАЦИИ (например: auth.example.com): " AUTH_DOMAIN
-            if validate_domain "$AUTH_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
+            read -p "Введите домен для НОДЫ (например: node.example.com): " NODE_DOMAIN
+            if validate_domain "$NODE_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
         done
     fi
 
-    # 3. Сбор данных (Telegram и Пароли)
+    # 4. Сбор данных (Telegram и Пароли)
     echo ""
     echo "--- Настройка доступов ---"
     
-    TG_BOT_TOKEN=""
-    TG_CHAT_ID=""
-    if [[ "$INSTALL_BOT" == "y" || "$INSTALL_BOT" == "Y" ]]; then
-        while true; do
-            read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
-            if [ -n "$TG_BOT_TOKEN" ]; then break; fi
-        done
-        while true; do
-            read -p "Введите ваш Telegram Chat ID (для уведомлений): " TG_CHAT_ID
-            if [ -n "$TG_CHAT_ID" ]; then break; fi
-        done
-    fi
-
-    # TinyAuth Credentials
-    TINYAUTH_BLOCK=""
-    NGINX_AUTH_BLOCK=""
-    NGINX_AUTH_LOCATION=""
-    NGINX_AUTH_INTERNAL=""
-
-    if [[ "$INSTALL_TINYAUTH" == "y" || "$INSTALL_TINYAUTH" == "Y" ]]; then
-        echo "Придумайте логин для TinyAuth (например, admin):"
-        read TINYAUTH_USER
-        [ -z "$TINYAUTH_USER" ] && TINYAUTH_USER="admin"
-        
-        echo "Придумайте пароль для TinyAuth:"
-        read TINYAUTH_PASS
-        [ -z "$TINYAUTH_PASS" ] && TINYAUTH_PASS="admin"
-        
-        echo "Генерация хеша..."
-        if command -v python3 &>/dev/null; then
-             TINYAUTH_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$TINYAUTH_PASS', bcrypt.gensalt()).decode('utf-8'))" 2>/dev/null || echo "")
-        fi
-        
-        if [ -z "${TINYAUTH_HASH:-}" ]; then
-            echo "${C_RED}⚠️ Не удалось сгенерировать хеш через Python. Пробуем через Docker...${C_RESET}"
-            # Попытка через Docker, как в инструкции
-            TINYAUTH_HASH=$(docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --username "$TINYAUTH_USER" --password "$TINYAUTH_PASS" --format docker | cut -d':' -f2)
-        fi
-
-        if [ -z "${TINYAUTH_HASH:-}" ]; then
-             echo "${C_RED}⚠️ Не удалось сгенерировать хеш. Используем дефолтный пароль 'admin'.${C_RESET}"
-             TINYAUTH_HASH='$$2a$$10$$3ZN61q1blIl4sPeAplhGf.L0jCVouaCD.3jAvFIRV1pS1PnQi8be2'
-             TINYAUTH_PASS="admin"
-        fi
-        
-        TINYAUTH_SECRET=$(generate_hex 32)
-        
-        TINYAUTH_BLOCK=$(cat <<EOF
-  tinyauth:
-    image: ghcr.io/maposia/remnawave-tinyauth:latest
-    container_name: tinyauth
-    hostname: tinyauth
-    restart: always
-    ports:
-      - '127.0.0.1:3002:3002'
-    networks:
-      - remnawave-network
-    environment:
-      - PORT=3002
-      - APP_URL=https://${AUTH_DOMAIN}
-      - USERS=${TINYAUTH_USER}:${TINYAUTH_HASH}
-      - SECRET=${TINYAUTH_SECRET}
-    logging:
-      driver: 'json-file'
-      options: { max-size: '10m', max-file: '3' }
-EOF
-)
-        NGINX_AUTH_BLOCK=$(cat <<EOF
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name ${AUTH_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
-        location / {
-            proxy_pass http://tinyauth_service;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        }
-    }
-EOF
-)
-        NGINX_AUTH_LOCATION=$(cat <<EOF
-            auth_request /auth_verify;
-            error_page 401 = @auth_login;
-EOF
-)
-        NGINX_AUTH_INTERNAL=$(cat <<EOF
-        location = /auth_verify {
-            internal;
-            proxy_pass http://tinyauth_service/api/auth/nginx;
-            proxy_pass_request_body off;
-            proxy_set_header Content-Length "";
-            proxy_set_header X-Original-URI \$request_uri;
-        }
-        location @auth_login {
-            internal;
-            return 302 https://${AUTH_DOMAIN}/login?redirect_uri=https://\$host\$request_uri;
-        }
-EOF
-)
-    fi
+    while true; do
+        read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
+        if [ -n "$TG_BOT_TOKEN" ]; then break; fi
+    done
+    while true; do
+        read -p "Введите ваш Telegram Chat ID (для уведомлений): " TG_CHAT_ID
+        if [ -n "$TG_CHAT_ID" ]; then break; fi
+    done
 
     # Генерация внутренних паролей
     POSTGRES_PASSWORD=$(generate_password 24)
@@ -485,7 +401,7 @@ EOF
     METRICS_USER=$(generate_password 8)
     METRICS_PASS=$(generate_password 12)
 
-    # 4. SSL Сертификаты
+    # 5. SSL Сертификаты
     echo ""
     echo "--- Настройка SSL ---"
     echo "1. Cloudflare API (рекомендуется, нужен токен)"
@@ -493,12 +409,9 @@ EOF
     read -p "Выберите метод (1/2): " SSL_METHOD
 
     # Собираем список доменов для сертификата
-    DOMAINS_LIST="-d $PANEL_DOMAIN -d $SUB_DOMAIN"
-    if [ -n "$NODE_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $NODE_DOMAIN"; fi
-    if [ -n "$BOT_HOOK_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $BOT_HOOK_DOMAIN"; fi
-    if [ -n "$BOT_API_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $BOT_API_DOMAIN"; fi
+    DOMAINS_LIST="-d $PANEL_DOMAIN -d $SUB_DOMAIN -d $AUTH_DOMAIN"
     if [ -n "$MINIAPP_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $MINIAPP_DOMAIN"; fi
-    if [ -n "$AUTH_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $AUTH_DOMAIN"; fi
+    if [ -n "$NODE_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $NODE_DOMAIN"; fi
 
     if [ "$SSL_METHOD" == "1" ]; then
         read -p "Введите Cloudflare API Token: " CF_TOKEN
@@ -506,7 +419,6 @@ EOF
         mkdir -p ~/.secrets/certbot
         echo "dns_cloudflare_api_token = $CF_TOKEN" > ~/.secrets/certbot/cloudflare.ini
         chmod 600 ~/.secrets/certbot/cloudflare.ini
-        # Для CF проще взять wildcard, если домены на одном уровне, но для надежности перечислим
         certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini \
             --dns-cloudflare-propagation-seconds 60 $DOMAINS_LIST \
             --email "$CF_EMAIL" --agree-tos --non-interactive
@@ -515,7 +427,7 @@ EOF
         certbot certonly --standalone $DOMAINS_LIST --email "$LE_EMAIL" --agree-tos --non-interactive
     fi
 
-    # 5. Создание файлов
+    # 6. Создание файлов
     mkdir -p "$REMNA_DIR"
     cd "$REMNA_DIR" || return
 
@@ -551,7 +463,7 @@ POSTGRES_DB=postgres
 REMNAWAVE_PANEL_URL=http://remnawave-scheduler:3000
 EOF
 
-    # docker-compose.yml (Base)
+    # docker-compose.yml
     cat <<EOF > docker-compose.yml
 x-base: &base
   image: remnawave/backend:latest
@@ -660,6 +572,24 @@ services:
       driver: 'json-file'
       options: { max-size: '10m', max-file: '3' }
 
+  tinyauth:
+    image: ghcr.io/maposia/remnawave-tinyauth:latest
+    container_name: tinyauth
+    hostname: tinyauth
+    restart: always
+    ports:
+      - '127.0.0.1:3002:3002'
+    networks:
+      - remnawave-network
+    environment:
+      - PORT=3002
+      - APP_URL=https://${AUTH_DOMAIN}
+      - USERS=${TINYAUTH_USER}:${TINYAUTH_HASH}
+      - SECRET=${TINYAUTH_SECRET}
+    logging:
+      driver: 'json-file'
+      options: { max-size: '10m', max-file: '3' }
+
   remnawave-nginx:
     image: nginx:1.28
     container_name: remnawave-nginx
@@ -672,17 +602,15 @@ services:
     depends_on:
       - api
       - remnawave-subscription-page
+      - tinyauth
     logging:
       driver: 'journald'
       options:
         tag: "nginx.remnawave"
-
-${TINYAUTH_BLOCK}
 EOF
 
     # Добавляем опциональные сервисы в docker-compose
     if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        # Для встроенной ноды нужен секрет. Сгенерируем временный, пользователь потом поменяет
         NODE_SECRET=$(generate_hex 32)
         cat <<EOF >> docker-compose.yml
   remnanode:
@@ -731,7 +659,7 @@ volumes:
   remnawave-redis-data:
 EOF
 
-    # nginx.conf (Base)
+    # nginx.conf
     cat <<EOF > nginx.conf
 user www-data;
 worker_processes auto;
@@ -753,7 +681,13 @@ http {
     upstream remnawave_panel_api { server 127.0.0.1:3000; }
     upstream remnawave_subscription_page { server 127.0.0.1:3010; }
     upstream tinyauth_service { server 127.0.0.1:3002; }
-    # upstream remnawave_mini_app { server 127.0.0.1:3020; } # Раскомментируется если нужен
+EOF
+
+    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
+        echo "    upstream remnawave_mini_app { server 127.0.0.1:3020; }" >> nginx.conf
+    fi
+
+    cat <<EOF >> nginx.conf
 
     server {
         listen 80;
@@ -761,8 +695,22 @@ http {
         return 301 https://\$host\$request_uri;
     }
 
-${NGINX_AUTH_BLOCK}
+    # TinyAuth Server Block
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name ${AUTH_DOMAIN};
+        ssl_certificate /etc/letsencrypt/live/${AUTH_DOMAIN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${AUTH_DOMAIN}/privkey.pem;
+        location / {
+            proxy_pass http://tinyauth_service;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        }
+    }
 
+    # Panel Server Block (Protected)
     server {
         listen 443 ssl;
         http2 on;
@@ -771,7 +719,9 @@ ${NGINX_AUTH_BLOCK}
         ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
         
         location / {
-${NGINX_AUTH_LOCATION}
+            auth_request /tinyauth;
+            error_page 401 = @tinyauth_login;
+
             proxy_pass http://remnawave_panel_api;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
@@ -781,15 +731,27 @@ ${NGINX_AUTH_LOCATION}
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
         }
-${NGINX_AUTH_INTERNAL}
+
+        location /tinyauth {
+            internal;
+            proxy_pass http://tinyauth_service/api/auth/nginx;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header X-Original-URI \$request_uri;
+        }
+
+        location @tinyauth_login {
+            return 302 https://${AUTH_DOMAIN}/login?redirect_uri=https://\$host\$request_uri;
+        }
     }
 
+    # Subscription Page Block
     server {
         listen 443 ssl;
         http2 on;
         server_name ${SUB_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${SUB_DOMAIN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${SUB_DOMAIN}/privkey.pem;
         location / {
             proxy_pass http://remnawave_subscription_page;
             proxy_set_header Host \$host;
@@ -807,8 +769,8 @@ EOF
         server_name ${NODE_DOMAIN};
         listen 443 ssl;
         http2 on;
-        ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${NODE_DOMAIN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${NODE_DOMAIN}/privkey.pem;
         location / {
             proxy_pass http://127.0.0.1:2222;
             proxy_http_version 1.1;
@@ -821,16 +783,13 @@ EOF
     fi
 
     if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
-        # Добавляем апстрим в начало файла (это костыль, но sed справится)
-        sed -i '/upstream tinyauth_service/a \    upstream remnawave_mini_app { server 127.0.0.1:3020; }' nginx.conf
-        
         cat <<EOF >> nginx.conf
     server {
         listen 443 ssl;
         http2 on;
         server_name ${MINIAPP_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/${MINIAPP_DOMAIN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${MINIAPP_DOMAIN}/privkey.pem;
         add_header X-Frame-Options "";
         location / {
             proxy_pass http://remnawave_mini_app;
@@ -845,17 +804,16 @@ EOF
 
     echo "}" >> nginx.conf # Закрываем http блок
 
-    # 6. Запуск
+    # 7. Запуск
     echo "Запуск контейнеров..."
     docker compose up -d
     
     echo ""
     printf "%b\n" "${C_GREEN}✅ Установка завершена!${C_RESET}"
     echo "Панель: https://${PANEL_DOMAIN}"
-    if [[ "$INSTALL_TINYAUTH" == "y" || "$INSTALL_TINYAUTH" == "Y" ]]; then
-        echo "TinyAuth Логин: ${TINYAUTH_USER}"
-        echo "TinyAuth Пароль: ${TINYAUTH_PASS}"
-    fi
+    echo "TinyAuth Логин: ${TINYAUTH_USER}"
+    echo "TinyAuth Пароль: ${TINYAUTH_PASS}"
+    
     if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
         echo "ВНИМАНИЕ: Для встроенной ноды сгенерирован временный ключ."
         echo "Зайдите в панель -> Создайте ноду -> Скопируйте ключ ->"
