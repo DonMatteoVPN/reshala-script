@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.97 - LOGS & SYSTEM       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.98 - LOGGING FIX FINAL   ==
 # ============================================================ #
-# ==    1. Полное логирование всех действий в журнал.       ==
-# ==    2. Авто-очистка логов старше 7 дней.                ==
-# ==    3. Умное предложение обновлений (1 раз в день).     ==
-# ==    4. Добавлен пункт [0] для ручного обновления.       ==
+# ==    1. Исправлена проблема с пустым журналом.           ==
+# ==    2. Принудительные права 666 на файл лога.           ==
+# ==    3. Гарантированная запись событий при старте.       ==
 # ============================================================ #
 
 set -uo pipefail
@@ -14,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.97"
+readonly VERSION="v1.98"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -38,22 +37,26 @@ run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 init_log() {
     # Если лог старше 7 дней - удаляем его
     if [ -f "$LOGFILE" ]; then
-        if find "$LOGFILE" -mtime +7 -print -delete | grep -q .; then
-            echo "Старый лог удален (старше 7 дней)."
+        if find "$LOGFILE" -mtime +7 -print -delete 2>/dev/null | grep -q .; then
+            # Если удалили старый, создаем новый
+            run_cmd touch "$LOGFILE"
         fi
     fi
 
     # Создаем файл если нет
     if [ ! -f "$LOGFILE" ]; then
         run_cmd touch "$LOGFILE"
-        run_cmd chmod 666 "$LOGFILE"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] - === НОВЫЙ ЖУРНАЛ СОЗДАН ===" | run_cmd tee -a "$LOGFILE" > /dev/null
     fi
+
+    # ПРИНУДИТЕЛЬНО даем права на запись всем, чтобы не было проблем с доступом
+    run_cmd chmod 666 "$LOGFILE"
 }
 
 log() { 
-    # Пишем и в консоль (если надо отладку) и в файл
-    # Но чтобы не мусорить в меню, пишем только в файл
+    # Убеждаемся, что файл существует перед записью
+    if [ ! -f "$LOGFILE" ]; then init_log; fi
+    
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - $1"
     echo "$msg" | run_cmd tee -a "$LOGFILE" > /dev/null
 }
@@ -157,10 +160,19 @@ ipv6_menu() {
 }
 
 view_logs_realtime() { 
+    # Принудительно инициализируем лог перед просмотром
     init_log
+    
     local log_path="$1"; local log_name="$2"; 
     if [ ! -f "$log_path" ]; then printf "%b\n" "❌ ${C_RED}Лог '$log_name' пуст или не существует.${C_RESET}"; sleep 2; return; fi; 
+    
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; 
+    
+    # Если файл пустой, выводим сообщение
+    if [ ! -s "$log_path" ]; then
+        echo "   (Файл лога пока пуст. Жду событий...)"
+    fi
+
     local original_int_handler=$(trap -p INT); 
     trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; 
     (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; 
