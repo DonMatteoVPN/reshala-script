@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.00 - REMNAWAVE INSTALL   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.01 - REMNAWAVE MENU      ==
 # ============================================================ #
-# ==    1. Добавлен мастер установки Remnawave (High-Load). ==
-# ==    2. Полная интеграция кастомного Docker/Nginx стека. ==
-# ==    3. Авто-генерация паролей, секретов и SSL.          ==
+# ==    1. Реализовано подменю для Remnawave.               ==
+# ==    2. Выбор установки (Панель / Нода).                 ==
+# ==    3. Ручной ввод паролей и опциональный TinyAuth.     ==
+# ==    4. Функции обновления, перезагрузки и удаления.     ==
 # ============================================================ #
 
 set -uo pipefail
@@ -13,8 +14,8 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.00"
-readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
+readonly VERSION="v2.01"
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
@@ -290,47 +291,133 @@ install_docker_stack() {
     fi
 }
 
-install_remnawave_wizard() {
-    local original_trap; original_trap=$(trap -p INT)
-    trap 'printf "\n%b\n" "${C_RED}❌ Установка прервана.${C_RESET}"; sleep 1; return' INT
-
+install_panel_wizard() {
     clear
     printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║       МАСТЕР УСТАНОВКИ REMNAWAVE (HIGH-LOAD STACK)           ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}║       УСТАНОВКА ПАНЕЛИ REMNAWAVE (HIGH-LOAD STACK)           ║${C_RESET}"
     printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo "Этот мастер установит панель, базу данных, Redis, Nginx, TinyAuth и бота."
-    echo "Все компоненты будут настроены автоматически."
-    echo ""
-
+    
     install_docker_stack
 
     # 1. Сбор данных
-    read -p "Введите ваш основной домен (например, donmatteo.monster): " BASE_DOMAIN
-    if [ -z "$BASE_DOMAIN" ]; then echo "Домен обязателен!"; sleep 2; return; fi
+    while true; do
+        read -p "Введите ваш основной домен (например, donmatteo.monster): " BASE_DOMAIN
+        if [ -n "$BASE_DOMAIN" ]; then break; fi
+        echo "Домен обязателен!"
+    done
 
-    read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
-    read -p "Введите ваш Telegram Chat ID (для уведомлений): " TG_CHAT_ID
+    while true; do
+        read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
+        if [ -n "$TG_BOT_TOKEN" ]; then break; fi
+    done
+
+    while true; do
+        read -p "Введите ваш Telegram Chat ID (для уведомлений): " TG_CHAT_ID
+        if [ -n "$TG_CHAT_ID" ]; then break; fi
+    done
+
+    # 2. Настройка TinyAuth
+    echo ""
+    echo "--- Настройка защиты входа (TinyAuth) ---"
+    read -p "Установить TinyAuth для защиты админки? (y/n): " INSTALL_TINYAUTH
     
-    # Генерация паролей
+    TINYAUTH_BLOCK=""
+    NGINX_AUTH_BLOCK=""
+    NGINX_AUTH_LOCATION=""
+    
+    if [[ "$INSTALL_TINYAUTH" == "y" || "$INSTALL_TINYAUTH" == "Y" ]]; then
+        echo "Введите логин для TinyAuth (например, admin):"
+        read TINYAUTH_USER
+        [ -z "$TINYAUTH_USER" ] && TINYAUTH_USER="admin"
+        
+        echo "Введите пароль для TinyAuth:"
+        read TINYAUTH_PASS
+        [ -z "$TINYAUTH_PASS" ] && TINYAUTH_PASS="admin"
+        
+        echo "Генерация хеша для TinyAuth..."
+        # Пытаемся сгенерировать хеш через python3, если есть
+        if command -v python3 &>/dev/null; then
+             TINYAUTH_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$TINYAUTH_PASS', bcrypt.gensalt()).decode('utf-8'))" 2>/dev/null || echo "")
+        fi
+        
+        # Если питона нет или ошибка, используем дефолтный хеш (admin) и предупреждаем
+        if [ -z "${TINYAUTH_HASH:-}" ]; then
+            echo "${C_RED}⚠️ Не удалось сгенерировать хеш (нет python3-bcrypt). Используем дефолтный пароль 'admin'.${C_RESET}"
+            TINYAUTH_HASH='$$2a$$10$$3ZN61q1blIl4sPeAplhGf.L0jCVouaCD.3jAvFIRV1pS1PnQi8be2'
+            TINYAUTH_PASS="admin"
+        fi
+        
+        TINYAUTH_SECRET=$(generate_hex 32)
+        
+        # Блок для docker-compose
+        TINYAUTH_BLOCK=$(cat <<EOF
+  tinyauth:
+    image: ghcr.io/maposia/remnawave-tinyauth:latest
+    container_name: tinyauth
+    hostname: tinyauth
+    restart: always
+    ports:
+      - '127.0.0.1:3002:3002'
+    networks:
+      - remnawave-network
+    environment:
+      - PORT=3002
+      - APP_URL=https://auth.${BASE_DOMAIN}
+      - USERS=${TINYAUTH_USER}:${TINYAUTH_HASH}
+      - SECRET=${TINYAUTH_SECRET}
+    logging:
+      driver: 'json-file'
+      options: { max-size: '10m', max-file: '3' }
+EOF
+)
+        # Блоки для nginx
+        NGINX_AUTH_BLOCK=$(cat <<EOF
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name auth.${BASE_DOMAIN};
+        ssl_certificate /etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${BASE_DOMAIN}/privkey.pem;
+        location / {
+            proxy_pass http://tinyauth_service;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        }
+    }
+EOF
+)
+        NGINX_AUTH_LOCATION=$(cat <<EOF
+            auth_request /auth_verify;
+            error_page 401 = @auth_login;
+EOF
+)
+        NGINX_AUTH_INTERNAL=$(cat <<EOF
+        location = /auth_verify {
+            internal;
+            proxy_pass http://tinyauth_service/api/auth/nginx;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header X-Original-URI \$request_uri;
+        }
+        location @auth_login {
+            internal;
+            return 302 https://auth.${BASE_DOMAIN}/login?redirect_uri=https://\$host\$request_uri;
+        }
+EOF
+)
+    else
+        NGINX_AUTH_INTERNAL=""
+    fi
+
+    # Генерация внутренних паролей
     POSTGRES_PASSWORD=$(generate_password 24)
     JWT_AUTH_SECRET=$(generate_hex 64)
     JWT_API_TOKENS_SECRET=$(generate_hex 64)
-    TINYAUTH_SECRET=$(generate_hex 32)
     METRICS_USER=$(generate_password 8)
     METRICS_PASS=$(generate_password 12)
-    
-    # TinyAuth Hash (Python one-liner for bcrypt)
-    echo "Генерация хеша для TinyAuth..."
-    TINYAUTH_PASS=$(generate_password 16)
-    TINYAUTH_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$TINYAUTH_PASS', bcrypt.gensalt()).decode('utf-8'))" 2>/dev/null || echo "")
-    
-    if [ -z "$TINYAUTH_HASH" ]; then
-        echo "Ошибка генерации хеша. Используем дефолтный (admin)."
-        TINYAUTH_HASH='$$2a$$10$$3ZN61q1blIl4sPeAplhGf.L0jCVouaCD.3jAvFIRV1pS1PnQi8be2' # hash for 'admin'
-        TINYAUTH_PASS="admin"
-    fi
 
-    # 2. SSL Сертификаты
+    # 3. SSL Сертификаты
     echo ""
     echo "--- Настройка SSL ---"
     echo "1. Cloudflare API (рекомендуется, нужен токен)"
@@ -353,7 +440,7 @@ install_remnawave_wizard() {
             -d "subapp.$BASE_DOMAIN" --email "$LE_EMAIL" --agree-tos --non-interactive
     fi
 
-    # 3. Создание файлов
+    # 4. Создание файлов
     mkdir -p "$REMNA_DIR"
     cd "$REMNA_DIR" || return
 
@@ -528,23 +615,7 @@ services:
       options:
         tag: "nginx.remnawave"
 
-  tinyauth:
-    image: ghcr.io/maposia/remnawave-tinyauth:latest
-    container_name: tinyauth
-    hostname: tinyauth
-    restart: always
-    ports:
-      - '127.0.0.1:3002:3002'
-    networks:
-      - remnawave-network
-    environment:
-      - PORT=3002
-      - APP_URL=https://auth.${BASE_DOMAIN}
-      - USERS=admin:${TINYAUTH_HASH}
-      - SECRET=${TINYAUTH_SECRET}
-    logging:
-      driver: 'json-file'
-      options: { max-size: '10m', max-file: '3' }
+${TINYAUTH_BLOCK}
 
 networks:
   remnawave-network:
@@ -587,19 +658,7 @@ http {
         return 301 https://\$host\$request_uri;
     }
 
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name auth.${BASE_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${BASE_DOMAIN}/privkey.pem;
-        location / {
-            proxy_pass http://tinyauth_service;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        }
-    }
+${NGINX_AUTH_BLOCK}
 
     server {
         listen 443 ssl;
@@ -609,8 +668,7 @@ http {
         ssl_certificate_key /etc/letsencrypt/live/${BASE_DOMAIN}/privkey.pem;
         
         location / {
-            auth_request /auth_verify;
-            error_page 401 = @auth_login;
+${NGINX_AUTH_LOCATION}
             proxy_pass http://remnawave_panel_api;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
@@ -620,17 +678,7 @@ http {
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
         }
-        location = /auth_verify {
-            internal;
-            proxy_pass http://tinyauth_service/api/auth/nginx;
-            proxy_pass_request_body off;
-            proxy_set_header Content-Length "";
-            proxy_set_header X-Original-URI \$request_uri;
-        }
-        location @auth_login {
-            internal;
-            return 302 https://auth.${BASE_DOMAIN}/login?redirect_uri=https://\$host\$request_uri;
-        }
+${NGINX_AUTH_INTERNAL}
     }
 
     server {
@@ -695,19 +743,189 @@ http {
 }
 EOF
 
-    # 4. Запуск
+    # 5. Запуск
     echo "Запуск контейнеров..."
     docker compose up -d
     
     echo ""
     printf "%b\n" "${C_GREEN}✅ Установка завершена!${C_RESET}"
     echo "Панель: https://panrem.${BASE_DOMAIN}"
-    echo "TinyAuth Логин: admin"
-    echo "TinyAuth Пароль: ${TINYAUTH_PASS}"
+    if [[ "$INSTALL_TINYAUTH" == "y" || "$INSTALL_TINYAUTH" == "Y" ]]; then
+        echo "TinyAuth Логин: ${TINYAUTH_USER}"
+        echo "TinyAuth Пароль: ${TINYAUTH_PASS}"
+    fi
     echo "Сохраните эти данные!"
     log "Установка Remnawave завершена для домена ${BASE_DOMAIN}"
     wait_for_enter
+}
+
+install_node_wizard() {
+    clear
+    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║               УСТАНОВКА НОДЫ REMNAWAVE                       ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
     
+    install_docker_stack
+    mkdir -p "$REMNA_DIR"
+    cd "$REMNA_DIR" || return
+
+    while true; do
+        read -p "Введите домен для ноды (например, node.example.com): " NODE_DOMAIN
+        if [ -n "$NODE_DOMAIN" ]; then break; fi
+    done
+
+    echo "Вставьте сертификат (Secret Key), полученный в панели:"
+    read -p "Key: " NODE_SECRET
+
+    # SSL
+    echo ""
+    echo "--- Настройка SSL ---"
+    echo "1. Cloudflare API"
+    echo "2. Standalone"
+    read -p "Выберите метод (1/2): " SSL_METHOD
+
+    if [ "$SSL_METHOD" == "1" ]; then
+        read -p "Введите Cloudflare API Token: " CF_TOKEN
+        read -p "Введите Email аккаунта Cloudflare: " CF_EMAIL
+        mkdir -p ~/.secrets/certbot
+        echo "dns_cloudflare_api_token = $CF_TOKEN" > ~/.secrets/certbot/cloudflare.ini
+        chmod 600 ~/.secrets/certbot/cloudflare.ini
+        certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini \
+            --dns-cloudflare-propagation-seconds 60 -d "$NODE_DOMAIN" \
+            --email "$CF_EMAIL" --agree-tos --non-interactive
+    else
+        read -p "Введите Email для Let's Encrypt: " LE_EMAIL
+        certbot certonly --standalone -d "$NODE_DOMAIN" --email "$LE_EMAIL" --agree-tos --non-interactive
+    fi
+
+    # docker-compose.yml для ноды
+    cat <<EOF > docker-compose.yml
+services:
+  remnanode:
+    image: remnawave/node:latest
+    container_name: remnanode
+    hostname: remnanode
+    restart: always
+    network_mode: host
+    environment:
+      - NODE_PORT=2222
+      - SECRET_KEY=${NODE_SECRET}
+    volumes:
+      - /dev/shm:/dev/shm:rw
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '30m'
+        max-file: '5'
+
+  remnawave-nginx:
+    image: nginx:1.28
+    container_name: remnawave-nginx
+    hostname: remnawave-nginx
+    restart: always
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    network_mode: host
+EOF
+
+    # nginx.conf для ноды
+    cat <<EOF > nginx.conf
+server {
+    server_name ${NODE_DOMAIN};
+    listen 443 ssl;
+    http2 on;
+
+    ssl_certificate /etc/letsencrypt/live/${NODE_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${NODE_DOMAIN}/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:2222;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+}
+EOF
+
+    docker compose up -d
+    echo -e "${C_GREEN}Нода установлена!${C_RESET}"
+    wait_for_enter
+}
+
+add_node_to_panel_wizard() {
+    echo "Функция добавления ноды через API пока в разработке."
+    echo "Пожалуйста, добавьте ноду вручную через веб-интерфейс панели."
+    wait_for_enter
+}
+
+update_remnawave() {
+    if [ ! -d "$REMNA_DIR" ]; then echo "Remnawave не установлен."; sleep 2; return; fi
+    cd "$REMNA_DIR" || return
+    echo "Обновление контейнеров..."
+    docker compose pull
+    docker compose up -d
+    echo -e "${C_GREEN}Обновление завершено.${C_RESET}"
+    wait_for_enter
+}
+
+restart_remnawave() {
+    if [ ! -d "$REMNA_DIR" ]; then echo "Remnawave не установлен."; sleep 2; return; fi
+    cd "$REMNA_DIR" || return
+    echo "Перезагрузка контейнеров..."
+    docker compose restart
+    echo -e "${C_GREEN}Перезагрузка завершена.${C_RESET}"
+    wait_for_enter
+}
+
+uninstall_remnawave() {
+    echo -e "${C_RED}ВНИМАНИЕ! ЭТО УДАЛИТ ВСЕ ДАННЫЕ REMNAWAVE (БАЗУ, КОНФИГИ, СЕРТИФИКАТЫ).${C_RESET}"
+    read -p "Вы уверены? Введите 'DELETE' для подтверждения: " CONFIRM
+    if [ "$CONFIRM" != "DELETE" ]; then echo "Отмена."; sleep 1; return; fi
+    
+    if [ -d "$REMNA_DIR" ]; then
+        cd "$REMNA_DIR" || return
+        docker compose down -v
+        cd ..
+        rm -rf "$REMNA_DIR"
+        echo -e "${C_GREEN}Remnawave полностью удален.${C_RESET}"
+    else
+        echo "Папка $REMNA_DIR не найдена."
+    fi
+    wait_for_enter
+}
+
+remnawave_menu() {
+    local original_trap; original_trap=$(trap -p INT)
+    trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
+
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║               УПРАВЛЕНИЕ REMNAWAVE                           ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo "   [1] Установить Панель (High-Load)"
+        echo "   [2] Установить Ноду (Standalone)"
+        echo "   [3] Добавить Ноду в Панель (API)"
+        echo "   [4] Обновить Панель/Ноду"
+        echo "   [5] Перезагрузить Панель/Ноду"
+        echo "   [6] Удалить Панель/Ноду (Полная очистка)"
+        echo "   [b] Назад в главное меню"
+        echo "----------------------------------"
+        read -r -p "Твой выбор: " choice || continue
+
+        case $choice in
+            1) install_panel_wizard;;
+            2) install_node_wizard;;
+            3) add_node_to_panel_wizard;;
+            4) update_remnawave;;
+            5) restart_remnawave;;
+            6) uninstall_remnawave;;
+            [bB]) break;;
+            *) echo "Неверный выбор."; sleep 1;;
+        esac
+    done
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
@@ -733,7 +951,7 @@ show_menu() {
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] 🤖 Посмотреть логи Бота"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] 📊 Посмотреть логи Панели"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] 📊 Посмотреть логи Ноды"; fi
         printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
-        printf "   [7] %b\n" "💎 Установка Remnawave ${C_YELLOW}(Панель High-Load)${C_RESET}"
+        printf "   [7] %b\n" "💎 Управление Remnawave ${C_YELLOW}(Установка/Удаление)${C_RESET}"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             printf "   [u] %b\n" "‼️ОБНОВИТЬ РЕШАЛУ‼️"
@@ -757,7 +975,7 @@ show_menu() {
             4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;;
             5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
             6) security_menu;;
-            7) install_remnawave_wizard;;
+            7) remnawave_menu;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
             [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
