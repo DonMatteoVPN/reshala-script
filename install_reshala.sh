@@ -1,18 +1,12 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21113 - FIX                ==
-# ============================================================ #
-# ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
-# ==    2. Исправлено отображение журнала.                  ==
-# ==    3. Оставлен функционал обновлений системы.          ==
-# ==    4. Добавлено меню очистки Docker.                   ==
-# ==    5. Улучшено определение версий и типа сервера.      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21114 - FIX                ==
 # ============================================================ #
 set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21113"
+readonly VERSION="v2.21114"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -48,11 +42,11 @@ get_net_status() { local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/d
 is_remnawave_container() {
     local name="$1"
     case "$name" in
-        remnawave-*|remnanode*|remnawave_bot|tinyauth|support-*)
-            return 0  # Это Remnawave-контейнер
+        remnawave-*|remnanode*|remnawave_bot|*remnawave-bot*|tinyauth|support-*)
+            return 0
             ;;
         *)
-            return 1  # Сторонний
+            return 1
             ;;
     esac
 }
@@ -81,6 +75,43 @@ get_node_version_from_logs() {
 }
 
 # Извлекает версию панели, сканируя логи всех remnawave- контейнеров
+# Проверяет, относится ли имя контейнера к экосистеме Remnawave
+is_remnawave_container() {
+    local name="$1"
+    case "$name" in
+        remnawave-*|remnanode*|remnawave_bot|*remnawave-bot*|tinyauth|support-*)
+            return 0  # Это Remnawave-контейнер
+            ;;
+        *)
+            return 1  # Сторонний
+            ;;
+    esac
+}
+
+# Извлекает версию ноды и Xray из логов (возвращает без "v")
+get_node_version_from_logs() {
+    local container="$1"
+    local logs
+    logs=$(run_cmd docker logs "$container" 2>/dev/null | tail -n 100)
+    
+    local node_ver
+    node_ver=$(echo "$logs" | grep -oE 'Remnawave Node v[0-9.]*' | head -n1 | sed 's/Remnawave Node v//')
+    
+    local xray_ver
+    xray_ver=$(echo "$logs" | grep -oE 'XRay Core: v[0-9.]*' | head -n1 | sed 's/XRay Core: v//')
+    
+    if [ -n "$node_ver" ]; then
+        if [ -n "$xray_ver" ]; then
+            echo "${node_ver} (Xray: ${xray_ver})"
+        else
+            echo "${node_ver}"
+        fi
+    else
+        echo "latest"
+    fi
+}
+
+# Извлекает версию панели (возвращает без "v")
 get_panel_version_from_logs() {
     local container_names
     container_names=$(run_cmd docker ps --format '{{.Names}}' 2>/dev/null | grep "^remnawave-")
@@ -94,7 +125,7 @@ get_panel_version_from_logs() {
     while IFS= read -r name; do
         # Пропускаем вспомогательные контейнеры, которые не логируют версию
         case "$name" in
-            *-nginx|*-redis|*-db|*-bot|*-scheduler|*-processor|*-subscription-page|*-telegram-mini-app|*-tinyauth)
+            *-nginx|*-redis|*-db|*-scheduler|*-processor|*-subscription-page|*-telegram-mini-app|*-tinyauth)
                 continue
                 ;;
         esac
@@ -106,17 +137,17 @@ get_panel_version_from_logs() {
         panel_ver=$(echo "$logs" | grep -oE 'Remnawave Backend v[0-9.]*' | head -n1 | sed 's/Remnawave Backend v//')
         
         if [ -n "$panel_ver" ]; then
-            echo "v${panel_ver}"
+            echo "${panel_ver}"
             return
         fi
     done <<< "$container_names"
 
-    # Fallback: subscription-page (если основной бэкенд не найден)
+    # Fallback: subscription-page
     if run_cmd docker ps --format '{{.Names}}' | grep -q "remnawave-subscription-page"; then
         local sub_ver
         sub_ver=$(run_cmd docker logs remnawave-subscription-page 2>/dev/null | grep -oE 'Remnawave Subscription Page v[0-9.]*' | head -n1 | sed 's/Remnawave Subscription Page v//')
         if [ -n "$sub_ver" ]; then
-            echo "v${sub_ver} (sub-page)"
+            echo "${sub_ver} (sub-page)"
             return
         fi
     fi
@@ -180,87 +211,79 @@ scan_server_state() {
     # Получаем список имён контейнеров
     local container_names
     container_names=$(run_cmd docker ps --format '{{.Names}}' 2>/dev/null)
-    
-    # Если контейнеров нет вообще
-    if [ -z "$container_names" ]; then
-        SERVER_TYPE="Чистый сервак"
-        return
-    fi
 
-    # Проверяем, есть ли НЕ Remnawave-контейнеры
-    local has_foreign=0
-    local name
-    while IFS= read -r name; do
-        if ! is_remnawave_container "$name"; then
-            has_foreign=1
-            break
-        fi
-    done <<< "$container_names"
-
-    # Определяем тип установки
+    # === ОСНОВНАЯ ЛОГИКА: ищем ТОЛЬКО панель или ноду ===
     if echo "$container_names" | grep -q "^remnawave-"; then
-        if [ "$has_foreign" = "1" ]; then
-            SERVER_TYPE="Сервак не целка"
-        else
-            SERVER_TYPE="Панель"
-        fi
-        
-        # Находим любой remnawave- контейнер для пути
+        SERVER_TYPE="Панель"
         local panel_container
         panel_container=$(echo "$container_names" | grep "^remnawave-" | head -n1)
         if [ -n "$panel_container" ]; then
             PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_container" 2>/dev/null)
             PANEL_NODE_VERSION=$(get_docker_version "$panel_container")
-            # Если версия "latest", пробуем логи всех remnawave-контейнеров
+            # Попытка получить версию из логов, если стандартный метод дал "latest"
             if [ "$PANEL_NODE_VERSION" = "latest" ] || [[ "$PANEL_NODE_VERSION" == *"latest ("* ]]; then
-                PANEL_NODE_VERSION=$(get_panel_version_from_logs)
+                local logs
+                logs=$(run_cmd docker logs "$panel_container" 2>/dev/null | tail -n 150)
+                local panel_ver
+                panel_ver=$(echo "$logs" | grep -oE 'Remnawave Backend v[0-9.]*' | head -n1 | sed 's/Remnawave Backend v//')
+                if [ -n "$panel_ver" ]; then
+                    PANEL_NODE_VERSION="$panel_ver"
+                fi
             fi
         fi
+
     elif echo "$container_names" | grep -q "^remnanode"; then
-        if [ "$has_foreign" = "1" ]; then
-            SERVER_TYPE="Сервак не целка"
-        else
-            SERVER_TYPE="Нода"
-        fi
-        
+        SERVER_TYPE="Нода"
         local node_container
         node_container=$(echo "$container_names" | grep "^remnanode" | head -n1)
         if [ -n "$node_container" ]; then
             PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$node_container" 2>/dev/null)
             PANEL_NODE_VERSION=$(get_docker_version "$node_container")
-            # Если версия "latest", парсим логи — там точно есть
             if [ "$PANEL_NODE_VERSION" = "latest" ] || [[ "$PANEL_NODE_VERSION" == *"latest ("* ]]; then
-                PANEL_NODE_VERSION=$(get_node_version_from_logs "$node_container")
+                local logs
+                logs=$(run_cmd docker logs "$node_container" 2>/dev/null | tail -n 100)
+                local node_ver
+                node_ver=$(echo "$logs" | grep -oE 'Remnawave Node v[0-9.]*' | head -n1 | sed 's/Remnawave Node v//')
+                local xray_ver
+                xray_ver=$(echo "$logs" | grep -oE 'XRay Core: v[0-9.]*' | head -n1 | sed 's/XRay Core: v//')
+                if [ -n "$node_ver" ]; then
+                    if [ -n "$xray_ver" ]; then
+                        PANEL_NODE_VERSION="${node_ver} (Xray: ${xray_ver})"
+                    else
+                        PANEL_NODE_VERSION="$node_ver"
+                    fi
+                fi
             fi
-        fi
+
+    elif [ -n "$container_names" ]; then
+        # Есть контейнеры, но нет ни панели, ни ноды
+        SERVER_TYPE="Сервак не целка"
+
     else
-        # Есть контейнеры, но не панель и не нода
-        if [ "$has_foreign" = "1" ]; then
-            SERVER_TYPE="Сервак не целка"
-        else
-            # Возможно, только бот?
-            SERVER_TYPE="Чистый сервак"
-        fi
+        # Docker пуст
+        SERVER_TYPE="Чистый сервак"
     fi
 
-    # Обнаружение бота (независимо от типа)
-    if echo "$container_names" | grep -q "^remnawave_bot$"; then
+    # === ОБНАРУЖЕНИЕ БОТА (независимо от SERVER_TYPE) ===
+    if echo "$container_names" | grep -q "remnawave_bot\|remnawave-bot"; then
         BOT_DETECTED=1
+        local bot_container
+        bot_container=$(echo "$container_names" | grep -E "remnawave_bot|remnawave-bot" | head -n1)
         local bot_compose_path
-        bot_compose_path=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "remnawave_bot" 2>/dev/null || true)
+        bot_compose_path=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container" 2>/dev/null || true)
         if [ -n "$bot_compose_path" ]; then
             BOT_PATH=$(dirname "$bot_compose_path")
             if [ -f "$BOT_PATH/VERSION" ]; then
                 BOT_VERSION=$(cat "$BOT_PATH/VERSION")
             else
-                BOT_VERSION=$(get_docker_version "remnawave_bot")
+                BOT_VERSION=$(get_docker_version "$bot_container")
             fi
         else
-            BOT_VERSION=$(get_docker_version "remnawave_bot")
+            BOT_VERSION=$(get_docker_version "$bot_container")
         fi
     fi
 
-    # Определение веб-сервера
+    # === ОПРЕДЕЛЕНИЕ ВЕБ-СЕРВЕРА (без изменений) ===
     if echo "$container_names" | grep -q "remnawave-nginx"; then
         local nginx_version
         nginx_version=$(run_cmd docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
@@ -674,7 +697,61 @@ offer_initial_update() {
 #                   ГЛАВНОЕ МЕНЮ И ИНФО-ПАНЕЛЬ                 #
 # ============================================================ #
 display_header() {
-    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info); clear; local max_label_width=11; printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"; if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi; if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi; if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"; printf "%b\n" "${C_CYAN}╚${C_RESET}";
+    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
+    local net_status; net_status=$(get_net_status)
+    local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
+    local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
+    local cc_status
+    if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then
+        if [[ "$qdisc" == "cake" ]]; then
+            cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"
+        else
+            cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"
+        fi
+    else
+        cc_status="${C_YELLOW}СТОК ($cc)"
+    fi
+    local ipv6_status; ipv6_status=$(check_ipv6_status)
+    local cpu_info; cpu_info=$(get_cpu_info)
+    local cpu_load; cpu_load=$(get_cpu_load)
+    local ram_info; ram_info=$(get_ram_info)
+    local disk_info; disk_info=$(get_disk_info)
+    local hoster_info; hoster_info=$(get_hoster_info)
+    clear
+    local max_label_width=11
+
+    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"
+
+    # === ВЫВОД ТИПА УСТАНОВКИ ===
+    if [[ "$SERVER_TYPE" == "Панель" || "$SERVER_TYPE" == "Нода" ]]; then
+        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s v%s${C_RESET}\n" "Установка" "$SERVER_TYPE" "$PANEL_NODE_VERSION"
+    else
+        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"
+    fi
+
+    # === ДОП. СТРОКИ (БОТ, ВЕБ-СЕРВЕР) ===
+    if [ "$BOT_DETECTED" -eq 1 ]; then
+        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"
+    fi
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then
+        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"
+    fi
+
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"
+    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"
+    printf "%b\n" "${C_CYAN}╚${C_RESET}"
 }
 show_menu() {
     # Убираем глобальный trap, обрабатываем локально
