@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.95 - UPDATE FIX          ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.931 - SECURITY UPDATE     ==
 # ============================================================ #
-# ==    Исправлена логика проверки обновлений.              ==
-# ==    Добавлена защита от Ctrl+C (возврат в меню).        ==
+# ==    Добавлена функция удаления SSH-ключей с серверов.   ==
+# ==    Исправлена защита от Ctrl+C.                        ==
 # ============================================================ #
 
 set -euo pipefail
@@ -12,7 +12,7 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.95"
+readonly VERSION="v1.931"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala_ops.log"
@@ -111,7 +111,6 @@ EOL
     run_cmd sysctl -p /etc/sysctl.d/98-reshala-enable-ipv6.conf > /dev/null; run_cmd rm -f /etc/sysctl.d/98-reshala-enable-ipv6.conf; log "-> IPv6 реанимирован."; printf "%b\n" "${C_GREEN}✅ РЕАНИМАЦИЯ ЗАВЕРШЕНА.${C_RESET}"; }
 
 ipv6_menu() {
-    # Trap для возврата в главное меню при нажатии Ctrl+C
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
 
@@ -126,7 +125,6 @@ ipv6_menu() {
         esac
     done
 
-    # Восстанавливаем оригинальный trap
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
@@ -204,8 +202,30 @@ _add_key_locally() {
     chmod 600 "$auth_keys_file"
     printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${auth_keys_file})${C_RESET}"
 }
+_remove_key_locally() {
+    local pubkey="$1"
+    local auth_keys_file="/root/.ssh/authorized_keys"
+    printf "\n%b\n" "${C_CYAN}--> Удаляю ключ с текущего сервера (localhost)...${C_RESET}"
+    
+    if [ ! -f "$auth_keys_file" ]; then
+        printf "    %b\n" "${C_YELLOW}⚠️ Файл authorized_keys не найден. Нечего удалять.${C_RESET}"
+        return
+    fi
+
+    # Делаем бэкап
+    cp "$auth_keys_file" "${auth_keys_file}.bak_reshala"
+    
+    # Удаляем строку, содержащую ключ (grep -vF ищет точное совпадение строки и исключает её)
+    if grep -vF "$pubkey" "$auth_keys_file" > "${auth_keys_file}.tmp"; then
+        mv "${auth_keys_file}.tmp" "$auth_keys_file"
+        chmod 600 "$auth_keys_file"
+        printf "    %b\n" "${C_GREEN}✅ Успех! Ключ удалён (если он был).${C_RESET}"
+    else
+        printf "    %b\n" "${C_RED}❌ Ошибка при обработке файла.${C_RESET}"
+        rm -f "${auth_keys_file}.tmp"
+    fi
+}
 _ssh_add_keys() {
-    # Trap внутри визарда
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_RED}❌ Операция отменена. Возвращаюсь...${C_RESET}"; sleep 1; return 1' INT
 
@@ -289,19 +309,90 @@ _ssh_add_keys() {
     read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
     if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"; fi
 
-    # Восстановление trap не требуется, так как функция завершается и восстановится предыдущий (из меню безопасности)
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 _ssh_remove_keys() {
-    printf "\n%b\n" "${C_RED}🚧 Эта функция пока в разработке. Следи за обновлениями!${C_RESET}"
+    local original_trap; original_trap=$(trap -p INT)
+    trap 'printf "\n%b\n" "${C_RED}❌ Операция отменена. Возвращаюсь...${C_RESET}"; sleep 1; return 1' INT
+
+    clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ УДАЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль удалит указанный ключ из authorized_keys на твоих серверах.";
+    
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Вставь ключ для удаления ]${C_RESET}"; 
+    read -p "Вставь сюда публичный ключ (или его уникальную часть), который нужно УДАЛИТЬ: " PUBKEY || return 1; 
+    if [ -z "$PUBKEY" ]; then printf "\n%b\n" "${C_RED}❌ Пусто. Отмена.${C_RESET}"; return; fi;
+
+    local SERVERS_FILE_PATH; SERVERS_FILE_PATH="$(pwd)/servers.txt"
+    clear; printf "%b\n" "${C_BOLD}[ ШАГ 2: Управление списком серверов ]${C_RESET}"
+    if [ -f "$SERVERS_FILE_PATH" ]; then
+        printf "%b\n" "Найден существующий файл со списком серверов: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
+        read -p "Что делаем? (1-Редактировать, 2-Использовать как есть, 3-Удалить и создать заново): " choice || return 1
+        case $choice in
+            1) _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
+            2) printf "%b\n" "Продолжаю с текущим списком..." ;;
+            3) rm -f "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
+            *) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; return ;;
+        esac
+    else
+        printf "%b\n" "Файл со списком серверов не найден. Создаю новый с инструкциями."
+        _create_servers_file_template "$SERVERS_FILE_PATH"
+        read -p "Нажми Enter, чтобы открыть редактор 'nano' для добавления серверов..."
+        _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return
+    fi
+
+    if ! grep -q -E '[^[:space:]]' "$SERVERS_FILE_PATH" || ! grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH" | read -r; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст. Операция прервана.${C_RESET}"; return; fi
+
+    clear; printf "%b\n" "${C_BOLD}[ ШАГ 3: Удаление ключа с серверов ]${C_RESET}"; printf "%s\n" "Начинаю зачистку..."; _ensure_package_installed "sshpass" || return; wait_for_enter;
+    
+    while read -r -a parts; do
+        [[ -z "${parts[0]}" ]] || [[ "${parts[0]}" =~ ^# ]] && continue
+        local host_port_part="${parts[0]}"
+        local password="${parts[*]:1}"
+        
+        local host="${host_port_part%:*}"
+        local port="${host_port_part##*:}"
+        [[ "$host" == "$port" ]] && port=""
+
+        if [[ "$host" == "root@localhost" || "$host" == "root@127.0.0.1" ]]; then
+            _remove_key_locally "$PUBKEY"
+            continue
+        fi
+
+        printf "\n%b\n" "${C_CYAN}--> Обрабатываю $host_port_part...${C_RESET}"
+        
+        local port_arg=""; if [ -n "$port" ]; then port_arg="-p $port"; fi
+        
+        # Команда для удаленного выполнения: бэкап -> удаление строки через grep -v -> восстановление прав
+        local remote_cmd="cp ~/.ssh/authorized_keys ~/.ssh/authorized_keys.bak_reshala 2>/dev/null; grep -vF '$PUBKEY' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+
+        if [ -n "$password" ]; then
+            printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
+            if ! sshpass -p "$password" ssh $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$remote_cmd"; then
+                printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
+            else
+                printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
+            fi
+        else
+            printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
+            if ! ssh $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$remote_cmd"; then
+                printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
+            else
+                printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
+            fi
+        fi
+    done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
+    
+    printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
+    read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
+    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"; fi
+
+    if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 security_menu() {
-    # Trap для возврата в главное меню
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
 
     while true; do
-        clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "Здесь собраны инструменты для укрепления твоего сервера."; echo "----------------------------------"; echo "   [1] Добавить SSH-ключи на серверы 🔑"; echo "   [2] Удалить SSH-ключ с серверов (в разработке)"; echo "   [b] Назад в главное меню"; echo "----------------------------------"; 
+        clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "Здесь собраны инструменты для укрепления твоего сервера."; echo "----------------------------------"; echo "   [1] Добавить SSH-ключи на серверы 🔑"; echo "   [2] Удалить SSH-ключ с серверов 🗑️"; echo "   [b] Назад в главное меню"; echo "----------------------------------"; 
         read -r -p "Твой выбор: " choice || continue
         case $choice in
             1) _ssh_add_keys; wait_for_enter;;
@@ -321,7 +412,6 @@ display_header() {
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info); clear; local max_label_width=11; printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"; if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi; if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi; if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"; printf "%b\n" "${C_CYAN}╚${C_RESET}";
 }
 show_menu() {
-    # Глобальная защита от Ctrl+C в главном меню (не дает убить скрипт)
     trap 'printf "\n%b\n" "${C_YELLOW}⚠️  Не убивай меня! Используй пункт [q] для выхода.${C_RESET}"; sleep 1' INT
     
     while true; do
@@ -332,7 +422,7 @@ show_menu() {
         printf "\n%s\n\n" "Чё делать будем, босс?"; echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Форсажа»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
-        printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(На начальной стадии)${C_RESET}"
+        printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
         
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then printf "   [u] %b\n" "${C_YELLOW}ОБНОВИТЬ РЕШАЛУ${C_RESET}"; elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"; fi
         
