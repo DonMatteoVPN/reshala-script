@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.991 - BACK TO BASICS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.9944 - BACK TO BASICS      ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -13,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.991"
+readonly VERSION="v1.9944"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
