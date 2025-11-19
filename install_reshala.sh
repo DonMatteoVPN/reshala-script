@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.98 - LOGGING FIX FINAL   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.99 - BACK TO BASICS      ==
 # ============================================================ #
-# ==    1. Исправлена проблема с пустым журналом.           ==
-# ==    2. Принудительные права 666 на файл лога.           ==
-# ==    3. Гарантированная запись событий при старте.       ==
+# ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
+# ==    2. Исправлено отображение журнала.                  ==
+# ==    3. Оставлен функционал обновлений системы.          ==
 # ============================================================ #
 
 set -uo pipefail
@@ -13,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.98"
+readonly VERSION="v1.99"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -33,32 +33,14 @@ LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 
-# Инициализация и ротация логов
-init_log() {
-    # Если лог старше 7 дней - удаляем его
-    if [ -f "$LOGFILE" ]; then
-        if find "$LOGFILE" -mtime +7 -print -delete 2>/dev/null | grep -q .; then
-            # Если удалили старый, создаем новый
-            run_cmd touch "$LOGFILE"
-        fi
-    fi
-
-    # Создаем файл если нет
-    if [ ! -f "$LOGFILE" ]; then
-        run_cmd touch "$LOGFILE"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] - === НОВЫЙ ЖУРНАЛ СОЗДАН ===" | run_cmd tee -a "$LOGFILE" > /dev/null
-    fi
-
-    # ПРИНУДИТЕЛЬНО даем права на запись всем, чтобы не было проблем с доступом
-    run_cmd chmod 666 "$LOGFILE"
-}
-
+# Простая и надежная функция лога (как в v1.92)
 log() { 
-    # Убеждаемся, что файл существует перед записью
-    if [ ! -f "$LOGFILE" ]; then init_log; fi
-    
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - $1"
-    echo "$msg" | run_cmd tee -a "$LOGFILE" > /dev/null
+    # Если файла нет, создаем его и даем права (на всякий случай)
+    if [ ! -f "$LOGFILE" ]; then 
+        run_cmd touch "$LOGFILE"
+        run_cmd chmod 666 "$LOGFILE"
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null
 }
 
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
@@ -159,26 +141,28 @@ ipv6_menu() {
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
+# ВОТ ОНА - СТАРАЯ ДОБРАЯ ФУНКЦИЯ ПРОСМОТРА ЛОГОВ ИЗ v1.92
 view_logs_realtime() { 
-    # Принудительно инициализируем лог перед просмотром
-    init_log
-    
     local log_path="$1"; local log_name="$2"; 
-    if [ ! -f "$log_path" ]; then printf "%b\n" "❌ ${C_RED}Лог '$log_name' пуст или не существует.${C_RESET}"; sleep 2; return; fi; 
     
-    echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; 
-    
-    # Если файл пустой, выводим сообщение
-    if [ ! -s "$log_path" ]; then
-        echo "   (Файл лога пока пуст. Жду событий...)"
+    # Если файла нет, создаем его, чтобы tail не ругался
+    if [ ! -f "$log_path" ]; then 
+        run_cmd touch "$log_path"
+        run_cmd chmod 666 "$log_path"
     fi
-
-    local original_int_handler=$(trap -p INT); 
-    trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; 
-    (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; 
-    if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; 
-    return 0; 
+    
+    echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"
+    
+    local original_int_handler=$(trap -p INT)
+    trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
+    
+    # Просто tail -f, как в старые добрые времена
+    (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
+    
+    if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi
+    return 0
 }
+
 view_docker_logs() { local service_path="$1"; local service_name="$2"; if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then printf "%b\n" "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (cd "$(dirname "$service_path")" && run_cmd docker compose logs -f) || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0; }
 uninstall_script() { printf "%b\n" "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm; if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi; echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then run_cmd rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then run_cmd sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then run_cmd rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; printf "%b\n" "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0; }
 
@@ -476,8 +460,12 @@ show_menu() {
 #                       ТОЧКА ВХОДА В СКРИПТ                   #
 # ============================================================ #
 main() {
-    # Инициализируем лог сразу при старте
-    init_log
+    # Создаем лог при старте, чтобы он точно был
+    if [ ! -f "$LOGFILE" ]; then 
+        run_cmd touch "$LOGFILE"
+        run_cmd chmod 666 "$LOGFILE"
+    fi
+    
     log "Запуск скрипта Решала ${VERSION}"
 
     if [[ "${1:-}" == "install" ]]; then
