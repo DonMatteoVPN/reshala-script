@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.2 - BACK TO BASICS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21 - BACK TO BASICS      ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -13,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.2"
+readonly VERSION="v2.21"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -141,7 +141,6 @@ ipv6_menu() {
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
-# ВОТ ОНА - СТАРАЯ ДОБРАЯ ФУНКЦИЯ ПРОСМОТРА ЛОГОВ ИЗ v1.92
 view_logs_realtime() { 
     local log_path="$1"; local log_name="$2"; 
     
@@ -152,6 +151,7 @@ view_logs_realtime() {
     fi
     
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"
+    printf "%b[+] Лог-файл: %s${C_RESET}\n" "${C_CYAN}" "$log_path"
     
     local original_int_handler=$(trap -p INT)
     trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
