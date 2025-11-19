@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21 - BACK TO BASICS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.211 - BACK TO BASICS      ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -13,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21"
+readonly VERSION="v2.211"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -156,8 +156,8 @@ view_logs_realtime() {
     local original_int_handler=$(trap -p INT)
     trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
     
-    # Просто tail -f, как в старые добрые времена
-    (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
+    # Простой tail -f, без обработки — как в v1.92 (надёжно!)
+    run_cmd tail -f -n 50 "$log_path"
     
     if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi
     return 0
