@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.04 - TINYAUTH FIRST      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.05 - USER FRIENDLY       ==
 # ============================================================ #
-# ==    1. TinyAuth настраивается первым (через Docker).    ==
-# ==    2. Удален Бот, оставлен только Maposhi Mini App.    ==
-# ==    3. Nginx конфиг строго по документации TinyAuth.    ==
+# ==    1. Возвращены подробные инструкции и комментарии.   ==
+# ==    2. Интерфейс стал дружелюбным и понятным.           ==
+# ==    3. Сохранена архитектура High-Load + TinyAuth First.==
 # ============================================================ #
 
 set -uo pipefail
@@ -13,7 +13,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.04"
+readonly VERSION="v2.05"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -313,8 +313,9 @@ install_panel_wizard() {
 
     # 1. TinyAuth Setup (First Priority)
     echo ""
-    echo "--- Настройка защиты входа (TinyAuth) ---"
-    echo "TinyAuth будет установлен обязательно для защиты панели."
+    echo -e "${C_YELLOW}--- Настройка защиты входа (TinyAuth) ---${C_RESET}"
+    echo "TinyAuth необходим для защиты вашей панели от несанкционированного доступа."
+    echo "Сейчас мы создадим администратора для входа в панель."
     
     while true; do
         read -p "Придумайте логин для TinyAuth (например, admin): " TINYAUTH_USER
@@ -343,16 +344,16 @@ install_panel_wizard() {
 
     # 2. Выбор компонентов
     echo ""
-    echo "--- Выбор компонентов ---"
+    echo -e "${C_YELLOW}--- Выбор компонентов ---${C_RESET}"
     read -p "Установить Maposhi Mini App (Telegram Web App)? (y/n): " INSTALL_MINIAPP
     read -p "Установить встроенную Ноду (на этом же сервере)? (y/n): " INSTALL_NODE
 
     # 3. Сбор доменов
     echo ""
-    echo "--- Настройка доменов ---"
+    echo -e "${C_YELLOW}--- Настройка доменов ---${C_RESET}"
     while true; do
         read -p "Введите домен для ПАНЕЛИ (например: panel.example.com): " PANEL_DOMAIN
-        if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
+        if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен! Только латиница, цифры, точки и дефисы.${C_RESET}"; fi
     done
 
     while true; do
@@ -383,7 +384,7 @@ install_panel_wizard() {
 
     # 4. Сбор данных (Telegram и Пароли)
     echo ""
-    echo "--- Настройка доступов ---"
+    echo -e "${C_YELLOW}--- Настройка доступов ---${C_RESET}"
     
     while true; do
         read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
@@ -403,7 +404,7 @@ install_panel_wizard() {
 
     # 5. SSL Сертификаты
     echo ""
-    echo "--- Настройка SSL ---"
+    echo -e "${C_YELLOW}--- Настройка SSL ---${C_RESET}"
     echo "1. Cloudflare API (рекомендуется, нужен токен)"
     echo "2. Standalone (нужны открытые порты 80/443)"
     read -p "Выберите метод (1/2): " SSL_METHOD
@@ -419,6 +420,7 @@ install_panel_wizard() {
         mkdir -p ~/.secrets/certbot
         echo "dns_cloudflare_api_token = $CF_TOKEN" > ~/.secrets/certbot/cloudflare.ini
         chmod 600 ~/.secrets/certbot/cloudflare.ini
+        # Для CF проще взять wildcard, если домены на одном уровне, но для надежности перечислим
         certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini \
             --dns-cloudflare-propagation-seconds 60 $DOMAINS_LIST \
             --email "$CF_EMAIL" --agree-tos --non-interactive
@@ -463,7 +465,7 @@ POSTGRES_DB=postgres
 REMNAWAVE_PANEL_URL=http://remnawave-scheduler:3000
 EOF
 
-    # docker-compose.yml
+    # docker-compose.yml (Base)
     cat <<EOF > docker-compose.yml
 x-base: &base
   image: remnawave/backend:latest
@@ -659,7 +661,7 @@ volumes:
   remnawave-redis-data:
 EOF
 
-    # nginx.conf
+    # nginx.conf (Base)
     cat <<EOF > nginx.conf
 user www-data;
 worker_processes auto;
