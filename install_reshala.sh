@@ -1,22 +1,22 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.94 - LOGGING & KEYS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.95 - STABILITY FIX       ==
 # ============================================================ #
-# ==    1. Исправлено удаление SSH-ключей (локально/удаленно).==
-# ==    2. Единый журнал событий (/var/log/reshala.log).    ==
-# ==    3. Логирование обновлений и операций с ключами.     ==
+# ==    1. УБРАН 'set -e' -> Ctrl+C теперь работает верно.  ==
+# ==    2. Исправлена передача ключа в SSH-команды.         ==
+# ==    3. Исправлено создание и запись логов.              ==
 # ============================================================ #
 
-set -euo pipefail
+# Убрали 'set -e', чтобы скрипт не падал при Ctrl+C или ошибках grep
+set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.94"
+readonly VERSION="v1.95"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
-# Изменили имя лога на более общее
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
 
@@ -33,8 +33,20 @@ LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 #                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
-# Функция лога теперь пишет в общий файл reshala.log
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null; }
+
+# Инициализация лога
+init_log() {
+    if [ ! -f "$LOGFILE" ]; then
+        run_cmd touch "$LOGFILE"
+        run_cmd chmod 666 "$LOGFILE"
+    fi
+}
+
+log() { 
+    init_log
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null
+}
+
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
 load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
@@ -54,19 +66,17 @@ install_script() {
     printf "   %b\n" "${C_RED}⚠️ ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала.${C_RESET}"; if [[ "${1:-}" != "update" ]]; then printf "   %s\n" "Установочный файл ('$0') можешь сносить."; fi
 }
 check_for_updates() {
-    set +e 
     UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"; local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0; local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"; 
-    # log "Проверка обновлений..." # Можно раскомментировать, если нужно подробное логирование каждого чиха
     while [ $attempt -le $max_attempts ]; do
         response_body=$(curl --no-progress-meter -s -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE")); curl_exit_code=$?
         if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
             LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
             if [ -n "$LATEST_VERSION" ]; then
                 local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g'); local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
-                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1); if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; fi; fi; set -e; return 0
+                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1); if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; fi; fi; return 0
             else log "Ошибка проверки обновлений: не найдена версия."; fi
         else if [ $attempt -lt $max_attempts ]; then sleep 3; fi; fi; attempt=$((attempt + 1))
-    done; UPDATE_CHECK_STATUS="ERROR"; set -e; return 1
+    done; UPDATE_CHECK_STATUS="ERROR"; return 1
 }
 run_update() {
     read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
@@ -76,10 +86,7 @@ run_update() {
     local downloaded_version; downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2)
     if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then printf "%b\n" "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; log "Ошибка целостности обновления."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return; fi
     echo "   Ставлю на место старого..."; run_cmd cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && run_cmd chmod +x "$INSTALL_PATH"; rm "$TEMP_SCRIPT"; 
-    
-    # ЛОГИРОВАНИЕ ОБНОВЛЕНИЯ
     log "✅ Скрипт успешно обновлён с версии $VERSION до $LATEST_VERSION."
-    
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
@@ -138,7 +145,17 @@ ipv6_menu() {
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
-view_logs_realtime() { local log_path="$1"; local log_name="$2"; if [ ! -f "$log_path" ]; then printf "%b\n" "❌ ${C_RED}Лог '$log_name' пуст.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0; }
+view_logs_realtime() { 
+    init_log
+    local log_path="$1"; local log_name="$2"; 
+    if [ ! -f "$log_path" ]; then printf "%b\n" "❌ ${C_RED}Лог '$log_name' пуст или не существует.${C_RESET}"; sleep 2; return; fi; 
+    echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"; 
+    local original_int_handler=$(trap -p INT); 
+    trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; 
+    (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true; 
+    if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; 
+    return 0; 
+}
 view_docker_logs() { local service_path="$1"; local service_name="$2"; if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then printf "%b\n" "❌ ${C_RED}Путь — хуйня.${C_RESET}"; sleep 2; return; fi; echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"; local original_int_handler=$(trap -p INT); trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT; (cd "$(dirname "$service_path")" && run_cmd docker compose logs -f) || true; if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi; return 0; }
 uninstall_script() { printf "%b\n" "${C_RED}Точно хочешь выгнать Решалу?${C_RESET}"; read -p "Это снесёт скрипт, конфиги и алиасы. (y/n): " confirm; if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo "Правильное решение."; wait_for_enter; return; fi; echo "Прощай, босс. Начинаю самоликвидацию..."; if [ -f "$INSTALL_PATH" ]; then run_cmd rm -f "$INSTALL_PATH"; echo "✅ Главный файл снесён."; log "-> Скрипт удалён."; fi; if [ -f "/root/.bashrc" ]; then run_cmd sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; echo "✅ Алиас выпилен."; log "-> Алиас удалён."; fi; if [ -f "$CONFIG_FILE" ]; then rm -f "$CONFIG_FILE"; echo "✅ Конфиг стёрт."; log "-> Конфиг удалён."; fi; if [ -f "$LOGFILE" ]; then run_cmd rm -f "$LOGFILE"; echo "✅ Журнал сожжён."; fi; printf "%b\n" "${C_GREEN}✅ Самоликвидация завершена.${C_RESET}"; echo "   Переподключись, чтобы алиас 'reshala' сдох."; exit 0; }
 
@@ -223,14 +240,20 @@ _remove_key_locally() {
         return
     fi
 
+    # Проверяем, есть ли ключ вообще
+    if ! grep -q -F "$pubkey" "$auth_keys_file"; then
+        printf "    %b\n" "${C_YELLOW}⚠️ Ключ не найден в файле. Пропускаю.${C_RESET}"
+        return
+    fi
+
     # Делаем бэкап
     cp "$auth_keys_file" "${auth_keys_file}.bak_reshala"
     
-    # Удаляем строку, содержащую ключ (grep -vF ищет точное совпадение строки и исключает её)
+    # Удаляем строку
     if grep -vF "$pubkey" "$auth_keys_file" > "${auth_keys_file}.tmp"; then
         mv "${auth_keys_file}.tmp" "$auth_keys_file"
         chmod 600 "$auth_keys_file"
-        printf "    %b\n" "${C_GREEN}✅ Успех! Ключ удалён (если он был).${C_RESET}"
+        printf "    %b\n" "${C_GREEN}✅ Успех! Ключ удалён.${C_RESET}"
         log "Удалён SSH-ключ локально."
     else
         printf "    %b\n" "${C_RED}❌ Ошибка при обработке файла.${C_RESET}"
@@ -375,13 +398,14 @@ _ssh_remove_keys() {
         
         local port_arg=""; if [ -n "$port" ]; then port_arg="-p $port"; fi
         
-        # Команда для удаленного выполнения: бэкап -> удаление строки через grep -v -> восстановление прав
-        # Используем одинарные кавычки для PUBKEY внутри команды, чтобы защитить пробелы, но двойные для remote_cmd, чтобы bash подставил переменную
-        local remote_cmd="cp ~/.ssh/authorized_keys ~/.ssh/authorized_keys.bak_reshala 2>/dev/null; grep -vF '$PUBKEY' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+        # Исправленная команда: экранируем кавычки для PUBKEY, чтобы bash на удаленном сервере понял пробелы
+        # Добавляем опции SSH для предотвращения зависаний
+        local ssh_opts="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PreferredAuthentications=password,publickey"
+        local remote_cmd="cp ~/.ssh/authorized_keys ~/.ssh/authorized_keys.bak_reshala 2>/dev/null; grep -vF \"$PUBKEY\" ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 
         if [ -n "$password" ]; then
             printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
-            if ! sshpass -p "$password" ssh $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$remote_cmd"; then
+            if ! sshpass -p "$password" ssh $port_arg $ssh_opts "$host" "$remote_cmd"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
@@ -389,13 +413,15 @@ _ssh_remove_keys() {
             fi
         else
             printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
-            if ! ssh $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host" "$remote_cmd"; then
+            if ! ssh $port_arg $ssh_opts "$host" "$remote_cmd"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
                 log "Удалён SSH-ключ с $host."
             fi
         fi
+        # Небольшая пауза, чтобы не словить бан
+        sleep 1
     done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
     
     printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
