@@ -74,20 +74,6 @@ get_node_version_from_logs() {
     fi
 }
 
-# Извлекает версию панели, сканируя логи всех remnawave- контейнеров
-# Проверяет, относится ли имя контейнера к экосистеме Remnawave
-is_remnawave_container() {
-    local name="$1"
-    case "$name" in
-        remnawave-*|remnanode*|remnawave_bot|*remnawave-bot*|tinyauth|support-*)
-            return 0  # Это Remnawave-контейнер
-            ;;
-        *)
-            return 1  # Сторонний
-            ;;
-    esac
-}
-
 # Извлекает версию ноды и Xray из логов (возвращает без "v")
 get_node_version_from_logs() {
     local container="$1"
