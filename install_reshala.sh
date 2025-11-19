@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.931 - SECURITY UPDATE     ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.94 - LOGGING & KEYS      ==
 # ============================================================ #
-# ==    Добавлена функция удаления SSH-ключей с серверов.   ==
-# ==    Исправлена защита от Ctrl+C.                        ==
+# ==    1. Исправлено удаление SSH-ключей (локально/удаленно).==
+# ==    2. Единый журнал событий (/var/log/reshala.log).    ==
+# ==    3. Логирование обновлений и операций с ключами.     ==
 # ============================================================ #
 
 set -euo pipefail
@@ -12,10 +13,11 @@ set -euo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.931"
+readonly VERSION="v1.94"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
-LOGFILE="/var/log/reshala_ops.log"
+# Изменили имя лога на более общее
+LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
 
 # --- Цвета ---
@@ -31,6 +33,7 @@ LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 #                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
+# Функция лога теперь пишет в общий файл reshala.log
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null; }
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
@@ -46,31 +49,38 @@ install_script() {
     if ! wget -q -O "$TEMP_SCRIPT" "$SCRIPT_URL"; then printf "%b\n" "${C_RED}❌ Не могу скачать последнюю версию. Проверь интернет или ссылку.${C_RESET}"; exit 1; fi
     run_cmd cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && run_cmd chmod +x "$INSTALL_PATH"; rm "$TEMP_SCRIPT"
     if ! grep -q "alias reshala='sudo reshala'" /root/.bashrc 2>/dev/null; then echo "alias reshala='sudo reshala'" | run_cmd tee -a /root/.bashrc >/dev/null; fi
+    log "Скрипт установлен/переустановлен (версия ${VERSION})."
     printf "\n%b\n\n" "${C_GREEN}✅ Готово. Решала в системе.${C_RESET}"; if [[ $(id -u) -eq 0 ]]; then printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}reshala${C_RESET}"; else printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"; fi
     printf "   %b\n" "${C_RED}⚠️ ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала.${C_RESET}"; if [[ "${1:-}" != "update" ]]; then printf "   %s\n" "Установочный файл ('$0') можешь сносить."; fi
 }
 check_for_updates() {
-    set +e # Временно отключаем падение при ошибке
-    UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"; local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0; local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"; log "Начинаю проверку обновлений по URL: $url_with_buster"
+    set +e 
+    UPDATE_AVAILABLE=0; LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK"; local max_attempts=3; local attempt=1; local response_body=""; local curl_exit_code=0; local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"; 
+    # log "Проверка обновлений..." # Можно раскомментировать, если нужно подробное логирование каждого чиха
     while [ $attempt -le $max_attempts ]; do
         response_body=$(curl --no-progress-meter -s -4 -L --connect-timeout 7 --max-time 15 --retry 2 --retry-delay 3 "$url_with_buster" 2> >(sed 's/^/curl-error: /' >> "$LOGFILE")); curl_exit_code=$?
         if [ $curl_exit_code -eq 0 ] && [ -n "$response_body" ]; then
             LATEST_VERSION=$(echo "$response_body" | grep -m 1 'readonly VERSION' | cut -d'"' -f2)
             if [ -n "$LATEST_VERSION" ]; then
-                log "Удалённая версия: $LATEST_VERSION. Локальная: $VERSION."; local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g'); local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
-                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1); if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; log "Обнаружена новая версия (числовое сравнение: $remote_ver_num > $local_ver_num)."; fi; fi; set -e; return 0
-            else log "Попытка $attempt: Ответ получен, но не могу найти строку с версией."; fi
-        else log "Попытка $attempt из $max_attempts не удалась (код выхода curl: $curl_exit_code)."; if [ $attempt -lt $max_attempts ]; then sleep 3; fi; fi; attempt=$((attempt + 1))
-    done; UPDATE_CHECK_STATUS="ERROR"; log "Ошибка проверки обновлений после $max_attempts попыток."; set -e; return 1
+                local local_ver_num; local_ver_num=$(echo "$VERSION" | sed 's/[^0-9.]*//g'); local remote_ver_num; remote_ver_num=$(echo "$LATEST_VERSION" | sed 's/[^0-9.]*//g')
+                if [[ "$local_ver_num" != "$remote_ver_num" ]]; then local highest_ver_num; highest_ver_num=$(printf '%s\n%s' "$local_ver_num" "$remote_ver_num" | sort -V | tail -n1); if [[ "$highest_ver_num" == "$remote_ver_num" ]]; then UPDATE_AVAILABLE=1; fi; fi; set -e; return 0
+            else log "Ошибка проверки обновлений: не найдена версия."; fi
+        else if [ $attempt -lt $max_attempts ]; then sleep 3; fi; fi; attempt=$((attempt + 1))
+    done; UPDATE_CHECK_STATUS="ERROR"; set -e; return 1
 }
 run_update() {
     read -p "   Доступна версия $LATEST_VERSION. Обновляемся, или дальше на старье пердеть будем? (y/n): " confirm_update
     if [[ "$confirm_update" != "y" && "$confirm_update" != "Y" ]]; then printf "%b\n" "${C_YELLOW}🤷‍♂️ Ну и сиди со старьём. Твоё дело.${C_RESET}"; wait_for_enter; return; fi
     printf "%b\n" "${C_CYAN}🔄 Качаю свежак...${C_RESET}"; local TEMP_SCRIPT; TEMP_SCRIPT=$(mktemp); local url_with_buster="${SCRIPT_URL}?cache_buster=$(date +%s)$(shuf -i 1000-9999 -n 1)"
-    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then printf "%b\n" "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог /var/log/reshala_ops.log.${C_RESET}"; log "wget не смог скачать $url_with_buster"; rm -f "$TEMP_SCRIPT"; wait_for_enter; return; fi
+    if ! wget -4 --timeout=20 --tries=3 --retry-connrefused -q -O "$TEMP_SCRIPT" "$url_with_buster"; then printf "%b\n" "${C_RED}❌ Хуйня какая-то. Не могу скачать обнову. Проверь инет и лог.${C_RESET}"; log "wget не смог скачать обновление."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return; fi
     local downloaded_version; downloaded_version=$(grep -m 1 'readonly VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2)
-    if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then printf "%b\n" "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; log "Скачанный файл обновления не прошел проверку. Ожидалась версия $LATEST_VERSION, в файле $downloaded_version."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return; fi
-    echo "   Ставлю на место старого..."; run_cmd cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && run_cmd chmod +x "$INSTALL_PATH"; rm "$TEMP_SCRIPT"; printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
+    if [ ! -s "$TEMP_SCRIPT" ] || ! bash -n "$TEMP_SCRIPT" 2>/dev/null || [ "$downloaded_version" != "$LATEST_VERSION" ]; then printf "%b\n" "${C_RED}❌ Скачалось какое-то дерьмо, а не скрипт. Отбой.${C_RESET}"; log "Ошибка целостности обновления."; rm -f "$TEMP_SCRIPT"; wait_for_enter; return; fi
+    echo "   Ставлю на место старого..."; run_cmd cp -- "$TEMP_SCRIPT" "$INSTALL_PATH" && run_cmd chmod +x "$INSTALL_PATH"; rm "$TEMP_SCRIPT"; 
+    
+    # ЛОГИРОВАНИЕ ОБНОВЛЕНИЯ
+    log "✅ Скрипт успешно обновлён с версии $VERSION до $LATEST_VERSION."
+    
+    printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
 # ============================================================ #
@@ -196,6 +206,7 @@ _add_key_locally() {
     else
         echo "$pubkey" >> "$auth_keys_file"
         printf "    %b\n" "${C_GREEN}✅ Успех! Ключ добавлен локально.${C_RESET}"
+        log "Добавлен SSH-ключ локально."
     fi
     
     chmod 700 /root/.ssh
@@ -208,7 +219,7 @@ _remove_key_locally() {
     printf "\n%b\n" "${C_CYAN}--> Удаляю ключ с текущего сервера (localhost)...${C_RESET}"
     
     if [ ! -f "$auth_keys_file" ]; then
-        printf "    %b\n" "${C_YELLOW}⚠️ Файл authorized_keys не найден. Нечего удалять.${C_RESET}"
+        printf "    %b\n" "${C_YELLOW}⚠️ authorized_keys не найден. Нечего удалять.${C_RESET}"
         return
     fi
 
@@ -220,6 +231,7 @@ _remove_key_locally() {
         mv "${auth_keys_file}.tmp" "$auth_keys_file"
         chmod 600 "$auth_keys_file"
         printf "    %b\n" "${C_GREEN}✅ Успех! Ключ удалён (если он был).${C_RESET}"
+        log "Удалён SSH-ключ локально."
     else
         printf "    %b\n" "${C_RED}❌ Ошибка при обработке файла.${C_RESET}"
         rm -f "${auth_keys_file}.tmp"
@@ -292,6 +304,7 @@ _ssh_add_keys() {
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
                 printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${host}:~/.ssh/authorized_keys)${C_RESET}"
+                log "Добавлен SSH-ключ на $host."
             fi
         else
             printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
@@ -300,6 +313,7 @@ _ssh_add_keys() {
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
                 printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${host}:~/.ssh/authorized_keys)${C_RESET}"
+                log "Добавлен SSH-ключ на $host."
             fi
         fi
     done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
@@ -362,6 +376,7 @@ _ssh_remove_keys() {
         local port_arg=""; if [ -n "$port" ]; then port_arg="-p $port"; fi
         
         # Команда для удаленного выполнения: бэкап -> удаление строки через grep -v -> восстановление прав
+        # Используем одинарные кавычки для PUBKEY внутри команды, чтобы защитить пробелы, но двойные для remote_cmd, чтобы bash подставил переменную
         local remote_cmd="cp ~/.ssh/authorized_keys ~/.ssh/authorized_keys.bak_reshala 2>/dev/null; grep -vF '$PUBKEY' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 
         if [ -n "$password" ]; then
@@ -370,6 +385,7 @@ _ssh_remove_keys() {
                 printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
+                log "Удалён SSH-ключ с $host."
             fi
         else
             printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
@@ -377,6 +393,7 @@ _ssh_remove_keys() {
                 printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
             else
                 printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
+                log "Удалён SSH-ключ с $host."
             fi
         fi
     done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
@@ -419,7 +436,7 @@ show_menu() {
         check_for_updates
         display_header
         
-        printf "\n%s\n\n" "Чё делать будем, босс?"; echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Форсажа»"
+        printf "\n%s\n\n" "Чё делать будем, босс?"; echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Решалы»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
         printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
@@ -429,7 +446,7 @@ show_menu() {
         echo ""; printf "   [d] %b\n" "${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"; echo "------------------------------------------------------"; 
         read -r -p "Твой выбор, босс: " choice || continue
         case $choice in
-            1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; 3) view_logs_realtime "$LOGFILE" "Форсажа";; 4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 6) security_menu;; [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; [dD]) uninstall_script;; [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; *) echo "Ты прикалываешься?"; sleep 2;;
+            1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; 3) view_logs_realtime "$LOGFILE" "Решалы";; 4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 6) security_menu;; [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; [dD]) uninstall_script;; [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; *) echo "Ты прикалываешься?"; sleep 2;;
         esac
     done
 }
