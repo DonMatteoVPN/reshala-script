@@ -57,6 +57,12 @@
 wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh | sudo bash -s install
 ```
 
+или
+
+```bash
+wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh | bash -s install
+```
+
 ⚠️ **ВАЖНО:** После установки **ПЕРЕПОДКЛЮЧИСЬ** к серверу, чтобы команда заработала.
 
 ## Как запустить?
