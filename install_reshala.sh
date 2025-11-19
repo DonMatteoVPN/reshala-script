@@ -1,20 +1,20 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.96 - CLEAN & UPDATE      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.97 - LOGS & SYSTEM       ==
 # ============================================================ #
-# ==    1. Удален функционал удаления SSH-ключей.           ==
-# ==    2. Добавлено предложение полного обновления системы ==
-# ==       при запуске (apt update/upgrade + sudo).         ==
+# ==    1. Полное логирование всех действий в журнал.       ==
+# ==    2. Авто-очистка логов старше 7 дней.                ==
+# ==    3. Умное предложение обновлений (1 раз в день).     ==
+# ==    4. Добавлен пункт [0] для ручного обновления.       ==
 # ============================================================ #
 
-# Убрали 'set -e', чтобы скрипт не падал при Ctrl+C или ошибках grep
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.96"
+readonly VERSION="v1.97"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -34,17 +34,28 @@ LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 
-# Инициализация лога
+# Инициализация и ротация логов
 init_log() {
+    # Если лог старше 7 дней - удаляем его
+    if [ -f "$LOGFILE" ]; then
+        if find "$LOGFILE" -mtime +7 -print -delete | grep -q .; then
+            echo "Старый лог удален (старше 7 дней)."
+        fi
+    fi
+
+    # Создаем файл если нет
     if [ ! -f "$LOGFILE" ]; then
         run_cmd touch "$LOGFILE"
         run_cmd chmod 666 "$LOGFILE"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] - === НОВЫЙ ЖУРНАЛ СОЗДАН ===" | run_cmd tee -a "$LOGFILE" > /dev/null
     fi
 }
 
 log() { 
-    init_log
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $1" | run_cmd tee -a "$LOGFILE" > /dev/null
+    # Пишем и в консоль (если надо отладку) и в файл
+    # Но чтобы не мусорить в меню, пишем только в файл
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] - $1"
+    echo "$msg" | run_cmd tee -a "$LOGFILE" > /dev/null
 }
 
 wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить...'; }
@@ -104,14 +115,14 @@ get_hoster_info() { curl -s --connect-timeout 5 ipinfo.io/org || echo "Не оп
 # ============================================================ #
 #                       ОСНОВНЫЕ МОДУЛИ                        #
 # ============================================================ #
-apply_bbr() { log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."; local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2); local cake_available; cake_available=$(modprobe sch_cake &>/dev/null && echo "true" || echo "false"); echo "--- ДИАГНОСТИКА ТВОЕГО ДВИГАТЕЛЯ ---"; echo "Алгоритм: $current_cc"; echo "Планировщик: $current_qdisc"; echo "------------------------------------"; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "cake" ]]; then printf "%b\n" "${C_GREEN}✅ Ты уже на максимальном форсаже (BBR+CAKE). Не мешай машине работать.${C_RESET}"; log "Проверка «Форсаж»: Максимум."; return; fi; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "fq" && "$cake_available" == "true" ]]; then printf "%b\n" "${C_YELLOW}⚠️ У тебя неплохо (BBR+FQ), но можно лучше. CAKE доступен.${C_RESET}"; read -p "   Хочешь проапгрейдиться до CAKE? Это топчик. (y/n): " upgrade_confirm; if [[ "$upgrade_confirm" != "y" && "$upgrade_confirm" != "Y" ]]; then echo "Как скажешь. Остаёмся на FQ."; return; fi; echo "Красава. Делаем как надо."; elif [[ "$current_cc" != "bbr" && "$current_cc" != "bbr2" ]]; then echo "Хм, ездишь на стоке. Пора залить ракетное топливо."; fi; local available_cc; available_cc=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | awk -F'= ' '{print $2}'); local preferred_cc="bbr"; if [[ "$available_cc" == *"bbr2"* ]]; then preferred_cc="bbr2"; fi; local preferred_qdisc="fq"; if [[ "$cake_available" == "true" ]]; then preferred_qdisc="cake"; else log "⚠️ 'cake' не найден, ставлю 'fq'."; modprobe sch_fq &>/dev/null; fi; local tcp_fastopen_val=0; [[ $(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo 0) -ge 1 ]] && tcp_fastopen_val=3; local CONFIG_SYSCTL="/etc/sysctl.d/99-reshala-boost.conf"; log "🧹 Чищу старое говно..."; run_cmd rm -f /etc/sysctl.d/*bbr*.conf /etc/sysctl.d/*network-optimizations*.conf; if [ -f /etc/sysctl.conf.bak ]; then run_cmd rm /etc/sysctl.conf.bak; fi; run_cmd sed -i.bak -E 's/^[[:space:]]*(net.core.default_qdisc|net.ipv4.tcp_congestion_control)/#&/' /etc/sysctl.conf; log "✍️  Устанавливаю новые, пиздатые настройки..."; echo "# === КОНФИГ «ФОРСАЖ» ОТ РЕШАЛЫ — НЕ ТРОГАТЬ ===
+apply_bbr() { log "🚀 ЗАПУСК ТУРБОНАДДУВА (BBR/CAKE)..."; local net_status; net_status=$(get_net_status); local current_cc; current_cc=$(echo "$net_status" | cut -d'|' -f1); local current_qdisc; current_qdisc=$(echo "$net_status" | cut -d'|' -f2); local cake_available; cake_available=$(modprobe sch_cake &>/dev/null && echo "true" || echo "false"); echo "--- ДИАГНОСТИКА ТВОЕГО ДВИГАТЕЛЯ ---"; echo "Алгоритм: $current_cc"; echo "Планировщик: $current_qdisc"; echo "------------------------------------"; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "cake" ]]; then printf "%b\n" "${C_GREEN}✅ Ты уже на максимальном форсаже (BBR+CAKE). Не мешай машине работать.${C_RESET}"; log "Проверка «Форсаж»: Максимум."; return; fi; if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "fq" && "$cake_available" == "true" ]]; then printf "%b\n" "${C_YELLOW}⚠️ У тебя неплохо (BBR+FQ), но можно лучше. CAKE доступен.${C_RESET}"; read -p "   Хочешь проапгрейдиться до CAKE? Это топчик. (y/n): " upgrade_confirm; if [[ "$upgrade_confirm" != "y" && "$upgrade_confirm" != "Y" ]]; then echo "Как скажешь. Остаёмся на FQ."; log "Отказ от апгрейда до CAKE."; return; fi; echo "Красава. Делаем как надо."; elif [[ "$current_cc" != "bbr" && "$current_cc" != "bbr2" ]]; then echo "Хм, ездишь на стоке. Пора залить ракетное топливо."; fi; local available_cc; available_cc=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | awk -F'= ' '{print $2}'); local preferred_cc="bbr"; if [[ "$available_cc" == *"bbr2"* ]]; then preferred_cc="bbr2"; fi; local preferred_qdisc="fq"; if [[ "$cake_available" == "true" ]]; then preferred_qdisc="cake"; else log "⚠️ 'cake' не найден, ставлю 'fq'."; modprobe sch_fq &>/dev/null; fi; local tcp_fastopen_val=0; [[ $(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null || echo 0) -ge 1 ]] && tcp_fastopen_val=3; local CONFIG_SYSCTL="/etc/sysctl.d/99-reshala-boost.conf"; log "🧹 Чищу старое говно..."; run_cmd rm -f /etc/sysctl.d/*bbr*.conf /etc/sysctl.d/*network-optimizations*.conf; if [ -f /etc/sysctl.conf.bak ]; then run_cmd rm /etc/sysctl.conf.bak; fi; run_cmd sed -i.bak -E 's/^[[:space:]]*(net.core.default_qdisc|net.ipv4.tcp_congestion_control)/#&/' /etc/sysctl.conf; log "✍️  Устанавливаю новые, пиздатые настройки..."; echo "# === КОНФИГ «ФОРСАЖ» ОТ РЕШАЛЫ — НЕ ТРОГАТЬ ===
 net.ipv4.tcp_congestion_control = $preferred_cc
 net.core.default_qdisc = $preferred_qdisc
 net.ipv4.tcp_fastopen = $tcp_fastopen_val
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216" | run_cmd tee "$CONFIG_SYSCTL" > /dev/null; log "🔥 Применяю настройки..."; run_cmd sysctl -p "$CONFIG_SYSCTL" >/dev/null; echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"; printf "%b\n" "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}"; }
+net.ipv4.tcp_wmem = 4096 65536 16777216" | run_cmd tee "$CONFIG_SYSCTL" > /dev/null; log "🔥 Применяю настройки..."; run_cmd sysctl -p "$CONFIG_SYSCTL" >/dev/null; echo ""; echo "--- КОНТРОЛЬНЫЙ ВЫСТРЕЛ ---"; echo "Новый алгоритм: $(sysctl -n net.ipv4.tcp_congestion_control)"; echo "Новый планировщик: $(sysctl -n net.core.default_qdisc)"; echo "---------------------------"; printf "%b\n" "${C_GREEN}✅ Твоя тачка теперь — ракета. (CC: $preferred_cc, QDisc: $preferred_qdisc)${C_RESET}"; log "BBR+CAKE успешно применены."; }
 
 check_ipv6_status() { if [ ! -d "/proc/sys/net/ipv6" ]; then printf "%b" "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"; elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then printf "%b" "${C_RED}КАСТРИРОВАН${C_RESET}"; else printf "%b" "${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi; }
 disable_ipv6() { if [ ! -d "/proc/sys/net/ipv6" ]; then printf "%b\n" "❌ ${C_YELLOW}Тут нечего отключать. Провайдер уже всё отрезал за тебя.${C_RESET}"; return; fi; if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]; then echo "⚠️ IPv6 уже кастрирован."; return; fi; echo "🔪 Кастрирую IPv6... Это не больно. Почти."; run_cmd tee /etc/sysctl.d/98-reshala-disable-ipv6.conf > /dev/null <<EOL
@@ -295,6 +306,7 @@ _ssh_add_keys() {
             printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
             if ! sshpass -p "$password" ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Автоматический вход не удался. Проверь пароль в файле.${C_RESET}"
+                log "Ошибка добавления ключа на $host (sshpass)."
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
                 printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${host}:~/.ssh/authorized_keys)${C_RESET}"
@@ -304,6 +316,7 @@ _ssh_add_keys() {
             printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
             if ! ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
                 printf "    %b\n" "${C_RED}❌ Ошибка. Проверь введённый пароль или доступность хоста.${C_RESET}"
+                log "Ошибка добавления ключа на $host (manual)."
             else
                 printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
                 printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${host}:~/.ssh/authorized_keys)${C_RESET}"
@@ -338,19 +351,19 @@ security_menu() {
 }
 
 # ============================================================ #
-#                   ПРЕДЛОЖЕНИЕ ОБНОВЛЕНИЯ                     #
+#                   ОБНОВЛЕНИЕ СИСТЕМЫ                         #
 # ============================================================ #
-offer_initial_update() {
+system_update_wizard() {
     # Проверяем, есть ли apt (Debian/Ubuntu)
-    if ! command -v apt &> /dev/null; then return; fi
+    if ! command -v apt &> /dev/null; then 
+        echo "Утилита apt не найдена. Похоже, это не Debian/Ubuntu."
+        return
+    fi
 
     clear
     printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║               ПРЕДЛОЖЕНИЕ ОБНОВЛЕНИЯ СИСТЕМЫ                 ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}║               ОБНОВЛЕНИЕ СИСТЕМЫ (APT)                       ║${C_RESET}"
     printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    echo "Перед началом работы рекомендуется обновить систему."
-    echo "Это предотвратит ошибки и закроет дыры в безопасности."
     echo ""
     printf "%b\n" "${C_BOLD}Будут выполнены следующие действия:${C_RESET}"
     printf "  1. %b\n" "${C_GREEN}apt update${C_RESET}       - Обновление списков пакетов"
@@ -374,13 +387,32 @@ offer_initial_update() {
         run_cmd apt autoclean
         run_cmd apt install -y sudo
         
+        # Запоминаем дату обновления
+        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+        
         printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена и очищена.${C_RESET}"
-        log "Обновление системы завершено."
+        log "Обновление системы завершено успешно."
         wait_for_enter
     else
-        echo "Ок, пропускаем. Но зря."
+        echo "Ок, отмена."
+        # Если отказался, тоже запоминаем, чтобы сегодня больше не спрашивать
+        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
         sleep 1
     fi
+}
+
+offer_initial_update() {
+    # Проверяем, предлагали ли мы уже сегодня обновление
+    local last_check; last_check=$(load_path "LAST_SYS_UPDATE")
+    local today; today=$(date +%Y%m%d)
+    
+    if [ "$last_check" == "$today" ]; then
+        # Уже спрашивали сегодня, пропускаем
+        return
+    fi
+    
+    # Если не спрашивали - запускаем визард
+    system_update_wizard
 }
 
 # ============================================================ #
@@ -397,7 +429,9 @@ show_menu() {
         check_for_updates
         display_header
         
-        printf "\n%s\n\n" "Чё делать будем, босс?"; echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Решалы»"
+        printf "\n%s\n\n" "Чё делать будем, босс?"; 
+        printf "   [0] %b\n" "🔄 Обновить систему (apt update & upgrade)"
+        echo "   [1] Управление «Форсажем» (BBR+CAKE)"; echo "   [2] Управление IPv6"; echo "   [3] Посмотреть журнал «Решалы»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] Посмотреть логи Бота 🤖"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] Посмотреть логи Панели 📊"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] Посмотреть логи Ноды 📊"; fi
         printf "   [6] %b\n" "Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
@@ -406,8 +440,22 @@ show_menu() {
         
         echo ""; printf "   [d] %b\n" "${C_RED}Снести Решалу нахуй (Удаление)${C_RESET}"; echo "   [q] Свалить (Выход)"; echo "------------------------------------------------------"; 
         read -r -p "Твой выбор, босс: " choice || continue
+        
+        # Логируем выбор пользователя
+        log "Пользователь выбрал пункт меню: $choice"
+        
         case $choice in
-            1) apply_bbr; wait_for_enter;; 2) ipv6_menu;; 3) view_logs_realtime "$LOGFILE" "Решалы";; 4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 6) security_menu;; [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; [dD]) uninstall_script;; [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; *) echo "Ты прикалываешься?"; sleep 2;;
+            0) system_update_wizard;;
+            1) apply_bbr; wait_for_enter;; 
+            2) ipv6_menu;; 
+            3) view_logs_realtime "$LOGFILE" "Решалы";; 
+            4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;; 
+            5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;; 
+            6) security_menu;; 
+            [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;; 
+            [dD]) uninstall_script;; 
+            [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;; 
+            *) echo "Ты прикалываешься?"; sleep 2;;
         esac
     done
 }
@@ -416,6 +464,10 @@ show_menu() {
 #                       ТОЧКА ВХОДА В СКРИПТ                   #
 # ============================================================ #
 main() {
+    # Инициализируем лог сразу при старте
+    init_log
+    log "Запуск скрипта Решала ${VERSION}"
+
     if [[ "${1:-}" == "install" ]]; then
         install_script "${2:-}"
     else
@@ -425,7 +477,7 @@ main() {
         fi
         trap "rm -f /tmp/tmp.*" EXIT
         
-        # Предлагаем обновление перед запуском меню
+        # Предлагаем обновление (если сегодня еще не предлагали)
         offer_initial_update
         
         show_menu
