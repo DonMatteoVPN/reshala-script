@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.05 - USER FRIENDLY       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.991 - BACK TO BASICS      ==
 # ============================================================ #
-# ==    1. Возвращены подробные инструкции и комментарии.   ==
-# ==    2. Исправлена генерация хеша TinyAuth (Docker).     ==
-# ==    3. Интерфейс стал дружелюбным и понятным.           ==
+# ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
+# ==    2. Исправлено отображение журнала.                  ==
+# ==    3. Оставлен функционал обновлений системы.          ==
 # ============================================================ #
 
 set -uo pipefail
@@ -13,12 +13,11 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.05"
+readonly VERSION="v1.991"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
-REMNA_DIR="/opt/remnawave"
 
 # --- Цвета ---
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m';
@@ -34,7 +33,9 @@ LATEST_VERSION=""; UPDATE_CHECK_STATUS="OK";
 # ============================================================ #
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 
+# Простая и надежная функция лога (как в v1.92)
 log() { 
+    # Если файла нет, создаем его и даем права (на всякий случай)
     if [ ! -f "$LOGFILE" ]; then 
         run_cmd touch "$LOGFILE"
         run_cmd chmod 666 "$LOGFILE"
@@ -46,18 +47,6 @@ wait_for_enter() { read -p $'\nНажми Enter, чтобы продолжить
 save_path() { local key="$1"; local value="$2"; touch "$CONFIG_FILE"; sed -i "/^$key=/d" "$CONFIG_FILE"; echo "$key=\"$value\"" >> "$CONFIG_FILE"; }
 load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/dev/null; eval echo "\${$key:-}"; }
 get_net_status() { local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "n/a"); local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "n/a"); if [ -z "$qdisc" ] || [ "$qdisc" = "pfifo_fast" ]; then qdisc=$(tc qdisc show 2>/dev/null | grep -Eo 'cake|fq' | head -n 1) || qdisc="n/a"; fi; echo "$cc|$qdisc"; }
-generate_password() { < /dev/urandom tr -dc 'A-Za-z0-9' | head -c "${1:-24}"; }
-generate_hex() { openssl rand -hex "${1:-32}"; }
-
-# Валидация домена (только латиница, цифры, точки, дефисы)
-validate_domain() {
-    local domain="$1"
-    if [[ "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
 
 # ============================================================ #
 #                 УСТАНОВКА И ОБНОВЛЕНИЕ СКРИПТА               #
@@ -152,16 +141,24 @@ ipv6_menu() {
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
+# ВОТ ОНА - СТАРАЯ ДОБРАЯ ФУНКЦИЯ ПРОСМОТРА ЛОГОВ ИЗ v1.92
 view_logs_realtime() { 
     local log_path="$1"; local log_name="$2"; 
+    
+    # Если файла нет, создаем его, чтобы tail не ругался
     if [ ! -f "$log_path" ]; then 
         run_cmd touch "$log_path"
         run_cmd chmod 666 "$log_path"
     fi
+    
     echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"
+    
     local original_int_handler=$(trap -p INT)
     trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
+    
+    # Просто tail -f, как в старые добрые времена
     (run_cmd tail -f -n 50 "$log_path" | awk -F ' - ' -v C_YELLOW="$C_YELLOW" -v C_RESET="$C_RESET" '{print C_YELLOW $1 C_RESET "  " $2}') || true
+    
     if [ -n "$original_int_handler" ]; then eval "$original_int_handler"; else trap - INT; fi
     return 0
 }
@@ -192,17 +189,42 @@ _create_servers_file_template() {
     local file_path="$1"
     cat << 'EOL' > "$file_path"
 # --- СПИСОК СЕРВЕРОВ ДЛЯ ДОБАВЛЕНИЯ SSH-КЛЮЧА ---
+#
+# --- ПРИМЕРЫ ---
+#
+# 1. Простой IP, без пароля (запросит вручную)
 # root@11.22.33.44
+#
+# 2. Сервер с нестандартным портом (без пароля)
 # root@11.22.33.44:2222
+#
+# 3. Сервер с простым паролем (авто-вход)
 # user@myserver.com MyPassword123
+#
+# 4. Пароль со спецсимволом '$' (нужно экранирование)
+# user@problem.server MyPa\$\$wordWithDollar
+#
+# 5. Пароль с пробелами и спецсимволами (лучше в кавычках)
+# user@super.server:2200 'My Crazy Password !@# %'
+#
+# --- ДОБАВЛЕНИЕ КЛЮЧА НА ТЕКУЩИЙ СЕРВЕР ---
+#
+# Чтобы добавить ключ на этот же сервер, где запущен "Решала",
+# используй специальный адрес 'localhost'. Пароль не нужен.
+# root@localhost
+#
+# --- ДОБАВЬ СВОИ СЕРВЕРЫ НИЖЕ ---
+
 EOL
 }
 _add_key_locally() {
     local pubkey="$1"
     local auth_keys_file="/root/.ssh/authorized_keys"
     printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на текущий сервер (localhost)...${C_RESET}"
+    
     mkdir -p /root/.ssh
     touch "$auth_keys_file"
+    
     if grep -q -F "$pubkey" "$auth_keys_file"; then
         printf "    %b\n" "${C_YELLOW}⚠️ Ключ уже существует. Пропускаю.${C_RESET}"
     else
@@ -210,57 +232,117 @@ _add_key_locally() {
         printf "    %b\n" "${C_GREEN}✅ Успех! Ключ добавлен локально.${C_RESET}"
         log "Добавлен SSH-ключ локально."
     fi
+    
     chmod 700 /root/.ssh
     chmod 600 "$auth_keys_file"
+    printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${auth_keys_file})${C_RESET}"
 }
 
 _ssh_add_keys() {
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_RED}❌ Операция отменена. Возвращаюсь...${C_RESET}"; sleep 1; return 1' INT
-    clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ ДОБАВЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}";
-    printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Подготовь публичный ключ ]${C_RESET}";
+
+    clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ ДОБАВЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль поможет тебе закинуть твой SSH-ключ на все твои серверы.";
+    
+    printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Подготовь публичный ключ ]${C_RESET}"; printf "%b\n" "Эти команды нужно выполнять на ${C_YELLOW}ТВОЁМ ЛИЧНОМ КОМПЬЮТЕРЕ${C_RESET}, а не на этом сервере."; printf "\n%b\n" "${C_CYAN}--- Для Windows ---${C_RESET}"; printf "%s\n" "1. Открой 'Командную строку' (cmd) или 'PowerShell'."; printf "%s\n" "2. Если ключ не создан, выполни команду (просто нажимай Enter на все вопросы):"; printf "   %b\n" "${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Чтобы посмотреть и скопировать твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ, выполни:"; printf "   %b\n" "${C_GREEN}type %USERPROFILE%\\.ssh\\id_ed25519.pub${C_RESET}"; printf "%s\n" "   (Если команда выдаёт ошибку, значит ключ не найден. Вернись к пункту 2)."; printf "\n%b\n" "${C_CYAN}--- Для Linux или macOS ---${C_RESET}"; printf "%s\n" "1. Открой терминал."; printf "%b\n" "2. Если ключ не создан, выполни: ${C_GREEN}ssh-keygen -t ed25519${C_RESET}"; printf "%b\n" "3. Посмотри и скопируй твой ${C_YELLOW}ПУБЛИЧНЫЙ${C_RESET} ключ: ${C_GREEN}cat ~/.ssh/id_ed25519.pub${C_RESET}"; printf "\n%s\n" "Скопируй всю строку, которая начинается с 'ssh-ed25519...'.";
+    
     while true; do
         read -p $'\nТы скопировал свой ПУБЛИЧНЫЙ ключ и готов продолжить? (y/n): ' confirm_key || return 1
-        case "$confirm_key" in [yY]) break ;; [nN]) return ;; *) ;; esac
+        case "$confirm_key" in
+            [yY]) break ;;
+            [nN]) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; sleep 2; return ;;
+            *) printf "\n%b\n" "${C_RED}Хуйню не вводи. Напиши 'y' (да) или 'n' (нет).${C_RESET}" ;;
+        esac
     done
-    clear; printf "%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY || return 1;
+    
+    clear; printf "%b\n" "${C_BOLD}[ ШАГ 2: Вставь свой ключ ]${C_RESET}"; read -p "Вставь сюда свой публичный ключ (ssh-ed25519...): " PUBKEY || return 1; if ! [[ "$PUBKEY" =~ ^ssh-(rsa|dss|ed25519|ecdsa) ]]; then printf "\n%b\n" "${C_RED}❌ Это не похоже на SSH-ключ. Давай по новой.${C_RESET}"; return; fi;
+    
     local SERVERS_FILE_PATH; SERVERS_FILE_PATH="$(pwd)/servers.txt"
     clear; printf "%b\n" "${C_BOLD}[ ШАГ 3: Управление списком серверов ]${C_RESET}"
     if [ -f "$SERVERS_FILE_PATH" ]; then
+        printf "%b\n" "Найден существующий файл со списком серверов: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
         read -p "Что делаем? (1-Редактировать, 2-Использовать как есть, 3-Удалить и создать заново): " choice || return 1
-        case $choice in 1) _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;; 2) ;; 3) rm -f "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;; *) return ;; esac
+        case $choice in
+            1) _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
+            2) printf "%b\n" "Продолжаю с текущим списком..." ;;
+            3) rm -f "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
+            *) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; return ;;
+        esac
     else
-        _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return
+        printf "%b\n" "Файл со списком серверов не найден. Создаю новый с инструкциями."
+        _create_servers_file_template "$SERVERS_FILE_PATH"
+        read -p "Нажми Enter, чтобы открыть редактор 'nano' для добавления серверов..."
+        _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return
     fi
-    clear; printf "%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; _ensure_package_installed "sshpass" || return; wait_for_enter;
+    printf "%b\n" "Файл готов. Он лежит здесь: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
+    if ! grep -q -E '[^[:space:]]' "$SERVERS_FILE_PATH" || ! grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH" | read -r; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст или содержит только комментарии. Операция прервана.${C_RESET}"; return; fi
+
+    clear; printf "%b\n" "${C_BOLD}[ ШАГ 4: Установка ключа на серверы ]${C_RESET}"; printf "%s\n" "Сейчас я буду по очереди подключаться к каждому серверу."; _ensure_package_installed "sshpass" || return; wait_for_enter;
     local TEMP_KEY_BASE; TEMP_KEY_BASE=$(mktemp); local TEMP_KEY_FILE="${TEMP_KEY_BASE}.pub"; echo "$PUBKEY" > "$TEMP_KEY_FILE"
+    
     while read -r -a parts; do
         [[ -z "${parts[0]}" ]] || [[ "${parts[0]}" =~ ^# ]] && continue
-        local host_port_part="${parts[0]}"; local password="${parts[*]:1}"; local host="${host_port_part%:*}"; local port="${host_port_part##*:}"
+        local host_port_part="${parts[0]}"
+        local password="${parts[*]:1}"
+        
+        local host="${host_port_part%:*}"
+        local port="${host_port_part##*:}"
         [[ "$host" == "$port" ]] && port=""
-        if [[ "$host" == "root@localhost" || "$host" == "root@127.0.0.1" ]]; then _add_key_locally "$PUBKEY"; continue; fi
+
+        if [[ "$host" == "root@localhost" || "$host" == "root@127.0.0.1" ]]; then
+            _add_key_locally "$PUBKEY"
+            continue
+        fi
+
         printf "\n%b\n" "${C_CYAN}--> Добавляю ключ на $host_port_part...${C_RESET}"
+        
         local port_arg=""; if [ -n "$port" ]; then port_arg="-p $port"; fi
+        
         if [ -n "$password" ]; then
-            if ! sshpass -p "$password" ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then printf "    %b\n" "${C_RED}❌ Ошибка.${C_RESET}"; else printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; fi
+            printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
+            if ! sshpass -p "$password" ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
+                printf "    %b\n" "${C_RED}❌ Ошибка. Автоматический вход не удался. Проверь пароль в файле.${C_RESET}"
+                log "Ошибка добавления ключа на $host (sshpass)."
+            else
+                printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
+                printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${host}:~/.ssh/authorized_keys)${C_RESET}"
+                log "Добавлен SSH-ключ на $host."
+            fi
         else
-            if ! ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then printf "    %b\n" "${C_RED}❌ Ошибка.${C_RESET}"; else printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"; fi
+            printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
+            if ! ssh-copy-id -i "$TEMP_KEY_BASE" $port_arg -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$host"; then
+                printf "    %b\n" "${C_RED}❌ Ошибка. Проверь введённый пароль или доступность хоста.${C_RESET}"
+                log "Ошибка добавления ключа на $host (manual)."
+            else
+                printf "    %b\n" "${C_GREEN}✅ Успех!${C_RESET}"
+                printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${host}:~/.ssh/authorized_keys)${C_RESET}"
+                log "Добавлен SSH-ключ на $host."
+            fi
         fi
     done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
     rm -f "$TEMP_KEY_BASE" "$TEMP_KEY_FILE"
+    
+    printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
     read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
-    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; fi
+    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"; fi
+
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
 security_menu() {
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
+
     while true; do
-        clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "   [1] Добавить SSH-ключи на серверы 🔑"; echo "   [b] Назад в главное меню"; 
+        clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "Здесь собраны инструменты для укрепления твоего сервера."; echo "----------------------------------"; echo "   [1] Добавить SSH-ключи на серверы 🔑"; echo "   [b] Назад в главное меню"; echo "----------------------------------"; 
         read -r -p "Твой выбор: " choice || continue
-        case $choice in 1) _ssh_add_keys; wait_for_enter;; [bB]) break;; *) printf "%b\n" "${C_RED}Не та кнопка.${C_RESET}"; sleep 2;; esac
+        case $choice in
+            1) _ssh_add_keys; wait_for_enter;;
+            [bB]) break;;
+            *) printf "%b\n" "${C_RED}Не та кнопка, босс. Попробуй ещё раз.${C_RESET}"; sleep 2;;
+        esac
     done
+
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
@@ -268,760 +350,65 @@ security_menu() {
 #                   ОБНОВЛЕНИЕ СИСТЕМЫ                         #
 # ============================================================ #
 system_update_wizard() {
-    if ! command -v apt &> /dev/null; then echo "Утилита apt не найдена."; return; fi
-    clear; printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"; printf "%b\n" "${C_CYAN}║               ОБНОВЛЕНИЕ СИСТЕМЫ (APT)                       ║${C_RESET}"; printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"; echo ""
+    # Проверяем, есть ли apt (Debian/Ubuntu)
+    if ! command -v apt &> /dev/null; then 
+        echo "Утилита apt не найдена. Похоже, это не Debian/Ubuntu."
+        return
+    fi
+
+    clear
+    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║               ОБНОВЛЕНИЕ СИСТЕМЫ (APT)                       ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo ""
+    printf "%b\n" "${C_BOLD}Будут выполнены следующие действия:${C_RESET}"
+    printf "  1. %b\n" "${C_GREEN}apt update${C_RESET}       - Обновление списков пакетов"
+    printf "  2. %b\n" "${C_GREEN}apt upgrade${C_RESET}      - Обновление установленных программ"
+    printf "  3. %b\n" "${C_GREEN}apt full-upgrade${C_RESET} - Полное обновление (с разрешением конфликтов)"
+    printf "  4. %b\n" "${C_GREEN}apt autoremove${C_RESET}   - Удаление неиспользуемых зависимостей"
+    printf "  5. %b\n" "${C_GREEN}apt autoclean${C_RESET}    - Очистка кэша пакетов"
+    printf "  6. %b\n" "${C_GREEN}apt install sudo${C_RESET} - Установка утилиты sudo (если нет)"
+    echo ""
+    
     read -p "Запустить полное обновление? (y/n): " confirm_upd
     if [[ "$confirm_upd" == "y" || "$confirm_upd" == "Y" ]]; then
+        echo ""
         log "Запущено полное обновление системы..."
-        run_cmd apt update && run_cmd apt upgrade -y && run_cmd apt full-upgrade -y && run_cmd apt autoremove -y && run_cmd apt autoclean && run_cmd apt install -y sudo
-        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-        printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена.${C_RESET}"; log "Обновление системы завершено."; wait_for_enter
-    else
-        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"; sleep 1
-    fi
-}
-offer_initial_update() {
-    local last_check; last_check=$(load_path "LAST_SYS_UPDATE"); local today; today=$(date +%Y%m%d)
-    if [ "$last_check" == "$today" ]; then return; fi
-    system_update_wizard
-}
-
-# ============================================================ #
-#               УСТАНОВКА REMNAWAVE (HIGH-LOAD)                #
-# ============================================================ #
-install_docker_stack() {
-    echo -e "${C_YELLOW}Проверка и установка Docker...${C_RESET}"
-    if ! command -v docker &> /dev/null; then
-        curl -fsSL https://get.docker.com | sh
-        systemctl enable --now docker
-    fi
-    if ! command -v certbot &> /dev/null; then
-        apt-get update && apt-get install -y certbot python3-certbot-dns-cloudflare python3-pip
-    fi
-}
-
-install_panel_wizard() {
-    local original_trap; original_trap=$(trap -p INT)
-    trap 'printf "\n%b\n" "${C_RED}❌ Установка прервана.${C_RESET}"; sleep 1; return' INT
-
-    clear
-    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║       МАСТЕР УСТАНОВКИ ПАНЕЛИ REMNAWAVE                      ║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    
-    install_docker_stack
-
-    # 1. TinyAuth Setup (First Priority)
-    echo ""
-    echo -e "${C_YELLOW}--- Настройка защиты входа (TinyAuth) ---${C_RESET}"
-    echo "TinyAuth необходим для защиты вашей панели от несанкционированного доступа."
-    echo "Сейчас мы создадим администратора для входа в панель."
-    
-    while true; do
-        read -p "Придумайте логин для TinyAuth (например, admin): " TINYAUTH_USER
-        if [ -n "$TINYAUTH_USER" ]; then break; fi
-    done
-    
-    while true; do
-        read -p "Придумайте пароль для TinyAuth: " TINYAUTH_PASS
-        if [ -n "$TINYAUTH_PASS" ]; then break; fi
-    done
-
-    echo "Генерация хеша для TinyAuth через Docker..."
-    # Pull image first to ensure it exists
-    echo "Скачивание образа TinyAuth..."
-    docker pull ghcr.io/maposia/remnawave-tinyauth:latest >/dev/null 2>&1
-    
-    # Generate hash using the official method
-    # Output format is username:hash
-    TINYAUTH_ENTRY=$(docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --username "$TINYAUTH_USER" --password "$TINYAUTH_PASS" --format docker 2>/dev/null)
-    
-    # Extract hash (everything after the first colon)
-    TINYAUTH_HASH=$(echo "$TINYAUTH_ENTRY" | cut -d':' -f2-)
-    
-    if [ -z "$TINYAUTH_HASH" ]; then
-        echo "${C_RED}⚠️ Ошибка генерации хеша. Проверьте Docker.${C_RESET}"
-        echo "Попробуйте запустить вручную: docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --interactive"
-        return 1
-    fi
-    
-    TINYAUTH_SECRET=$(generate_hex 32)
-    echo "${C_GREEN}✅ Хеш успешно сгенерирован.${C_RESET}"
-
-    # 2. Выбор компонентов
-    echo ""
-    echo -e "${C_YELLOW}--- Выбор компонентов ---${C_RESET}"
-    echo "Выберите дополнительные модули для установки:"
-    read -p "Установить Maposhi Mini App (Telegram Web App)? (y/n): " INSTALL_MINIAPP
-    read -p "Установить встроенную Ноду (на этом же сервере)? (y/n): " INSTALL_NODE
-
-    # 3. Сбор доменов
-    echo ""
-    echo -e "${C_YELLOW}--- Настройка доменов ---${C_RESET}"
-    echo "Вам понадобятся домены, направленные на IP этого сервера."
-    
-    while true; do
-        read -p "Введите домен для ПАНЕЛИ (например: panel.example.com): " PANEL_DOMAIN
-        if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен! Только латиница, цифры, точки и дефисы.${C_RESET}"; fi
-    done
-
-    while true; do
-        read -p "Введите домен для ПОДПИСКИ (например: sub.example.com): " SUB_DOMAIN
-        if validate_domain "$SUB_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-    done
-
-    while true; do
-        read -p "Введите домен для АВТОРИЗАЦИИ (TinyAuth) (например: auth.example.com): " AUTH_DOMAIN
-        if validate_domain "$AUTH_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-    done
-
-    MINIAPP_DOMAIN=""
-    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
-        while true; do
-            read -p "Введите домен для MINI APP (например: app.example.com): " MINIAPP_DOMAIN
-            if validate_domain "$MINIAPP_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-        done
-    fi
-
-    NODE_DOMAIN=""
-    if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        while true; do
-            read -p "Введите домен для НОДЫ (например: node.example.com): " NODE_DOMAIN
-            if validate_domain "$NODE_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-        done
-    fi
-
-    # 4. Сбор данных (Telegram и Пароли)
-    echo ""
-    echo -e "${C_YELLOW}--- Настройка доступов ---${C_RESET}"
-    echo "Эти данные нужны для уведомлений и работы панели."
-    
-    while true; do
-        read -p "Введите Telegram Bot Token (от @BotFather): " TG_BOT_TOKEN
-        if [ -n "$TG_BOT_TOKEN" ]; then break; fi
-    done
-    while true; do
-        read -p "Введите ваш Telegram Chat ID (для уведомлений): " TG_CHAT_ID
-        if [ -n "$TG_CHAT_ID" ]; then break; fi
-    done
-
-    # Генерация внутренних паролей
-    POSTGRES_PASSWORD=$(generate_password 24)
-    JWT_AUTH_SECRET=$(generate_hex 64)
-    JWT_API_TOKENS_SECRET=$(generate_hex 64)
-    METRICS_USER=$(generate_password 8)
-    METRICS_PASS=$(generate_password 12)
-
-    # 5. SSL Сертификаты
-    echo ""
-    echo -e "${C_YELLOW}--- Настройка SSL ---${C_RESET}"
-    echo "Выберите способ получения SSL-сертификатов:"
-    echo "1. Cloudflare API (рекомендуется, если домен на Cloudflare. Нужен API Token)."
-    echo "2. Standalone (использует Let's Encrypt, нужны открытые порты 80/443)."
-    read -p "Выберите метод (1/2): " SSL_METHOD
-
-    # Собираем список доменов для сертификата
-    DOMAINS_LIST="-d $PANEL_DOMAIN -d $SUB_DOMAIN -d $AUTH_DOMAIN"
-    if [ -n "$MINIAPP_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $MINIAPP_DOMAIN"; fi
-    if [ -n "$NODE_DOMAIN" ]; then DOMAINS_LIST="$DOMAINS_LIST -d $NODE_DOMAIN"; fi
-
-    if [ "$SSL_METHOD" == "1" ]; then
-        read -p "Введите Cloudflare API Token: " CF_TOKEN
-        read -p "Введите Email аккаунта Cloudflare: " CF_EMAIL
-        mkdir -p ~/.secrets/certbot
-        echo "dns_cloudflare_api_token = $CF_TOKEN" > ~/.secrets/certbot/cloudflare.ini
-        chmod 600 ~/.secrets/certbot/cloudflare.ini
-        # Для CF проще взять wildcard, если домены на одном уровне, но для надежности перечислим
-        certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini \
-            --dns-cloudflare-propagation-seconds 60 $DOMAINS_LIST \
-            --email "$CF_EMAIL" --agree-tos --non-interactive
-    else
-        read -p "Введите Email для Let's Encrypt: " LE_EMAIL
-        certbot certonly --standalone $DOMAINS_LIST --email "$LE_EMAIL" --agree-tos --non-interactive
-    fi
-
-    # 6. Создание файлов
-    mkdir -p "$REMNA_DIR"
-    cd "$REMNA_DIR" || return
-
-    # .env
-    cat <<EOF > .env
-APP_PORT=3000
-METRICS_PORT=3001
-API_INSTANCES=1
-DATABASE_URL="postgresql://postgres:${POSTGRES_PASSWORD}@remnawave-db:5432/postgres"
-REDIS_HOST=remnawave-redis
-REDIS_PORT=6379
-JWT_AUTH_SECRET=${JWT_AUTH_SECRET}
-JWT_API_TOKENS_SECRET=${JWT_API_TOKENS_SECRET}
-JWT_AUTH_LIFETIME=168
-IS_TELEGRAM_NOTIFICATIONS_ENABLED=true
-TELEGRAM_BOT_TOKEN=${TG_BOT_TOKEN}
-TELEGRAM_NOTIFY_USERS_CHAT_ID=${TG_CHAT_ID}
-TELEGRAM_NOTIFY_NODES_CHAT_ID=${TG_CHAT_ID}
-TELEGRAM_NOTIFY_CRM_CHAT_ID=${TG_CHAT_ID}
-TELEGRAM_OAUTH_ENABLED=true
-FRONT_END_DOMAIN=${PANEL_DOMAIN}
-SUB_PUBLIC_DOMAIN=${SUB_DOMAIN}
-IS_DOCS_ENABLED=false
-METRICS_USER=${METRICS_USER}
-METRICS_PASS=${METRICS_PASS}
-WEBHOOK_ENABLED=false
-HWID_DEVICE_LIMIT_ENABLED=false
-BANDWIDTH_USAGE_NOTIFICATIONS_ENABLED=true
-BANDWIDTH_USAGE_NOTIFICATIONS_THRESHOLD=[60, 80, 95]
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=postgres
-REMNAWAVE_PANEL_URL=http://remnawave-scheduler:3000
-EOF
-
-    # docker-compose.yml (Base)
-    cat <<EOF > docker-compose.yml
-x-base: &base
-  image: remnawave/backend:latest
-  restart: always
-  env_file:
-    - .env
-  networks:
-    - remnawave-network
-  logging:
-    driver: 'json-file'
-    options:
-      max-size: '25m'
-      max-file: '4'
-
-services:
-  api:
-    <<: *base
-    network_mode: "service:remnawave-scheduler"
-    networks: {}
-    command: 'pm2-runtime start ecosystem.config.js --env production --only remnawave-api'
-    depends_on:
-      remnawave-db: { condition: service_healthy }
-      remnawave-redis: { condition: service_healthy }
-      remnawave-scheduler: { condition: service_healthy }
-
-  remnawave-scheduler:
-    <<: *base
-    container_name: 'remnawave-scheduler'
-    hostname: remnawave-scheduler
-    entrypoint: ['/bin/sh', 'docker-entrypoint.sh']
-    command: 'pm2-runtime start ecosystem.config.js --env production --only remnawave-scheduler'
-    depends_on:
-      remnawave-db: { condition: service_healthy }
-      remnawave-redis: { condition: service_healthy }
-    ports:
-      - '127.0.0.1:3000:3000'
-      - '127.0.0.1:3001:3001'
-    healthcheck:
-      test: ['CMD-SHELL', 'curl -f http://localhost:\${METRICS_PORT:-3001}/health']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
-  remnawave-processor:
-    <<: *base
-    container_name: 'remnawave-processor'
-    hostname: remnawave-processor
-    command: 'pm2-runtime start ecosystem.config.js --env production --only remnawave-jobs'
-    depends_on:
-      remnawave-db: { condition: service_healthy }
-      remnawave-redis: { condition: service_healthy }
-      remnawave-scheduler: { condition: service_healthy }
-
-  remnawave-db:
-    image: postgres:17.6
-    container_name: 'remnawave-db'
-    hostname: remnawave-db
-    restart: always
-    env_file: [ .env ]
-    environment:
-      - POSTGRES_USER=\${POSTGRES_USER}
-      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
-      - POSTGRES_DB=\${POSTGRES_DB}
-    ports:
-      - '127.0.0.1:6767:5432'
-    volumes:
-      - remnawave-db-data:/var/lib/postgresql/data
-    networks:
-      - remnawave-network
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  remnawave-redis:
-    image: valkey/valkey:8.1.3-alpine
-    container_name: remnawave-redis
-    hostname: remnawave-redis
-    restart: always
-    networks:
-      - remnawave-network
-    volumes:
-      - remnawave-redis-data:/data
-    healthcheck:
-      test: ['CMD', 'valkey-cli', 'ping']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  remnawave-subscription-page:
-    image: remnawave/subscription-page:latest
-    container_name: remnawave-subscription-page
-    hostname: remnawave-subscription-page
-    restart: always
-    environment:
-      - REMNAWAVE_PANEL_URL=http://remnawave-scheduler:3000
-      - APP_PORT=3010
-      - META_TITLE=Subscription
-    ports:
-      - '127.0.0.1:3010:3010'
-    networks:
-      - remnawave-network
-    logging:
-      driver: 'json-file'
-      options: { max-size: '10m', max-file: '3' }
-
-  tinyauth:
-    image: ghcr.io/maposia/remnawave-tinyauth:latest
-    container_name: tinyauth
-    hostname: tinyauth
-    restart: always
-    ports:
-      - '127.0.0.1:3002:3002'
-    networks:
-      - remnawave-network
-    environment:
-      - PORT=3002
-      - APP_URL=https://${AUTH_DOMAIN}
-      - USERS=${TINYAUTH_USER}:${TINYAUTH_HASH}
-      - SECRET=${TINYAUTH_SECRET}
-    logging:
-      driver: 'json-file'
-      options: { max-size: '10m', max-file: '3' }
-
-  remnawave-nginx:
-    image: nginx:1.28
-    container_name: remnawave-nginx
-    hostname: remnawave-nginx
-    restart: always
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    network_mode: host
-    depends_on:
-      - api
-      - remnawave-subscription-page
-      - tinyauth
-    logging:
-      driver: 'journald'
-      options:
-        tag: "nginx.remnawave"
-EOF
-
-    # Добавляем опциональные сервисы в docker-compose
-    if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        NODE_SECRET=$(generate_hex 32)
-        cat <<EOF >> docker-compose.yml
-  remnanode:
-    image: remnawave/node:latest
-    container_name: remnanode
-    hostname: remnanode
-    restart: always
-    network_mode: host
-    environment:
-      - NODE_PORT=2222
-      - SECRET_KEY=${NODE_SECRET}
-    volumes:
-      - /dev/shm:/dev/shm:rw
-    logging:
-      driver: 'json-file'
-      options: { max-size: '10m', max-file: '3' }
-EOF
-    fi
-
-    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
-        cat <<EOF >> docker-compose.yml
-  remnawave-mini-app:
-    image: ghcr.io/maposia/remnawave-telegram-sub-mini-app:latest
-    container_name: remnawave-telegram-mini-app
-    hostname: remnawave-telegram-mini-app
-    restart: always
-    env_file:
-      - .env
-    ports:
-      - '127.0.0.1:3020:3020'
-    networks:
-      - remnawave-network
-EOF
-    fi
-
-    # Завершаем docker-compose
-    cat <<EOF >> docker-compose.yml
-
-networks:
-  remnawave-network:
-    name: remnawave-network
-    driver: bridge
-
-volumes:
-  remnawave-db-data:
-  remnawave-redis-data:
-EOF
-
-    # nginx.conf (Base)
-    cat <<EOF > nginx.conf
-user www-data;
-worker_processes auto;
-pid /run/nginx.pid;
-events { worker_connections 4096; }
-
-http {
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 90s;
-    client_max_body_size 32M;
-    server_names_hash_bucket_size 128;
-    server_tokens off;
-
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-
-    upstream remnawave_panel_api { server 127.0.0.1:3000; }
-    upstream remnawave_subscription_page { server 127.0.0.1:3010; }
-    upstream tinyauth_service { server 127.0.0.1:3002; }
-EOF
-
-    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
-        echo "    upstream remnawave_mini_app { server 127.0.0.1:3020; }" >> nginx.conf
-    fi
-
-    cat <<EOF >> nginx.conf
-
-    server {
-        listen 80;
-        server_name _;
-        return 301 https://\$host\$request_uri;
-    }
-
-    # TinyAuth Server Block
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name ${AUTH_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${AUTH_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${AUTH_DOMAIN}/privkey.pem;
-        location / {
-            proxy_pass http://tinyauth_service;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        }
-    }
-
-    # Panel Server Block (Protected)
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name ${PANEL_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
+        printf "%b\n" "${C_YELLOW}🚀 Поехали! Это может занять время...${C_RESET}"
         
-        location / {
-            auth_request /tinyauth;
-            error_page 401 = @tinyauth_login;
-
-            proxy_pass http://remnawave_panel_api;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade \$http_upgrade;
-            proxy_set_header Connection "upgrade";
-        }
-
-        location /tinyauth {
-            internal;
-            proxy_pass http://tinyauth_service/api/auth/nginx;
-            proxy_pass_request_body off;
-            proxy_set_header Content-Length "";
-            proxy_set_header X-Original-URI \$request_uri;
-        }
-
-        location @tinyauth_login {
-            return 302 https://${AUTH_DOMAIN}/login?redirect_uri=https://\$host\$request_uri;
-        }
-    }
-
-    # Subscription Page Block
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name ${SUB_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${SUB_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${SUB_DOMAIN}/privkey.pem;
-        location / {
-            proxy_pass http://remnawave_subscription_page;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-    }
-EOF
-
-    # Добавляем блоки в nginx.conf
-    if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        cat <<EOF >> nginx.conf
-    server {
-        server_name ${NODE_DOMAIN};
-        listen 443 ssl;
-        http2 on;
-        ssl_certificate /etc/letsencrypt/live/${NODE_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${NODE_DOMAIN}/privkey.pem;
-        location / {
-            proxy_pass http://127.0.0.1:2222;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade \$http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host \$host;
-        }
-    }
-EOF
-    fi
-
-    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
-        cat <<EOF >> nginx.conf
-    server {
-        listen 443 ssl;
-        http2 on;
-        server_name ${MINIAPP_DOMAIN};
-        ssl_certificate /etc/letsencrypt/live/${MINIAPP_DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${MINIAPP_DOMAIN}/privkey.pem;
-        add_header X-Frame-Options "";
-        location / {
-            proxy_pass http://remnawave_mini_app;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-    }
-EOF
-    fi
-
-    echo "}" >> nginx.conf # Закрываем http блок
-
-    # 7. Запуск
-    echo "Запуск контейнеров..."
-    docker compose up -d
-    
-    echo ""
-    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║               УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!                   ║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    echo -e "${C_GREEN}Ваши данные для доступа:${C_RESET}"
-    echo "--------------------------------------------------"
-    echo -e "🔗 Панель управления:   ${C_YELLOW}https://${PANEL_DOMAIN}${C_RESET}"
-    echo -e "🔗 Страница подписки:   ${C_YELLOW}https://${SUB_DOMAIN}${C_RESET}"
-    echo -e "🔗 Авторизация (Auth):  ${C_YELLOW}https://${AUTH_DOMAIN}${C_RESET}"
-    if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
-        echo -e "🔗 Mini App:            ${C_YELLOW}https://${MINIAPP_DOMAIN}${C_RESET}"
-    fi
-    echo "--------------------------------------------------"
-    echo -e "👤 TinyAuth Логин:      ${C_CYAN}${TINYAUTH_USER}${C_RESET}"
-    echo -e "🔑 TinyAuth Пароль:     ${C_CYAN}${TINYAUTH_PASS}${C_RESET}"
-    echo "--------------------------------------------------"
-    
-    if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
-        echo -e "${C_RED}ВНИМАНИЕ: Встроенная нода установлена.${C_RESET}"
-        echo "1. Зайдите в панель -> Создайте ноду."
-        echo "2. Скопируйте полученный Secret Key."
-        echo "3. Отредактируйте файл: ${C_YELLOW}nano /opt/remnawave/docker-compose.yml${C_RESET}"
-        echo "4. Замените SECRET_KEY на ваш ключ."
-        echo "5. Перезагрузите панель через меню (пункт 5)."
-    fi
-    
-    log "Установка Remnawave завершена."
-    wait_for_enter
-    
-    if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
-}
-
-install_node_wizard() {
-    clear
-    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║               УСТАНОВКА НОДЫ REMNAWAVE                       ║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    
-    install_docker_stack
-    mkdir -p "$REMNA_DIR"
-    cd "$REMNA_DIR" || return
-
-    while true; do
-        read -p "Введите домен для ноды (например: node.example.com): " NODE_DOMAIN
-        if validate_domain "$NODE_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
-    done
-
-    echo "Вставьте сертификат (Secret Key), полученный в панели:"
-    read -p "Key: " NODE_SECRET
-
-    # SSL
-    echo ""
-    echo "--- Настройка SSL ---"
-    echo "1. Cloudflare API"
-    echo "2. Standalone"
-    read -p "Выберите метод (1/2): " SSL_METHOD
-
-    if [ "$SSL_METHOD" == "1" ]; then
-        read -p "Введите Cloudflare API Token: " CF_TOKEN
-        read -p "Введите Email аккаунта Cloudflare: " CF_EMAIL
-        mkdir -p ~/.secrets/certbot
-        echo "dns_cloudflare_api_token = $CF_TOKEN" > ~/.secrets/certbot/cloudflare.ini
-        chmod 600 ~/.secrets/certbot/cloudflare.ini
-        certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini \
-            --dns-cloudflare-propagation-seconds 60 -d "$NODE_DOMAIN" \
-            --email "$CF_EMAIL" --agree-tos --non-interactive
+        run_cmd apt update
+        run_cmd apt upgrade -y
+        run_cmd apt full-upgrade -y
+        run_cmd apt autoremove -y
+        run_cmd apt autoclean
+        run_cmd apt install -y sudo
+        
+        # Запоминаем дату обновления
+        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+        
+        printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена и очищена.${C_RESET}"
+        log "Обновление системы завершено успешно."
+        wait_for_enter
     else
-        read -p "Введите Email для Let's Encrypt: " LE_EMAIL
-        certbot certonly --standalone -d "$NODE_DOMAIN" --email "$LE_EMAIL" --agree-tos --non-interactive
+        echo "Ок, отмена."
+        # Если отказался, тоже запоминаем, чтобы сегодня больше не спрашивать
+        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+        sleep 1
     fi
-
-    # docker-compose.yml для ноды
-    cat <<EOF > docker-compose.yml
-services:
-  remnanode:
-    image: remnawave/node:latest
-    container_name: remnanode
-    hostname: remnanode
-    restart: always
-    network_mode: host
-    environment:
-      - NODE_PORT=2222
-      - SECRET_KEY=${NODE_SECRET}
-    volumes:
-      - /dev/shm:/dev/shm:rw
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-
-  remnawave-nginx:
-    image: nginx:1.28
-    container_name: remnawave-nginx
-    hostname: remnawave-nginx
-    restart: always
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    network_mode: host
-EOF
-
-    # nginx.conf для ноды
-    cat <<EOF > nginx.conf
-server {
-    server_name ${NODE_DOMAIN};
-    listen 443 ssl;
-    http2 on;
-
-    ssl_certificate /etc/letsencrypt/live/${NODE_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${NODE_DOMAIN}/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:2222;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-    }
-}
-EOF
-
-    docker compose up -d
-    echo -e "${C_GREEN}Нода установлена!${C_RESET}"
-    wait_for_enter
 }
 
-add_node_to_panel_wizard() {
-    echo "Функция добавления ноды через API пока в разработке."
-    echo "Пожалуйста, добавьте ноду вручную через веб-интерфейс панели."
-    wait_for_enter
-}
-
-update_remnawave() {
-    if [ ! -d "$REMNA_DIR" ]; then echo "Remnawave не установлен."; sleep 2; return; fi
-    cd "$REMNA_DIR" || return
-    echo "Обновление контейнеров..."
-    docker compose pull
-    docker compose up -d
-    echo -e "${C_GREEN}Обновление завершено.${C_RESET}"
-    wait_for_enter
-}
-
-restart_remnawave() {
-    if [ ! -d "$REMNA_DIR" ]; then echo "Remnawave не установлен."; sleep 2; return; fi
-    cd "$REMNA_DIR" || return
-    echo "Перезагрузка контейнеров..."
-    docker compose restart
-    echo -e "${C_GREEN}Перезагрузка завершена.${C_RESET}"
-    wait_for_enter
-}
-
-uninstall_remnawave() {
-    echo -e "${C_RED}ВНИМАНИЕ! ЭТО УДАЛИТ ВСЕ ДАННЫЕ REMNAWAVE (БАЗУ, КОНФИГИ, СЕРТИФИКАТЫ).${C_RESET}"
-    read -p "Вы уверены? Введите 'DELETE' для подтверждения: " CONFIRM
-    if [ "$CONFIRM" != "DELETE" ]; then echo "Отмена."; sleep 1; return; fi
+offer_initial_update() {
+    # Проверяем, предлагали ли мы уже сегодня обновление
+    local last_check; last_check=$(load_path "LAST_SYS_UPDATE")
+    local today; today=$(date +%Y%m%d)
     
-    if [ -d "$REMNA_DIR" ]; then
-        cd "$REMNA_DIR" || return
-        docker compose down -v
-        cd ..
-        rm -rf "$REMNA_DIR"
-        echo -e "${C_GREEN}Remnawave полностью удален.${C_RESET}"
-    else
-        echo "Папка $REMNA_DIR не найдена."
+    if [ "$last_check" == "$today" ]; then
+        # Уже спрашивали сегодня, пропускаем
+        return
     fi
-    wait_for_enter
-}
-
-remnawave_menu() {
-    local original_trap; original_trap=$(trap -p INT)
-    trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
-
-    while true; do
-        clear
-        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-        printf "%b\n" "${C_CYAN}║               УПРАВЛЕНИЕ REMNAWAVE                           ║${C_RESET}"
-        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-        echo "   [1] Установить Панель (High-Load)"
-        echo "   [2] Установить Ноду (Standalone)"
-        echo "   [3] Добавить Ноду в Панель (API)"
-        echo "   [4] Обновить Панель/Ноду"
-        echo "   [5] Перезагрузить Панель/Ноду"
-        echo "   [6] Удалить Панель/Ноду (Полная очистка)"
-        echo "   [b] Назад в главное меню"
-        echo "----------------------------------"
-        read -r -p "Твой выбор: " choice || continue
-
-        case $choice in
-            1) install_panel_wizard;;
-            2) install_node_wizard;;
-            3) add_node_to_panel_wizard;;
-            4) update_remnawave;;
-            5) restart_remnawave;;
-            6) uninstall_remnawave;;
-            [bB]) break;;
-            *) echo "Неверный выбор."; sleep 1;;
-        esac
-    done
-    if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
+    
+    # Если не спрашивали - запускаем визард
+    system_update_wizard
 }
 
 # ============================================================ #
@@ -1038,10 +425,6 @@ show_menu() {
         check_for_updates
         display_header
 
-        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
-            printf "\n%b\n" "${C_RED}${C_BOLD}>>> 🚨 ПОДЪЕХАЛА НОВАЯ ВЕРСИЯ РЕШАЛЫ! ОБНОВИСЬ! 🚨 <<<${C_RESET}"
-        fi
-
         printf "\n%s\n\n" "Чё делать будем, босс?";
         printf "   [0] %b\n" "🔄 Обновить систему (apt update & upgrade)"
         echo "   [1] 🚀 Управление «Форсажем» (BBR+CAKE)"
@@ -1050,10 +433,9 @@ show_menu() {
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] 🤖 Посмотреть логи Бота"; fi
         if [[ "$SERVER_TYPE" == "Панель" ]]; then echo "   [5] 📊 Посмотреть логи Панели"; elif [[ "$SERVER_TYPE" == "Нода" ]]; then echo "   [5] 📊 Посмотреть логи Ноды"; fi
         printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
-        printf "   [7] %b\n" "💎 Управление Remnawave ${C_YELLOW}(Установка/Удаление)${C_RESET}"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
-            printf "   [u] %b\n" "${C_YELLOW}‼️ ОБНОВИТЬ РЕШАЛУ ‼️${C_RESET}"
+            printf "   [u] %b\n" "‼️ОБНОВИТЬ РЕШАЛУ‼️"
         elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then
             printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"
         fi
@@ -1064,6 +446,7 @@ show_menu() {
         echo "------------------------------------------------------"
         read -r -p "Твой выбор, босс: " choice || continue
 
+        # Логируем выбор пользователя
         log "Пользователь выбрал пункт меню: $choice"
 
         case $choice in
@@ -1074,7 +457,6 @@ show_menu() {
             4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;;
             5) if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
             6) security_menu;;
-            7) remnawave_menu;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
             [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
@@ -1087,6 +469,7 @@ show_menu() {
 #                       ТОЧКА ВХОДА В СКРИПТ                   #
 # ============================================================ #
 main() {
+    # Создаем лог при старте, чтобы он точно был
     if [ ! -f "$LOGFILE" ]; then 
         run_cmd touch "$LOGFILE"
         run_cmd chmod 666 "$LOGFILE"
@@ -1102,7 +485,10 @@ main() {
             exit 1;
         fi
         trap "rm -f /tmp/tmp.*" EXIT
+        
+        # Предлагаем обновление (если сегодня еще не предлагали)
         offer_initial_update
+        
         show_menu
     fi
 }
