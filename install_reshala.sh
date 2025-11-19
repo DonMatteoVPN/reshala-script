@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21111 - BACK TO BASICS      ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21112 - FIX                ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -14,7 +14,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21111"
+readonly VERSION="v2.21112"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -91,7 +91,75 @@ run_update() {
 #                 СБОР ИНФОРМАЦИИ О СИСТЕМЕ                    #
 # ============================================================ #
 get_docker_version() { local container_name="$1"; local version=""; version=$(run_cmd docker inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$container_name" 2>/dev/null); if [ -n "$version" ]; then echo "$version"; return; fi; version=$(run_cmd docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$container_name" 2>/dev/null | grep -E '^(APP_VERSION|VERSION)=' | head -n 1 | cut -d'=' -f2); if [ -n "$version" ]; then echo "$version"; return; fi; if run_cmd docker exec "$container_name" test -f /app/package.json 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/package.json 2>/dev/null | jq -r .version 2>/dev/null); if [ -n "$version" ] && [ "$version" != "null" ]; then echo "$version"; return; fi; fi; if run_cmd docker exec "$container_name" test -f /app/VERSION 2>/dev/null; then version=$(run_cmd docker exec "$container_name" cat /app/VERSION 2>/dev/null | tr -d '\n\r'); if [ -n "$version" ]; then echo "$version"; return; fi; fi; local image_tag; image_tag=$(run_cmd docker inspect --format='{{.Config.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); if [ -n "$image_tag" ] && [ "$image_tag" != "latest" ]; then echo "$image_tag"; return; fi; local image_id; image_id=$(run_cmd docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2); echo "latest (образ: ${image_id:0:7})"; }
-scan_server_state() { SERVER_TYPE="Чистый сервак"; PANEL_NODE_VERSION=""; PANEL_NODE_PATH=""; BOT_DETECTED=0; BOT_VERSION=""; BOT_PATH=""; WEB_SERVER="Не определён"; local panel_node_container=""; if run_cmd docker ps --format '{{.Names}}' | grep -q "^remnawave$"; then SERVER_TYPE="Панель"; panel_node_container="remnawave"; elif run_cmd docker ps --format '{{.Names}}' | grep -q "^remnanode$"; then SERVER_TYPE="Нода"; panel_node_container="remnanode"; fi; if [ -n "$panel_node_container" ]; then PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_node_container" 2>/dev/null); PANEL_NODE_VERSION=$(get_docker_version "$panel_node_container"); fi; local bot_container_name="remnawave_bot"; if run_cmd docker ps --format '{{.Names}}' | grep -q "^${bot_container_name}$"; then BOT_DETECTED=1; local bot_compose_path; bot_compose_path=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$bot_container_name" 2>/dev/null || true); if [ -n "$bot_compose_path" ]; then BOT_PATH=$(dirname "$bot_compose_path"); if [ -f "$BOT_PATH/VERSION" ]; then BOT_VERSION=$(cat "$BOT_PATH/VERSION"); else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; else BOT_VERSION=$(get_docker_version "$bot_container_name"); fi; fi; if run_cmd docker ps --format '{{.Names}}' | grep -q "remnawave-nginx"; then local nginx_version; nginx_version=$(run_cmd docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (в Docker)"; elif run_cmd docker ps --format '{{.Names}}' | grep -q "caddy"; then local caddy_version; caddy_version=$(run_cmd docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown"); WEB_SERVER="Caddy $caddy_version (в Docker)"; elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then if command -v nginx &> /dev/null; then local nginx_version; nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown"); WEB_SERVER="Nginx $nginx_version (на хосте)"; else WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p'); fi; fi; }
+scan_server_state() {
+    SERVER_TYPE="Чистый сервак"
+    PANEL_NODE_VERSION=""
+    PANEL_NODE_PATH=""
+    BOT_DETECTED=0
+    BOT_VERSION=""
+    BOT_PATH=""
+    WEB_SERVER="Не определён"
+
+    # Получаем список имён контейнеров
+    local container_names
+    container_names=$(run_cmd docker ps --format '{{.Names}}' 2>/dev/null)
+
+    # Определяем тип установки по наличию префиксов
+    if echo "$container_names" | grep -q "^remnawave-"; then
+        SERVER_TYPE="Панель"
+        # Попробуем найти compose-файл для панели (ищем любой контейнер с префиксом)
+        local panel_container
+        panel_container=$(echo "$container_names" | grep "^remnawave-" | head -n1)
+        if [ -n "$panel_container" ]; then
+            PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$panel_container" 2>/dev/null)
+            PANEL_NODE_VERSION=$(get_docker_version "$panel_container")
+        fi
+    elif echo "$container_names" | grep -q "^remnanode"; then
+        SERVER_TYPE="Нода"
+        local node_container
+        node_container=$(echo "$container_names" | grep "^remnanode" | head -n1)
+        if [ -n "$node_container" ]; then
+            PANEL_NODE_PATH=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$node_container" 2>/dev/null)
+            PANEL_NODE_VERSION=$(get_docker_version "$node_container")
+        fi
+    fi
+
+    # Обнаружение бота
+    if echo "$container_names" | grep -q "^remnawave_bot$"; then
+        BOT_DETECTED=1
+        local bot_compose_path
+        bot_compose_path=$(run_cmd docker inspect --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' "remnawave_bot" 2>/dev/null || true)
+        if [ -n "$bot_compose_path" ]; then
+            BOT_PATH=$(dirname "$bot_compose_path")
+            if [ -f "$BOT_PATH/VERSION" ]; then
+                BOT_VERSION=$(cat "$BOT_PATH/VERSION")
+            else
+                BOT_VERSION=$(get_docker_version "remnawave_bot")
+            fi
+        else
+            BOT_VERSION=$(get_docker_version "remnawave_bot")
+        fi
+    fi
+
+    # Определение веб-сервера
+    if echo "$container_names" | grep -q "remnawave-nginx"; then
+        local nginx_version
+        nginx_version=$(run_cmd docker exec remnawave-nginx nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        WEB_SERVER="Nginx $nginx_version (в Docker)"
+    elif echo "$container_names" | grep -q "caddy"; then
+        local caddy_version
+        caddy_version=$(run_cmd docker exec caddy caddy version 2>/dev/null | cut -d' ' -f1 || echo "unknown")
+        WEB_SERVER="Caddy $caddy_version (в Docker)"
+    elif ss -tlpn | grep -q -E 'nginx|caddy|apache2|httpd'; then
+        if command -v nginx &> /dev/null; then
+            local nginx_version
+            nginx_version=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+            WEB_SERVER="Nginx $nginx_version (на хосте)"
+        else
+            WEB_SERVER=$(ss -tlpn | grep -E 'nginx|caddy|apache2|httpd' | head -n 1 | sed -n 's/.*users:(("\([^"]*\)".*))/\2/p')
+        fi
+    fi
+}
 get_cpu_info() { local model; model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//'); echo "$model"; }
 get_cpu_load() { local cores; cores=$(nproc); local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1); echo "$load / $cores ядер"; }
 get_ram_info() { free -m | grep Mem | awk '{printf "%.1f/%.1f GB", $3/1024, $2/1024}'; }
@@ -492,7 +560,8 @@ display_header() {
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info); clear; local max_label_width=11; printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"; if [[ "$SERVER_TYPE" != "Чистый сервак" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE v$PANEL_NODE_VERSION"; else printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"; fi; if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "$BOT_VERSION"; fi; if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi; printf "%b\n" "${C_CYAN}║${C_RESET}"; printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"; printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"; printf "%b\n" "${C_CYAN}╚${C_RESET}";
 }
 show_menu() {
-    trap 'printf "\n%b\n" "${C_YELLOW}⚠️  Не убивай меня! Используй пункт [q] для выхода.${C_RESET}"; sleep 1' INT
+    # Убираем глобальный trap, обрабатываем локально
+    local INT_SHOWN=0
 
     while true; do
         scan_server_state
@@ -524,7 +593,20 @@ show_menu() {
         printf "   [d] %b\n" "${C_RED}🗑️ Снести Решалу нахуй (Удаление)${C_RESET}"
         echo "   [q] 🚪 Свалить (Выход)"
         echo "------------------------------------------------------"
-        read -r -p "Твой выбор, босс: " choice || continue
+
+        local choice=""
+        # Обработка ввода с защитой от Ctrl+C
+        if ! read -r -p "Твой выбор, босс: " choice; then
+            # read завершился ошибкой (например, SIGINT)
+            if [ "$INT_SHOWN" != "1" ]; then
+                printf "\n%b\n" "${C_YELLOW}⚠️  Не убивай меня! Используй пункт [q] для выхода.${C_RESET}"
+                sleep 1
+                INT_SHOWN=1
+            fi
+            continue
+        else
+            INT_SHOWN=0
+        fi
 
         # Логируем выбор пользователя
         log "Пользователь выбрал пункт меню: $choice"
