@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.95 - STABILITY FIX       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.96 - CLEAN & UPDATE      ==
 # ============================================================ #
-# ==    1. УБРАН 'set -e' -> Ctrl+C теперь работает верно.  ==
-# ==    2. Исправлена передача ключа в SSH-команды.         ==
-# ==    3. Исправлено создание и запись логов.              ==
+# ==    1. Удален функционал удаления SSH-ключей.           ==
+# ==    2. Добавлено предложение полного обновления системы ==
+# ==       при запуске (apt update/upgrade + sudo).         ==
 # ============================================================ #
 
 # Убрали 'set -e', чтобы скрипт не падал при Ctrl+C или ошибках grep
@@ -14,7 +14,7 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.95"
+readonly VERSION="v1.96"
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
@@ -230,36 +230,7 @@ _add_key_locally() {
     chmod 600 "$auth_keys_file"
     printf "    %b\n" "${C_GRAY}(Ключ добавлен в ${auth_keys_file})${C_RESET}"
 }
-_remove_key_locally() {
-    local pubkey="$1"
-    local auth_keys_file="/root/.ssh/authorized_keys"
-    printf "\n%b\n" "${C_CYAN}--> Удаляю ключ с текущего сервера (localhost)...${C_RESET}"
-    
-    if [ ! -f "$auth_keys_file" ]; then
-        printf "    %b\n" "${C_YELLOW}⚠️ authorized_keys не найден. Нечего удалять.${C_RESET}"
-        return
-    fi
 
-    # Проверяем, есть ли ключ вообще
-    if ! grep -q -F "$pubkey" "$auth_keys_file"; then
-        printf "    %b\n" "${C_YELLOW}⚠️ Ключ не найден в файле. Пропускаю.${C_RESET}"
-        return
-    fi
-
-    # Делаем бэкап
-    cp "$auth_keys_file" "${auth_keys_file}.bak_reshala"
-    
-    # Удаляем строку
-    if grep -vF "$pubkey" "$auth_keys_file" > "${auth_keys_file}.tmp"; then
-        mv "${auth_keys_file}.tmp" "$auth_keys_file"
-        chmod 600 "$auth_keys_file"
-        printf "    %b\n" "${C_GREEN}✅ Успех! Ключ удалён.${C_RESET}"
-        log "Удалён SSH-ключ локально."
-    else
-        printf "    %b\n" "${C_RED}❌ Ошибка при обработке файла.${C_RESET}"
-        rm -f "${auth_keys_file}.tmp"
-    fi
-}
 _ssh_add_keys() {
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_RED}❌ Операция отменена. Возвращаюсь...${C_RESET}"; sleep 1; return 1' INT
@@ -348,104 +319,68 @@ _ssh_add_keys() {
 
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
-_ssh_remove_keys() {
-    local original_trap; original_trap=$(trap -p INT)
-    trap 'printf "\n%b\n" "${C_RED}❌ Операция отменена. Возвращаюсь...${C_RESET}"; sleep 1; return 1' INT
 
-    clear; printf "%b\n" "${C_CYAN}--- МАССОВОЕ УДАЛЕНИЕ SSH-КЛЮЧЕЙ ---${C_RESET}"; printf "%s\n" "Этот модуль удалит указанный ключ из authorized_keys на твоих серверах.";
-    
-    printf "\n%b\n" "${C_BOLD}[ ШАГ 1: Вставь ключ для удаления ]${C_RESET}"; 
-    read -p "Вставь сюда публичный ключ (или его уникальную часть), который нужно УДАЛИТЬ: " PUBKEY || return 1; 
-    if [ -z "$PUBKEY" ]; then printf "\n%b\n" "${C_RED}❌ Пусто. Отмена.${C_RESET}"; return; fi;
-
-    local SERVERS_FILE_PATH; SERVERS_FILE_PATH="$(pwd)/servers.txt"
-    clear; printf "%b\n" "${C_BOLD}[ ШАГ 2: Управление списком серверов ]${C_RESET}"
-    if [ -f "$SERVERS_FILE_PATH" ]; then
-        printf "%b\n" "Найден существующий файл со списком серверов: ${C_YELLOW}${SERVERS_FILE_PATH}${C_RESET}"
-        read -p "Что делаем? (1-Редактировать, 2-Использовать как есть, 3-Удалить и создать заново): " choice || return 1
-        case $choice in
-            1) _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
-            2) printf "%b\n" "Продолжаю с текущим списком..." ;;
-            3) rm -f "$SERVERS_FILE_PATH"; _create_servers_file_template "$SERVERS_FILE_PATH"; _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return ;;
-            *) printf "\n%b\n" "${C_RED}Отмена. Возвращаю в меню.${C_RESET}"; return ;;
-        esac
-    else
-        printf "%b\n" "Файл со списком серверов не найден. Создаю новый с инструкциями."
-        _create_servers_file_template "$SERVERS_FILE_PATH"
-        read -p "Нажми Enter, чтобы открыть редактор 'nano' для добавления серверов..."
-        _ensure_package_installed "nano" && nano "$SERVERS_FILE_PATH" || return
-    fi
-
-    if ! grep -q -E '[^[:space:]]' "$SERVERS_FILE_PATH" || ! grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH" | read -r; then printf "\n%b\n" "${C_RED}❌ Файл со списком серверов пуст. Операция прервана.${C_RESET}"; return; fi
-
-    clear; printf "%b\n" "${C_BOLD}[ ШАГ 3: Удаление ключа с серверов ]${C_RESET}"; printf "%s\n" "Начинаю зачистку..."; _ensure_package_installed "sshpass" || return; wait_for_enter;
-    
-    while read -r -a parts; do
-        [[ -z "${parts[0]}" ]] || [[ "${parts[0]}" =~ ^# ]] && continue
-        local host_port_part="${parts[0]}"
-        local password="${parts[*]:1}"
-        
-        local host="${host_port_part%:*}"
-        local port="${host_port_part##*:}"
-        [[ "$host" == "$port" ]] && port=""
-
-        if [[ "$host" == "root@localhost" || "$host" == "root@127.0.0.1" ]]; then
-            _remove_key_locally "$PUBKEY"
-            continue
-        fi
-
-        printf "\n%b\n" "${C_CYAN}--> Обрабатываю $host_port_part...${C_RESET}"
-        
-        local port_arg=""; if [ -n "$port" ]; then port_arg="-p $port"; fi
-        
-        # Исправленная команда: экранируем кавычки для PUBKEY, чтобы bash на удаленном сервере понял пробелы
-        # Добавляем опции SSH для предотвращения зависаний
-        local ssh_opts="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o PreferredAuthentications=password,publickey"
-        local remote_cmd="cp ~/.ssh/authorized_keys ~/.ssh/authorized_keys.bak_reshala 2>/dev/null; grep -vF \"$PUBKEY\" ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
-
-        if [ -n "$password" ]; then
-            printf "%b\n" "${C_GRAY}    (использую пароль из файла)${C_RESET}"
-            if ! sshpass -p "$password" ssh $port_arg $ssh_opts "$host" "$remote_cmd"; then
-                printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
-            else
-                printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
-                log "Удалён SSH-ключ с $host."
-            fi
-        else
-            printf "%b\n" "${C_GRAY}    (пароль не указан, будет запрошен вручную)${C_RESET}"
-            if ! ssh $port_arg $ssh_opts "$host" "$remote_cmd"; then
-                printf "    %b\n" "${C_RED}❌ Ошибка подключения или выполнения.${C_RESET}"
-            else
-                printf "    %b\n" "${C_GREEN}✅ Выполнено.${C_RESET}"
-                log "Удалён SSH-ключ с $host."
-            fi
-        fi
-        # Небольшая пауза, чтобы не словить бан
-        sleep 1
-    done < <(grep -v -E '^\s*#|^\s*$' "$SERVERS_FILE_PATH")
-    
-    printf "\n%b\n" "${C_GREEN}🎉 Готово! Процесс завершён.${C_RESET}"
-    read -p "Хочешь удалить файл со списком серверов '${SERVERS_FILE_PATH}'? (y/n): " cleanup_choice
-    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then rm -f "$SERVERS_FILE_PATH"; printf "%b\n" "${C_GREEN}✅ Файл удалён.${C_RESET}"; fi
-
-    if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
-}
 security_menu() {
     local original_trap; original_trap=$(trap -p INT)
     trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
 
     while true; do
-        clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "Здесь собраны инструменты для укрепления твоего сервера."; echo "----------------------------------"; echo "   [1] Добавить SSH-ключи на серверы 🔑"; echo "   [2] Удалить SSH-ключ с серверов 🗑️"; echo "   [b] Назад в главное меню"; echo "----------------------------------"; 
+        clear; echo "--- МЕНЮ БЕЗОПАСНОСТИ ---"; echo "Здесь собраны инструменты для укрепления твоего сервера."; echo "----------------------------------"; echo "   [1] Добавить SSH-ключи на серверы 🔑"; echo "   [b] Назад в главное меню"; echo "----------------------------------"; 
         read -r -p "Твой выбор: " choice || continue
         case $choice in
             1) _ssh_add_keys; wait_for_enter;;
-            2) _ssh_remove_keys; wait_for_enter;;
             [bB]) break;;
             *) printf "%b\n" "${C_RED}Не та кнопка, босс. Попробуй ещё раз.${C_RESET}"; sleep 2;;
         esac
     done
 
     if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
+}
+
+# ============================================================ #
+#                   ПРЕДЛОЖЕНИЕ ОБНОВЛЕНИЯ                     #
+# ============================================================ #
+offer_initial_update() {
+    # Проверяем, есть ли apt (Debian/Ubuntu)
+    if ! command -v apt &> /dev/null; then return; fi
+
+    clear
+    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║               ПРЕДЛОЖЕНИЕ ОБНОВЛЕНИЯ СИСТЕМЫ                 ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo ""
+    echo "Перед началом работы рекомендуется обновить систему."
+    echo "Это предотвратит ошибки и закроет дыры в безопасности."
+    echo ""
+    printf "%b\n" "${C_BOLD}Будут выполнены следующие действия:${C_RESET}"
+    printf "  1. %b\n" "${C_GREEN}apt update${C_RESET}       - Обновление списков пакетов"
+    printf "  2. %b\n" "${C_GREEN}apt upgrade${C_RESET}      - Обновление установленных программ"
+    printf "  3. %b\n" "${C_GREEN}apt full-upgrade${C_RESET} - Полное обновление (с разрешением конфликтов)"
+    printf "  4. %b\n" "${C_GREEN}apt autoremove${C_RESET}   - Удаление неиспользуемых зависимостей"
+    printf "  5. %b\n" "${C_GREEN}apt autoclean${C_RESET}    - Очистка кэша пакетов"
+    printf "  6. %b\n" "${C_GREEN}apt install sudo${C_RESET} - Установка утилиты sudo (если нет)"
+    echo ""
+    
+    read -p "Запустить полное обновление? (y/n): " confirm_upd
+    if [[ "$confirm_upd" == "y" || "$confirm_upd" == "Y" ]]; then
+        echo ""
+        log "Запущено полное обновление системы..."
+        printf "%b\n" "${C_YELLOW}🚀 Поехали! Это может занять время...${C_RESET}"
+        
+        run_cmd apt update
+        run_cmd apt upgrade -y
+        run_cmd apt full-upgrade -y
+        run_cmd apt autoremove -y
+        run_cmd apt autoclean
+        run_cmd apt install -y sudo
+        
+        printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена и очищена.${C_RESET}"
+        log "Обновление системы завершено."
+        wait_for_enter
+    else
+        echo "Ок, пропускаем. Но зря."
+        sleep 1
+    fi
 }
 
 # ============================================================ #
@@ -489,6 +424,10 @@ main() {
             exit 1;
         fi
         trap "rm -f /tmp/tmp.*" EXIT
+        
+        # Предлагаем обновление перед запуском меню
+        offer_initial_update
+        
         show_menu
     fi
 }
