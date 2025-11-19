@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.02 - MODULAR INSTALL     ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.03 - HIGH-LOAD STACK     ==
 # ============================================================ #
-# ==    1. Модульная установка (выбор компонентов).         ==
-# ==    2. Ручной ввод всех доменов (без авто-генерации).   ==
-# ==    3. Динамическая сборка docker-compose и nginx.      ==
-# ==    4. Улучшено уведомление об обновлениях.             ==
+# ==    1. Docker Compose High-Load (API/Scheduler/TinyAuth)==
+# ==    2. Опциональная установка Mini App.                 ==
+# ==    3. Строгая валидация доменов (только латиница).     ==
+# ==    4. Правильная генерация Nginx и TinyAuth Hash.      ==
 # ============================================================ #
 
 set -uo pipefail
@@ -14,8 +14,8 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.02"
-readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
+readonly VERSION="v2.03"
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
@@ -49,6 +49,16 @@ load_path() { local key="$1"; [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" &>/
 get_net_status() { local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "n/a"); local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "n/a"); if [ -z "$qdisc" ] || [ "$qdisc" = "pfifo_fast" ]; then qdisc=$(tc qdisc show 2>/dev/null | grep -Eo 'cake|fq' | head -n 1) || qdisc="n/a"; fi; echo "$cc|$qdisc"; }
 generate_password() { < /dev/urandom tr -dc 'A-Za-z0-9' | head -c "${1:-24}"; }
 generate_hex() { openssl rand -hex "${1:-32}"; }
+
+# Валидация домена (только латиница, цифры, точки, дефисы)
+validate_domain() {
+    local domain="$1"
+    if [[ "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
 
 # ============================================================ #
 #                 УСТАНОВКА И ОБНОВЛЕНИЕ СКРИПТА               #
@@ -314,19 +324,19 @@ install_panel_wizard() {
     echo "--- Настройка доменов ---"
     while true; do
         read -p "Введите домен для ПАНЕЛИ (например: panel.example.com): " PANEL_DOMAIN
-        if [ -n "$PANEL_DOMAIN" ]; then break; fi
+        if validate_domain "$PANEL_DOMAIN"; then break; else echo "${C_RED}Некорректный домен! Только латиница, цифры, точки и дефисы.${C_RESET}"; fi
     done
 
     while true; do
         read -p "Введите домен для ПОДПИСКИ (например: sub.example.com): " SUB_DOMAIN
-        if [ -n "$SUB_DOMAIN" ]; then break; fi
+        if validate_domain "$SUB_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
     done
 
     NODE_DOMAIN=""
     if [[ "$INSTALL_NODE" == "y" || "$INSTALL_NODE" == "Y" ]]; then
         while true; do
             read -p "Введите домен для НОДЫ (например: node.example.com): " NODE_DOMAIN
-            if [ -n "$NODE_DOMAIN" ]; then break; fi
+            if validate_domain "$NODE_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
         done
     fi
 
@@ -335,12 +345,12 @@ install_panel_wizard() {
     if [[ "$INSTALL_BOT" == "y" || "$INSTALL_BOT" == "Y" ]]; then
         while true; do
             read -p "Введите домен для ВЕБХУКОВ бота (например: hooks.example.com): " BOT_HOOK_DOMAIN
-            if [ -n "$BOT_HOOK_DOMAIN" ]; then break; fi
+            if validate_domain "$BOT_HOOK_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
         done
         # API домен для бота нужен, если есть MiniApp или внешние запросы
         while true; do
             read -p "Введите домен для API бота (например: api.example.com): " BOT_API_DOMAIN
-            if [ -n "$BOT_API_DOMAIN" ]; then break; fi
+            if validate_domain "$BOT_API_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
         done
     fi
 
@@ -348,7 +358,7 @@ install_panel_wizard() {
     if [[ "$INSTALL_MINIAPP" == "y" || "$INSTALL_MINIAPP" == "Y" ]]; then
         while true; do
             read -p "Введите домен для MINI APP (например: app.example.com): " MINIAPP_DOMAIN
-            if [ -n "$MINIAPP_DOMAIN" ]; then break; fi
+            if validate_domain "$MINIAPP_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
         done
     fi
 
@@ -356,7 +366,7 @@ install_panel_wizard() {
     if [[ "$INSTALL_TINYAUTH" == "y" || "$INSTALL_TINYAUTH" == "Y" ]]; then
         while true; do
             read -p "Введите домен для АВТОРИЗАЦИИ (например: auth.example.com): " AUTH_DOMAIN
-            if [ -n "$AUTH_DOMAIN" ]; then break; fi
+            if validate_domain "$AUTH_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
         done
     fi
 
@@ -398,9 +408,15 @@ install_panel_wizard() {
         fi
         
         if [ -z "${TINYAUTH_HASH:-}" ]; then
-            echo "${C_RED}⚠️ Не удалось сгенерировать хеш. Используем дефолтный пароль 'admin'.${C_RESET}"
-            TINYAUTH_HASH='$$2a$$10$$3ZN61q1blIl4sPeAplhGf.L0jCVouaCD.3jAvFIRV1pS1PnQi8be2'
-            TINYAUTH_PASS="admin"
+            echo "${C_RED}⚠️ Не удалось сгенерировать хеш через Python. Пробуем через Docker...${C_RESET}"
+            # Попытка через Docker, как в инструкции
+            TINYAUTH_HASH=$(docker run --rm ghcr.io/maposia/remnawave-tinyauth:latest user create --username "$TINYAUTH_USER" --password "$TINYAUTH_PASS" --format docker | cut -d':' -f2)
+        fi
+
+        if [ -z "${TINYAUTH_HASH:-}" ]; then
+             echo "${C_RED}⚠️ Не удалось сгенерировать хеш. Используем дефолтный пароль 'admin'.${C_RESET}"
+             TINYAUTH_HASH='$$2a$$10$$3ZN61q1blIl4sPeAplhGf.L0jCVouaCD.3jAvFIRV1pS1PnQi8be2'
+             TINYAUTH_PASS="admin"
         fi
         
         TINYAUTH_SECRET=$(generate_hex 32)
@@ -862,8 +878,8 @@ install_node_wizard() {
     cd "$REMNA_DIR" || return
 
     while true; do
-        read -p "Введите домен для ноды (например, node.example.com): " NODE_DOMAIN
-        if [ -n "$NODE_DOMAIN" ]; then break; fi
+        read -p "Введите домен для ноды (например: node.example.com): " NODE_DOMAIN
+        if validate_domain "$NODE_DOMAIN"; then break; else echo "${C_RED}Некорректный домен!${C_RESET}"; fi
     done
 
     echo "Вставьте сертификат (Secret Key), полученный в панели:"
