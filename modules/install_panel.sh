@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================ #
-# ==   МОДУЛЬ: REMNAWAVE MANAGER (ULTRA EDITION)            ==
-# ==   Based on eGames logic, powered by RESHALA config     ==
+# ==   МОДУЛЬ: REMNAWAVE MANAGER (RESHALA ULTRA)            ==
+# ==   Logic: eGames | Config: DonMatteo High-Load          ==
 # ============================================================ #
 
 # --- Цвета ---
@@ -37,6 +37,39 @@ check_dependencies() {
 # --- ГЕНЕРАТОРЫ ---
 generate_tinyauth_hash() { htpasswd -nB -C 10 "$1" "$2" | cut -d ":" -f 2; }
 generate_secret() { openssl rand -hex 32; }
+
+# ============================================================ #
+#                    API ФУНКЦИИ (Для добавления нод)          #
+# ============================================================ #
+
+make_api_request() {
+    local method=$1
+    local url=$2
+    local token=$3
+    local data=$4
+
+    local headers=(
+        -H "Authorization: Bearer $token"
+        -H "Content-Type: application/json"
+    )
+
+    if [ -n "$data" ]; then
+        curl -s -X "$method" "$url" "${headers[@]}" -d "$data"
+    else
+        curl -s -X "$method" "$url" "${headers[@]}"
+    fi
+}
+
+api_login() {
+    local username=$1
+    local password=$2
+    # Стучимся локально, чтобы обойти TinyAuth и Nginx
+    local response=$(curl -s -X POST "http://127.0.0.1:3000/api/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$username\",\"password\":\"$password\"}")
+    
+    echo "$response" | jq -r '.response.accessToken // .accessToken // empty'
+}
 
 # ============================================================ #
 #                    ЛОГИКА УСТАНОВКИ ПАНЕЛИ                   #
@@ -182,8 +215,6 @@ services:
     logging:
       driver: 'json-file'
       options: { max-size: '10m', max-file: '3' }
-    volumes:
-      - ./myapp-config.json:/opt/app/frontend/assets/app-config.json:ro
 
   remnawave-mini-app:
     image: ghcr.io/maposia/remnawave-telegram-sub-mini-app:latest
@@ -196,8 +227,6 @@ services:
       - '127.0.0.1:3020:3020'
     networks:
       - remnawave-network
-    volumes:
-       - ./myapp-config.json:/app/public/assets/app-config.json:ro
 
   remnawave-nginx:
     image: nginx:1.28
@@ -290,25 +319,7 @@ AUTH_API_KEY=
 REDIRECT_LINK=https://subapp.$MAIN_DOMAIN/myredirect/?telegram&redirect_to=
 EOF
 
-    # 4. myapp-config.json
-    log "📝 Заливаю конфиг приложений..."
-    cat <<'EOF' > "$PANEL_DIR/myapp-config.json"
-{
-  "config": {
-    "additionalLocales": ["ru"],
-    "branding": {
-      "logoUrl": "https://lh3.googleusercontent.com/rd-d/ALs6j_FQxFkowBZNSpfISvbAX-ynoZUwhkF2w5ELfknE_gH7yGcsP2hvwoFvW4Aj9dqtz6FVtAkHPl8oo3-Ps9WVcLrtE2YVGV357AfqktJAoyeotXYB01GzngQHyUa5kDfFbJKz8P0zENgAEY63Ak4VEsp4imasl0DCfR_FDcomFVjOyoejE9T8m90TzTo0m8PFw_ZXjDK5MbOpF9HV2q4SLWO2DIkYwoUJcyH_qE0toH4KAGzpmHfYk0DnRZ1Z4JPkZUroPcPXppX9G9F5fGowfeIWReyXw0aSy8D9BvNfA7duAQzXtG7IG1Uf8dY20cNw6b5DEsDKYoryu3Fd8PP54dkBp3ferYsaNmgWCOjNjLTYETqBWgJFfqwLQT9DoXSG7oA0eYY_p1wvllLhfObcYJlMlKcpkKOf291uMmYPz__gJYqOJ23trMResj5j4u_uMyoIIRrI4jF84D4ycklM6C_VJMRREjJtGbvaU47GdRvVtyqVziRtD6g3x24Kj1PiTa3cWPe8Rlnr2hC-YOnL6jBH5fPAB_N2LcwoSwarFM0gA8WRRKfujTna6XDM7xc3x6h5s2DglNiSfdcT0gPQxdmSR4MqPvWz9HZd5WNkH3LQUkDTd7-5NX6yrhvuB-l444Y1b5EE8GTYedLNifncKoh4w4cInlf5eaFyrEAcMlDbm_aeoSOsuTP1uLUyqu48NHyNxiwXLCPgdVQJYqXszr2BImiuzCWvUhzsK_MSnU7OM6bhtRr-i465Z-pFCIXyaye4mBE4PaUxnWk9CMqEyyYYTyf0jMjtNVhz8G1k_dhzOMuR5fiNexvN9e7vk6DfUGQAZUxPB-Xt4rdbyUnaZGumpU1RLldVlqrRtEWPrjo9AWHJfiKmhogKrI2CgifF_09Y2RKGWVhrey4xvYsnGoMTa9BF3uxuHUV7dOXM7CmhJyiXkskQlq6NdsJ8ZeSXptNMkdjWmWuttxsre9Xs_7HdNjZsSEaEAUYX2gPUjXBPUM_xrMnBs60M1v6ugG2W27gwb69F5bZ6GOH83_3WoaR5ycRQX4I5GgTd39uSBaQZuQ=w1809-h921?auditContext=forDisplay",
-      "name": "DonMatteo VPN",
-      "supportUrl": "https://t.me/DonMatteo_Support_bot"
-    }
-  },
-  "platforms": {
-    "ios": [], "android": [], "linux": [], "macos": [], "windows": [], "androidTV": [], "appleTV": []
-  }
-}
-EOF
-
-    # 5. SSL
+    # 4. SSL
     log "🔒 Получаю SSL сертификаты..."
     DOMAINS="-d auth.$MAIN_DOMAIN -d panrem.$MAIN_DOMAIN -d subrem.$MAIN_DOMAIN -d hooks.$MAIN_DOMAIN -d miniapp.$MAIN_DOMAIN -d apibot.$MAIN_DOMAIN -d subapp.$MAIN_DOMAIN"
     
@@ -321,7 +332,7 @@ EOF
         systemctl start nginx
     fi
 
-    # 6. Nginx Config
+    # 5. Nginx Config
     log "⚙️ Настраиваю Nginx..."
     if [ -f "$NGINX_CONF_DIR/nginx.conf" ]; then
         mv "$NGINX_CONF_DIR/nginx.conf" "$NGINX_CONF_DIR/nginx.conf.bak.$(date +%s)"
@@ -535,12 +546,7 @@ services:
     environment:
       - REMNAWAVE_PANEL_URL=$PANEL_URL
       - REMNAWAVE_NODE_SECRET=$NODE_SECRET
-      # Опционально: SSL сертификаты, если нужны
-      # - SSL_CERT_PATH=/etc/letsencrypt/live/domain/fullchain.pem
-      # - SSL_KEY_PATH=/etc/letsencrypt/live/domain/privkey.pem
     volumes:
-      # Если нужны сертификаты, раскомментируй:
-      # - /etc/letsencrypt:/etc/letsencrypt:ro
       - remnanode-data:/app/data
 
 volumes:
@@ -552,6 +558,119 @@ EOF
     run_cmd docker compose up -d
 
     echo -e "\n${C_GREEN}✅ НОДА ЗАПУЩЕНА!${C_RESET}"
+    wait_enter
+}
+
+# ============================================================ #
+#                    ДОБАВЛЕНИЕ НОДЫ В ПАНЕЛЬ (API)            #
+# ============================================================ #
+add_node_to_panel_logic() {
+    clear
+    echo -e "${C_CYAN}--- ДОБАВЛЕНИЕ НОДЫ В ПАНЕЛЬ (API) ---${C_RESET}"
+    
+    if [ ! -d "$PANEL_DIR" ]; then
+        error "Панель не найдена на этом сервере. Запускай это там, где стоит панель."
+    fi
+
+    read -p "Введи имя для новой ноды (например, Germany): " NODE_NAME
+    read -p "Введи домен/IP ноды (например, node.domain.com): " NODE_ADDRESS
+    
+    echo -e "\n${C_YELLOW}Введи данные админа панели для авторизации:${C_RESET}"
+    read -p "Логин: " P_USER
+    read -s -p "Пароль: " P_PASS
+    echo ""
+
+    log "🔑 Авторизуюсь в API..."
+    TOKEN=$(api_login "$P_USER" "$P_PASS")
+    
+    if [[ -z "$TOKEN" ]]; then
+        error "Не удалось получить токен. Проверь логин/пароль."
+    fi
+    log "✅ Токен получен."
+
+    # 1. Генерируем ключи Xray
+    log "🔑 Генерирую ключи Xray..."
+    KEYS_JSON=$(make_api_request "GET" "http://127.0.0.1:3000/api/system/tools/x25519/generate" "$TOKEN")
+    PRIVATE_KEY=$(echo "$KEYS_JSON" | jq -r '.response.keypairs[0].privateKey')
+    
+    if [[ -z "$PRIVATE_KEY" || "$PRIVATE_KEY" == "null" ]]; then
+        error "Ошибка генерации ключей."
+    fi
+
+    # 2. Создаем Config Profile
+    log "📝 Создаю профиль конфигурации..."
+    # Генерируем JSON для профиля (упрощенный Reality)
+    SHORT_ID=$(openssl rand -hex 8)
+    PROFILE_JSON=$(jq -n \
+        --arg name "$NODE_NAME" \
+        --arg pk "$PRIVATE_KEY" \
+        --arg sid "$SHORT_ID" \
+        --arg dest "www.google.com:443" \
+        --arg sn "www.google.com" \
+        '{
+            name: $name,
+            config: {
+                log: { loglevel: "warning" },
+                inbounds: [{
+                    tag: "VLESS-REALITY",
+                    port: 443,
+                    protocol: "vless",
+                    settings: { clients: [], decryption: "none" },
+                    streamSettings: {
+                        network: "tcp",
+                        security: "reality",
+                        realitySettings: {
+                            show: false,
+                            dest: $dest,
+                            xver: 0,
+                            serverNames: [$sn],
+                            privateKey: $pk,
+                            shortIds: [$sid]
+                        }
+                    }
+                }],
+                outbounds: [{tag: "DIRECT", protocol: "freedom"}]
+            }
+        }')
+
+    PROFILE_RESP=$(make_api_request "POST" "http://127.0.0.1:3000/api/config-profiles" "$TOKEN" "$PROFILE_JSON")
+    PROFILE_UUID=$(echo "$PROFILE_RESP" | jq -r '.response.uuid')
+    INBOUND_UUID=$(echo "$PROFILE_RESP" | jq -r '.response.inbounds[0].uuid')
+
+    if [[ -z "$PROFILE_UUID" || "$PROFILE_UUID" == "null" ]]; then
+        error "Ошибка создания профиля: $(echo $PROFILE_RESP | jq -r '.message')"
+    fi
+
+    # 3. Создаем Ноду
+    log "🖥️  Создаю ноду в панели..."
+    NODE_JSON=$(jq -n \
+        --arg name "$NODE_NAME" \
+        --arg addr "$NODE_ADDRESS" \
+        --arg puuid "$PROFILE_UUID" \
+        --arg iuuid "$INBOUND_UUID" \
+        '{
+            name: $name,
+            address: $addr,
+            port: 2222,
+            configProfile: {
+                activeConfigProfileUuid: $puuid,
+                activeInbounds: [$iuuid]
+            },
+            isTrafficTrackingActive: false
+        }')
+
+    NODE_RESP=$(make_api_request "POST" "http://127.0.0.1:3000/api/nodes" "$TOKEN" "$NODE_JSON")
+    NODE_UUID=$(echo "$NODE_RESP" | jq -r '.response.uuid')
+    NODE_SECRET=$(echo "$NODE_RESP" | jq -r '.response.secret')
+
+    if [[ -z "$NODE_UUID" || "$NODE_UUID" == "null" ]]; then
+        error "Ошибка создания ноды: $(echo $NODE_RESP | jq -r '.message')"
+    fi
+
+    echo -e "\n${C_GREEN}✅ НОДА УСПЕШНО ДОБАВЛЕНА В ПАНЕЛЬ!${C_RESET}"
+    echo -e "Теперь иди на сервер ноды и при установке введи:"
+    echo -e "URL Панели: ${C_YELLOW}https://panrem.$MAIN_DOMAIN${C_RESET}"
+    echo -e "Node Secret: ${C_YELLOW}$NODE_SECRET${C_RESET}"
     wait_enter
 }
 
@@ -626,11 +745,12 @@ main_menu() {
         echo ""
         echo "   1. 💿 Установить Панель (High-Load + TinyAuth)"
         echo "   2. 📡 Установить Ноду (Remnanode)"
+        echo "   3. ➕ Добавить Ноду в Панель (API)"
         echo "   -------------------------------------------"
-        echo "   3. 🛠  Управление Панелью (Логи, Рестарт, Обнова)"
-        echo "   4. 🛠  Управление Нодой (Логи, Рестарт, Обнова)"
+        echo "   4. 🛠  Управление Панелью (Логи, Рестарт, Обнова)"
+        echo "   5. 🛠  Управление Нодой (Логи, Рестарт, Обнова)"
         echo "   -------------------------------------------"
-        echo "   5. 🗑  Удалить всё к чертям"
+        echo "   6. 🗑  Удалить всё к чертям"
         echo "   b. 🔙 Выход в главное меню Решалы"
         echo ""
         read -p "Твой выбор: " choice
@@ -638,13 +758,14 @@ main_menu() {
         case $choice in
             1) install_panel_logic ;;
             2) install_node_logic ;;
-            3) 
+            3) add_node_to_panel_logic ;;
+            4) 
                 if [ -d "$PANEL_DIR" ]; then manage_panel_menu; else echo "❌ Панель не установлена."; sleep 2; fi 
                 ;;
-            4) 
+            5) 
                 if [ -d "$NODE_DIR" ]; then manage_node_menu; else echo "❌ Нода не установлена."; sleep 2; fi 
                 ;;
-            5) uninstall_menu ;;
+            6) uninstall_menu ;;
             [bB]) break ;;
             *) echo "Не тупи."; sleep 1 ;;
         esac
