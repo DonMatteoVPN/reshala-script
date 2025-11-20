@@ -132,13 +132,9 @@ api_req() {
 }
 
 get_panel_token() {
-    # Пытаемся найти токен или логинимся
     if [ -f "$INSTALL_DIR/token" ]; then
         cat "$INSTALL_DIR/token"
     else
-        # Если токена нет, надо бы его получить, но тут нужна интерактивность.
-        # Для упрощения считаем, что мы только что поставили панель или юзер знает креды.
-        # В рамках скрипта "Добавить ноду" мы спросим креды.
         echo ""
     fi
 }
@@ -232,6 +228,8 @@ services:
     environment:
       - REMNAWAVE_PANEL_URL=http://remnawave:3000
       - APP_PORT=3010
+      - META_TITLE=Remnawave
+      - META_DESCRIPTION=VPN Service
     ports:
       - "127.0.0.1:3010:3010"
 
