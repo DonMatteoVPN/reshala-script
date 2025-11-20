@@ -54,7 +54,7 @@
 Скопируй. Вставь. Нажми Enter. Всё.
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh | sudo bash -s install
+wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh | bash -s install
 ```
 
 или
