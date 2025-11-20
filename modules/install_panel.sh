@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==   МОДУЛЬ REMNAWAVE: РАЗДЕЛЬНАЯ СБОРКА (PRO EDITION)    ==
+# ==   МОДУЛЬ REMNAWAVE: ULTIMATE HIGH-LOAD (RESHALA ED.)   ==
 # ============================================================ #
 
 # --- Цвета ---
@@ -74,6 +74,8 @@ check_domain_ip() {
             read -p "Продолжаем? (y/n): " confirm
             [[ "$confirm" != "y" ]] && msg_err "Отмена."
         fi
+    else
+        msg_ok "IP совпадает."
     fi
 }
 
@@ -131,204 +133,511 @@ api_req() {
     fi
 }
 
-get_panel_token() {
-    if [ -f "$INSTALL_DIR/token" ]; then
-        cat "$INSTALL_DIR/token"
-    else
-        echo ""
+# ============================================================ #
+#                    TINY AUTH ГЕНЕРАТОР                       #
+# ============================================================ #
+
+generate_tinyauth_hash() {
+    local user=$1
+    local pass=$2
+    msg_info "Генерирую хэш для TinyAuth..."
+    
+    # Используем docker run для генерации, передавая ввод через pipe
+    # Формат ввода: username -> enter -> password -> enter -> format (docker) -> enter
+    local OUTPUT=$(printf "$user\n$pass\n$pass\ndocker\n" | docker run --rm -i ghcr.io/maposia/remnawave-tinyauth:latest user create --interactive 2>/dev/null)
+    
+    # Парсим вывод, ищем строку вида user:hash
+    local HASH=$(echo "$OUTPUT" | grep -oE "$user:\\\$2[abxy]\\\$.{56}")
+    
+    if [ -z "$HASH" ]; then
+        # Фолбек, если греп не сработал, пробуем найти просто длинную строку с $2
+        HASH=$(echo "$OUTPUT" | grep -oE "\\\$2[abxy]\\\$.{56}")
+        if [ -n "$HASH" ]; then HASH="$user:$HASH"; fi
     fi
+
+    if [ -z "$HASH" ]; then
+        msg_err "Не удалось сгенерировать хэш TinyAuth. Вывод: $OUTPUT"
+    fi
+    
+    echo "$HASH"
 }
 
 # ============================================================ #
-#                    ЧАСТЬ 1: УСТАНОВКА ПАНЕЛИ                 #
+#                    УСТАНОВКА ПАНЕЛИ (HIGH LOAD)              #
 # ============================================================ #
 
-install_panel_only() {
-    msg_info "Ставим ПАНЕЛЬ (Master Server)..."
-    
+install_panel_highload() {
+    msg_info "Начинаем сборку High-Load Панели..."
+
+    # 1. Сбор доменов
     read -p "Домен ПАНЕЛИ (panel.domain.com): " DOMAIN_PANEL
     check_domain_ip "$DOMAIN_PANEL" "false"
     
     read -p "Домен ПОДПИСКИ (sub.domain.com): " DOMAIN_SUB
     check_domain_ip "$DOMAIN_SUB" "false"
 
-    issue_certs "$DOMAIN_PANEL" "$DOMAIN_SUB"
+    read -p "Домен АВТОРИЗАЦИИ TinyAuth (auth.domain.com): " DOMAIN_AUTH
+    check_domain_ip "$DOMAIN_AUTH" "false"
 
+    # Опция Mini App
+    local INSTALL_MINIAPP="false"
+    local DOMAIN_APP=""
+    read -p "Ставим Telegram Mini App? (y/n): " confirm_app
+    if [[ "$confirm_app" == "y" ]]; then
+        INSTALL_MINIAPP="true"
+        read -p "Домен MINI APP (app.domain.com): " DOMAIN_APP
+        check_domain_ip "$DOMAIN_APP" "false"
+    fi
+
+    # 2. Сертификаты
+    local domains_to_cert=("$DOMAIN_PANEL" "$DOMAIN_SUB" "$DOMAIN_AUTH")
+    if [ "$INSTALL_MINIAPP" == "true" ]; then domains_to_cert+=("$DOMAIN_APP"); fi
+    issue_certs "${domains_to_cert[@]}"
+
+    # 3. Данные TinyAuth
+    msg_info "Настройка защиты TinyAuth..."
+    read -p "Придумай Логин для входа в панель (защита): " TA_USER
+    read -p "Придумай Пароль для входа в панель: " TA_PASS
+    local TA_HASH=$(generate_tinyauth_hash "$TA_USER" "$TA_PASS")
+    local TA_SECRET=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
+    msg_ok "Хэш TinyAuth сгенерирован."
+
+    # 4. Данные Панели
     local P_USER=$(generate_user)
     local P_PASS=$(generate_pass)
     local JWT_SECRET=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 64)
-    local COOKIE_1=$(generate_user)
-    local COOKIE_2=$(generate_user)
+    local WEBHOOK_SECRET=$(openssl rand -hex 32)
 
     mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR"
 
-    # .env
+    # 5. .env Файл
     cat > .env <<EOL
+### APP ###
 APP_PORT=3000
 METRICS_PORT=3001
 API_INSTANCES=1
-DATABASE_URL="postgresql://postgres:postgres@remnawave-db:5432/postgres"
+
+### REDIS ###
 REDIS_HOST=remnawave-redis
 REDIS_PORT=6379
+
+### JWT ###
 JWT_AUTH_SECRET=$JWT_SECRET
 JWT_API_TOKENS_SECRET=$JWT_SECRET
 JWT_AUTH_LIFETIME=168
+
+### TELEGRAM ###
 IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
+TELEGRAM_BOT_TOKEN=change_me
+TELEGRAM_NOTIFY_USERS_CHAT_ID=change_me
+TELEGRAM_NOTIFY_NODES_CHAT_ID=change_me
+TELEGRAM_NOTIFY_CRM_CHAT_ID=change_me
+TELEGRAM_OAUTH_ENABLED=false
+
+### FRONTEND ###
 FRONT_END_DOMAIN=$DOMAIN_PANEL
 SUB_PUBLIC_DOMAIN=$DOMAIN_SUB
+
+### SWAGGER ###
 IS_DOCS_ENABLED=false
+SWAGGER_PATH=/docs
+SCALAR_PATH=/scalar
+
+### METRICS ###
 METRICS_USER=$(generate_user)
 METRICS_PASS=$(generate_pass)
+
+### WEBHOOK ###
+WEBHOOK_ENABLED=false
+WEBHOOK_URL=https://hooks.example.com/webhook
+WEBHOOK_SECRET_HEADER=$WEBHOOK_SECRET
+
+### HWID ###
 HWID_DEVICE_LIMIT_ENABLED=false
+HWID_FALLBACK_DEVICE_LIMIT=3
+HWID_MAX_DEVICES_ANNOUNCE="Limit reached."
+
+### BANDWIDTH ###
+BANDWIDTH_USAGE_NOTIFICATIONS_ENABLED=true
+BANDWIDTH_USAGE_NOTIFICATIONS_THRESHOLD=[60, 80, 95]
+
+### DB ###
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 POSTGRES_DB=postgres
+DATABASE_URL="postgresql://postgres:postgres@remnawave-db:5432/postgres"
+
+### MINI APP ###
+REMNAWAVE_PANEL_URL=http://remnawave-scheduler:3000
+REMNAWAVE_TOKEN=PLACEHOLDER_TOKEN
+BUY_LINK=https://t.me/DonMatteo_VPN_bot
+AUTH_API_KEY=$(openssl rand -hex 32)
+REDIRECT_LINK=https://$DOMAIN_APP/myredirect/?telegram&redirect_to=
 EOL
 
-    # Пути к сертификатам
-    local CERT_PATH_PANEL="/etc/letsencrypt/live/$DOMAIN_PANEL"
-    [ ! -d "$CERT_PATH_PANEL" ] && CERT_PATH_PANEL="/etc/letsencrypt/live/$(echo $DOMAIN_PANEL | awk -F'.' '{print $(NF-1)"."$NF}')"
-    local CERT_PATH_SUB="/etc/letsencrypt/live/$DOMAIN_SUB"
-    [ ! -d "$CERT_PATH_SUB" ] && CERT_PATH_SUB="/etc/letsencrypt/live/$(echo $DOMAIN_SUB | awk -F'.' '{print $(NF-1)"."$NF}')"
-
-    # docker-compose.yml (ТОЛЬКО ПАНЕЛЬ)
+    # 6. docker-compose.yml
     cat > docker-compose.yml <<EOL
+x-base: &base
+  image: remnawave/backend:latest
+  restart: always
+  env_file:
+    - .env
+  networks:
+    - remnawave-network
+  logging:
+    driver: 'json-file'
+    options: { max-size: '25m', max-file: '4' }
+
 services:
+  api:
+    <<: *base
+    network_mode: "service:remnawave-scheduler"
+    networks: {}
+    command: 'pm2-runtime start ecosystem.config.js --env production --only remnawave-api'
+    depends_on:
+      remnawave-db: { condition: service_healthy }
+      remnawave-redis: { condition: service_healthy }
+      remnawave-scheduler: { condition: service_healthy }
+
+  remnawave-scheduler:
+    <<: *base
+    container_name: 'remnawave-scheduler'
+    hostname: remnawave-scheduler
+    entrypoint: ['/bin/sh', 'docker-entrypoint.sh']
+    command: 'pm2-runtime start ecosystem.config.js --env production --only remnawave-scheduler'
+    depends_on:
+      remnawave-db: { condition: service_healthy }
+      remnawave-redis: { condition: service_healthy }
+    ports:
+      - '127.0.0.1:3000:3000'
+      - '127.0.0.1:3001:3001'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:\${METRICS_PORT:-3001}/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  remnawave-processor:
+    <<: *base
+    container_name: 'remnawave-processor'
+    hostname: remnawave-processor
+    command: 'pm2-runtime start ecosystem.config.js --env production --only remnawave-jobs'
+    depends_on:
+      remnawave-db: { condition: service_healthy }
+      remnawave-redis: { condition: service_healthy }
+      remnawave-scheduler: { condition: service_healthy }
+
   remnawave-db:
-    image: postgres:16-alpine
+    image: postgres:17.6
+    container_name: 'remnawave-db'
+    hostname: remnawave-db
     restart: always
-    env_file: .env
+    env_file: [ .env ]
+    environment:
+      - POSTGRES_USER=\${POSTGRES_USER}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB}
+    ports:
+      - '127.0.0.1:6767:5432'
     volumes:
       - remnawave-db-data:/var/lib/postgresql/data
+    networks:
+      - remnawave-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      test: ['CMD-SHELL', 'pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}']
+      interval: 10s
       timeout: 5s
       retries: 5
 
   remnawave-redis:
-    image: redis:alpine
+    image: valkey/valkey:8.1.3-alpine
+    container_name: remnawave-redis
+    hostname: remnawave-redis
     restart: always
+    networks:
+      - remnawave-network
     volumes:
       - remnawave-redis-data:/data
-
-  remnawave:
-    image: remnawave/backend:latest
-    restart: always
-    env_file: .env
-    depends_on:
-      remnawave-db:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   remnawave-subscription-page:
     image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription-page
+    hostname: remnawave-subscription-page
     restart: always
     environment:
-      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      - REMNAWAVE_PANEL_URL=http://remnawave-scheduler:3000
       - APP_PORT=3010
       - META_TITLE=Remnawave
       - META_DESCRIPTION=VPN Service
     ports:
-      - "127.0.0.1:3010:3010"
+      - '127.0.0.1:3010:3010'
+    networks:
+      - remnawave-network
+    logging:
+      driver: 'json-file'
+      options: { max-size: '10m', max-file: '3' }
+
+  tinyauth:
+    image: ghcr.io/maposia/remnawave-tinyauth:latest
+    container_name: tinyauth
+    hostname: tinyauth
+    restart: always
+    ports:
+      - '127.0.0.1:3002:3002'
+    networks:
+      - remnawave-network
+    environment:
+      - PORT=3002
+      - APP_URL=https://$DOMAIN_AUTH
+      - USERS=$TA_HASH
+      - SECRET=$TA_SECRET
+    logging:
+      driver: 'json-file'
+      options: { max-size: '10m', max-file: '3' }
 
   remnawave-nginx:
-    image: nginx:alpine
+    image: nginx:1.28
+    container_name: remnawave-nginx
+    hostname: remnawave-nginx
     restart: always
-    network_mode: host
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - $CERT_PATH_PANEL:/etc/nginx/ssl/panel:ro
-      - $CERT_PATH_SUB:/etc/nginx/ssl/sub:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    network_mode: host
+    depends_on:
+      - api
+      - remnawave-subscription-page
+      - tinyauth
+    logging:
+      driver: 'journald'
+      options:
+        tag: "nginx.remnawave"
+EOL
+
+    # Добавляем Mini App в docker-compose если нужно
+    if [ "$INSTALL_MINIAPP" == "true" ]; then
+        cat >> docker-compose.yml <<EOL
+
+  remnawave-mini-app:
+    image: ghcr.io/maposia/remnawave-telegram-sub-mini-app:latest
+    container_name: remnawave-telegram-mini-app
+    hostname: remnawave-telegram-mini-app
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - '127.0.0.1:3020:3020'
+    networks:
+      - remnawave-network
+EOL
+    fi
+
+    # Финализируем docker-compose
+    cat >> docker-compose.yml <<EOL
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
 
 volumes:
   remnawave-db-data:
   remnawave-redis-data:
 EOL
 
-    # nginx.conf
-    cat > nginx.conf <<EOL
-map \$http_upgrade \$connection_upgrade { default upgrade; "" close; }
-map \$http_cookie \$auth_cookie { default 0; "~*${COOKIE_1}=${COOKIE_2}" 1; }
-map \$arg_${COOKIE_1} \$auth_query { default 0; "${COOKIE_2}" 1; }
-map "\$auth_cookie\$auth_query" \$authorized { "~1" 1; default 0; }
-map \$arg_${COOKIE_1} \$set_cookie_header { "${COOKIE_2}" "${COOKIE_1}=${COOKIE_2}; Path=/; HttpOnly; Secure; Max-Age=31536000"; default ""; }
+    # 7. nginx.conf
+    # Определяем пути к сертификатам
+    get_cert_path() {
+        local d=$1
+        local p="/etc/letsencrypt/live/$d"
+        [ ! -d "$p" ] && p="/etc/letsencrypt/live/$(echo $d | awk -F'.' '{print $(NF-1)"."$NF}')"
+        echo "$p"
+    }
+    
+    local CP_PANEL=$(get_cert_path "$DOMAIN_PANEL")
+    local CP_SUB=$(get_cert_path "$DOMAIN_SUB")
+    local CP_AUTH=$(get_cert_path "$DOMAIN_AUTH")
+    local CP_APP=""
+    if [ "$INSTALL_MINIAPP" == "true" ]; then CP_APP=$(get_cert_path "$DOMAIN_APP"); fi
 
-server {
-    server_name $DOMAIN_PANEL;
-    listen 443 ssl;
-    http2 on;
-    ssl_certificate /etc/nginx/ssl/panel/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/panel/privkey.pem;
-    add_header Set-Cookie \$set_cookie_header;
-    location / {
-        if (\$authorized = 0) { return 444; }
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    cat > nginx.conf <<EOL
+worker_processes auto;
+events { worker_connections 1024; }
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+
+    upstream tinyauth { server 127.0.0.1:3002; }
+    upstream remnawave { server 127.0.0.1:3000; }
+    upstream subpage { server 127.0.0.1:3010; }
+    upstream miniapp { server 127.0.0.1:3020; }
+
+    # --- TINY AUTH ---
+    server {
+        server_name $DOMAIN_AUTH;
+        listen 443 ssl;
+        http2 on;
+        ssl_certificate "$CP_AUTH/fullchain.pem";
+        ssl_certificate_key "$CP_AUTH/privkey.pem";
+        
+        location / {
+            proxy_pass http://tinyauth;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
     }
-}
-server {
-    server_name $DOMAIN_SUB;
-    listen 443 ssl;
-    http2 on;
-    ssl_certificate /etc/nginx/ssl/sub/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/sub/privkey.pem;
-    location / {
-        proxy_pass http://127.0.0.1:3010;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
+
+    # --- PANEL (PROTECTED) ---
+    server {
+        server_name $DOMAIN_PANEL;
+        listen 443 ssl;
+        http2 on;
+        ssl_certificate "$CP_PANEL/fullchain.pem";
+        ssl_certificate_key "$CP_PANEL/privkey.pem";
+
+        location / {
+            auth_request /tinyauth;
+            error_page 401 = @tinyauth_login;
+
+            proxy_pass http://remnawave;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+
+        location /tinyauth {
+            proxy_pass http://tinyauth/api/auth/nginx;
+            proxy_set_header x-forwarded-proto \$scheme;
+            proxy_set_header x-forwarded-host \$http_host;
+            proxy_set_header x-forwarded-uri \$request_uri;
+        }
+
+        location @tinyauth_login {
+            return 302 https://$DOMAIN_AUTH/login?redirect_uri=\$scheme://\$http_host\$request_uri;
+        }
     }
-}
+
+    # --- SUBSCRIPTION PAGE ---
+    server {
+        server_name $DOMAIN_SUB;
+        listen 443 ssl;
+        http2 on;
+        ssl_certificate "$CP_SUB/fullchain.pem";
+        ssl_certificate_key "$CP_SUB/privkey.pem";
+
+        location / {
+            proxy_pass http://subpage;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+    }
 EOL
 
-    msg_info "Запускаю панель..."
+    if [ "$INSTALL_MINIAPP" == "true" ]; then
+        cat >> nginx.conf <<EOL
+
+    # --- MINI APP ---
+    server {
+        server_name $DOMAIN_APP;
+        listen 443 ssl;
+        http2 on;
+        ssl_certificate "$CP_APP/fullchain.pem";
+        ssl_certificate_key "$CP_APP/privkey.pem";
+
+        location / {
+            proxy_pass http://miniapp;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+    }
+EOL
+    fi
+    echo "}" >> nginx.conf
+
+    # 8. Запуск
+    msg_info "Запускаю систему..."
     run_cmd docker compose up -d
 
-    # Ждем старта
-    msg_info "Жду API..."
+    msg_info "Жду старта API (15 сек)..."
     sleep 15
-    
-    # Регистрация админа
+
+    # 9. Регистрация и Токен
     msg_info "Регаю админа..."
     local REG_RESP=$(api_req "POST" "http://127.0.0.1:3000/api/auth/register" "" "{\"username\":\"$P_USER\",\"password\":\"$P_PASS\"}")
     local TOKEN=$(echo $REG_RESP | jq -r '.response.accessToken')
-    
+
     if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
         msg_err "Ошибка регистрации. Ответ: $REG_RESP"
     fi
-    
-    # Сохраняем токен
     echo "$TOKEN" > "$INSTALL_DIR/token"
 
-    # Генерируем ключи панели
-    msg_info "Генерирую ключи панели..."
+    # 10. Обновление токена для Mini App
+    if [ "$INSTALL_MINIAPP" == "true" ]; then
+        msg_info "Прописываю токен в Mini App..."
+        sed -i "s|PLACEHOLDER_TOKEN|$TOKEN|g" .env
+        run_cmd docker compose up -d remnawave-mini-app
+    fi
+
+    # 11. Ключи и очистка
     local PUB_KEY_RESP=$(api_req "GET" "http://127.0.0.1:3000/api/keygen" "$TOKEN")
-    local PUB_KEY=$(echo $PUB_KEY_RESP | jq -r '.response.pubKey')
-    
-    # Удаляем дефолтный профиль
     local DEF_UUID=$(api_req "GET" "http://127.0.0.1:3000/api/config-profiles" "$TOKEN" | jq -r '.response.configProfiles[] | select(.name=="Default-Profile") | .uuid')
     [ -n "$DEF_UUID" ] && api_req "DELETE" "http://127.0.0.1:3000/api/config-profiles/$DEF_UUID" "$TOKEN"
 
     echo ""
-    msg_ok "ПАНЕЛЬ УСТАНОВЛЕНА!"
+    msg_ok "HIGH-LOAD ПАНЕЛЬ УСТАНОВЛЕНА!"
     echo "----------------------------------------------------"
-    echo "🔗 Вход: https://$DOMAIN_PANEL/auth/login?${COOKIE_1}=${COOKIE_2}"
-    echo "👤 Логин:  $P_USER"
-    echo "🔑 Пароль: $P_PASS"
+    echo "🔗 Панель: https://$DOMAIN_PANEL"
+    echo "🛡️ TinyAuth: $TA_USER / $TA_PASS"
+    echo "👤 Админ:    $P_USER"
+    echo "🔑 Пароль:   $P_PASS"
+    if [ "$INSTALL_MINIAPP" == "true" ]; then
+        echo "📱 Mini App: https://$DOMAIN_APP"
+    fi
     echo "----------------------------------------------------"
-    echo "Теперь иди на сервер НОДЫ и ставь ноду. Но сначала..."
-    echo "Запусти пункт 'Добавить НОДУ' в этом меню, чтобы получить ключи!"
+    echo "Не забудь добавить ноду через меню!"
 }
 
 # ============================================================ #
-#                    ЧАСТЬ 2: ДОБАВЛЕНИЕ НОДЫ (НА ПАНЕЛИ)      #
+#                    МЕНЮ                                      #
 # ============================================================ #
+
+show_menu() {
+    clear
+    printf "%b\n" "${C_CYAN}--- REMNAWAVE: HIGH-LOAD & SECURITY ---${C_RESET}"
+    echo "1. 🔥 Установить ПАНЕЛЬ (High-Load + TinyAuth + MiniApp)"
+    echo "2. ➕ Добавить НОДУ (Выполнять на ПАНЕЛИ)"
+    echo "3. 🧱 Установить НОДУ (Выполнять на НОДЕ)"
+    echo "0. Назад"
+    echo "---------------------------------------------------"
+    read -p "Твой выбор: " choice
+
+    case $choice in
+        1) check_dependencies; install_panel_highload ;;
+        2) check_dependencies; add_node_on_panel ;; # Функция из прошлого ответа (она не менялась)
+        3) check_dependencies; install_node_only ;; # Функция из прошлого ответа (она не менялась)
+        0) exit 0 ;;
+        *) msg_err "Мимо." ;;
+    esac
+}
 
 add_node_on_panel() {
     msg_info "Добавляем ноду в базу панели..."
@@ -495,29 +804,6 @@ EOL
     echo ""
     msg_ok "НОДА ЗАПУЩЕНА!"
     echo "Если ты всё сделал правильно в панели, она должна загореться зеленым."
-}
-
-# ============================================================ #
-#                    МЕНЮ                                      #
-# ============================================================ #
-
-show_menu() {
-    clear
-    printf "%b\n" "${C_CYAN}--- REMNAWAVE: РАЗДЕЛЬНАЯ УСТАНОВКА ---${C_RESET}"
-    echo "1. 🔥 Установить ПАНЕЛЬ (Master Server)"
-    echo "2. ➕ Добавить НОДУ (Выполнять на ПАНЕЛИ)"
-    echo "3. 🧱 Установить НОДУ (Выполнять на НОДЕ)"
-    echo "0. Назад"
-    echo "---------------------------------------------------"
-    read -p "Твой выбор: " choice
-
-    case $choice in
-        1) check_dependencies; install_panel_only ;;
-        2) check_dependencies; add_node_on_panel ;;
-        3) check_dependencies; install_node_only ;;
-        0) exit 0 ;;
-        *) msg_err "Глаза разуй, нет такого пункта." ;;
-    esac
 }
 
 show_menu
