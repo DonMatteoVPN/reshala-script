@@ -1,76 +1,82 @@
 #!/bin/bash
 # ============================================================ #
-# ==   МОДУЛЬ: УСТАНОВКА ПАНЕЛИ REMNAWAVE (HIGH-LOAD)       ==
-# ==   Загружается динамически из GitHub                    ==
+# ==   МОДУЛЬ: REMNAWAVE MANAGER (ULTRA EDITION)            ==
+# ==   Based on eGames logic, powered by RESHALA config     ==
 # ============================================================ #
 
 # --- Цвета ---
-C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m';
+C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BOLD='\033[1m';
 
 # --- Константы ---
-INSTALL_DIR="/opt/remnawave"
+PANEL_DIR="/opt/remnawave"
+NODE_DIR="/opt/remnanode"
 NGINX_CONF_DIR="/etc/nginx"
 MINIAPP_DIR="/opt/remnawave-bedolaga-telegram-bot/miniapp"
 
-# --- Функции ---
+# --- Утилиты ---
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
-log() { echo -e "${C_CYAN}[RESHALA-MODULE]${C_RESET} $1"; }
+log() { echo -e "${C_CYAN}[RESHALA]${C_RESET} $1"; }
 error() { echo -e "${C_RED}[ERROR] $1${C_RESET}"; exit 1; }
+wait_enter() { read -p "Нажми Enter, чтобы продолжить..."; }
 
 # --- Проверка зависимостей ---
 check_dependencies() {
-    log "🔍 Проверяю инструменты..."
     local missing=0
-    if ! command -v docker &> /dev/null; then echo "❌ Docker не найден."; missing=1; fi
-    if ! command -v nginx &> /dev/null; then echo "❌ Nginx не найден."; missing=1; fi
-    if ! command -v certbot &> /dev/null; then echo "❌ Certbot не найден."; missing=1; fi
-    if ! command -v htpasswd &> /dev/null; then 
-        echo "⚠️ Нет утилиты для хешей. Ставлю apache2-utils..."
-        run_cmd apt-get update -q && run_cmd apt-get install -y apache2-utils -q
-    fi
-    if [ $missing -eq 1 ]; then error "Сначала установи базу (Docker, Nginx, Certbot)."; fi
+    for cmd in docker nginx certbot htpasswd curl jq; do
+        if ! command -v $cmd &> /dev/null; then
+            echo -e "${C_YELLOW}⚠️ Утилита $cmd не найдена. Устанавливаю...${C_RESET}"
+            if [[ "$cmd" == "htpasswd" ]]; then
+                run_cmd apt-get update -q && run_cmd apt-get install -y apache2-utils -q
+            else
+                run_cmd apt-get update -q && run_cmd apt-get install -y $cmd -q
+            fi
+        fi
+    done
 }
 
-# --- Генерация хеша для TinyAuth ---
-generate_tinyauth_hash() {
-    local user="$1"
-    local pass="$2"
-    htpasswd -nB -C 10 "$user" "$pass" | cut -d ":" -f 2
-}
+# --- ГЕНЕРАТОРЫ ---
+generate_tinyauth_hash() { htpasswd -nB -C 10 "$1" "$2" | cut -d ":" -f 2; }
+generate_secret() { openssl rand -hex 32; }
 
-# --- Основная логика ---
-main_install() {
+# ============================================================ #
+#                    ЛОГИКА УСТАНОВКИ ПАНЕЛИ                   #
+# ============================================================ #
+install_panel_logic() {
     clear
     echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_CYAN}║     УСТАНОВКА ПАНЕЛИ REMNAWAVE (HIGH-LOAD EDITION)           ║${C_RESET}"
+    echo -e "${C_CYAN}║           УСТАНОВКА ПАНЕЛИ REMNAWAVE (HIGH-LOAD)             ║${C_RESET}"
     echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
     
     check_dependencies
 
     # 1. Сбор данных
     echo -e "${C_YELLOW}--- НАСТРОЙКА ДОМЕНОВ ---${C_RESET}"
-    read -p "Введи свой ГЛАВНЫЙ домен (например, donmatteo.monster): " MAIN_DOMAIN
-    if [[ -z "$MAIN_DOMAIN" ]]; then error "Домен не может быть пустым!"; fi
+    read -p "Введи ГЛАВНЫЙ домен (без https, например: donmatteo.monster): " MAIN_DOMAIN
+    if [[ -z "$MAIN_DOMAIN" ]]; then error "Домен нужен, брат."; fi
 
-    echo -e "\n${C_YELLOW}--- НАСТРОЙКА TINYAUTH (ЗАЩИТА) ---${C_RESET}"
-    read -p "Придумай логин для входа (TinyAuth): " TA_USER
-    read -s -p "Придумай пароль для входа: " TA_PASS
+    echo -e "\n${C_YELLOW}--- ЗАЩИТА (TinyAuth) ---${C_RESET}"
+    read -p "Логин админа: " TA_USER
+    read -s -p "Пароль админа: " TA_PASS
     echo ""
-    
-    log "🔐 Генерирую секреты..."
+
+    echo -e "\n${C_YELLOW}--- TELEGRAM ---${C_RESET}"
+    read -p "Telegram Bot Token: " TG_BOT_TOKEN
+    read -p "Chat ID для уведомлений: " TG_CHAT_ID
+
+    log "🔐 Генерирую ключи..."
     TA_HASH=$(generate_tinyauth_hash "$TA_USER" "$TA_PASS")
     TA_SECRET=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
-    JWT_SECRET=$(openssl rand -hex 32)
-    API_SECRET=$(openssl rand -hex 32)
-    WEBHOOK_SECRET=$(openssl rand -hex 32)
-    
-    log "📂 Создаю папки..."
-    run_cmd mkdir -p "$INSTALL_DIR"
+    JWT_SECRET=$(generate_secret)
+    API_SECRET=$(generate_secret)
+    WEBHOOK_SECRET=$(generate_secret)
+
+    log "📂 Создаю структуру..."
+    run_cmd mkdir -p "$PANEL_DIR"
     run_cmd mkdir -p "$MINIAPP_DIR/myredirect"
 
-    # 2. Создание docker-compose.yml
-    log "📝 Пишу docker-compose.yml..."
-    cat <<EOF > "$INSTALL_DIR/docker-compose.yml"
+    # 2. Docker Compose (High-Load)
+    log "📝 Создаю docker-compose.yml..."
+    cat <<EOF > "$PANEL_DIR/docker-compose.yml"
 x-base: &base
   image: remnawave/backend:latest
   restart: always
@@ -240,12 +246,9 @@ volumes:
   remnawave-redis-data:
 EOF
 
-    # 3. Создание .env
-    log "📝 Пишу .env..."
-    read -p "Введи Telegram Bot Token: " TG_BOT_TOKEN
-    read -p "Введи Chat ID для уведомлений: " TG_CHAT_ID
-    
-    cat <<EOF > "$INSTALL_DIR/.env"
+    # 3. .env
+    log "📝 Создаю .env..."
+    cat <<EOF > "$PANEL_DIR/.env"
 APP_PORT=3000
 METRICS_PORT=3001
 API_INSTANCES=1
@@ -287,15 +290,12 @@ AUTH_API_KEY=
 REDIRECT_LINK=https://subapp.$MAIN_DOMAIN/myredirect/?telegram&redirect_to=
 EOF
 
-    # 4. Создание myapp-config.json (ПОЛНЫЙ)
-    log "📝 Заливаю конфиг приложений (myapp-config.json)..."
-    # Используем 'EOF' в кавычках, чтобы bash не пытался интерпретировать переменные внутри JSON
-    cat <<'EOF' > "$INSTALL_DIR/myapp-config.json"
+    # 4. myapp-config.json
+    log "📝 Заливаю конфиг приложений..."
+    cat <<'EOF' > "$PANEL_DIR/myapp-config.json"
 {
   "config": {
-    "additionalLocales": [
-      "ru"
-    ],
+    "additionalLocales": ["ru"],
     "branding": {
       "logoUrl": "https://lh3.googleusercontent.com/rd-d/ALs6j_FQxFkowBZNSpfISvbAX-ynoZUwhkF2w5ELfknE_gH7yGcsP2hvwoFvW4Aj9dqtz6FVtAkHPl8oo3-Ps9WVcLrtE2YVGV357AfqktJAoyeotXYB01GzngQHyUa5kDfFbJKz8P0zENgAEY63Ak4VEsp4imasl0DCfR_FDcomFVjOyoejE9T8m90TzTo0m8PFw_ZXjDK5MbOpF9HV2q4SLWO2DIkYwoUJcyH_qE0toH4KAGzpmHfYk0DnRZ1Z4JPkZUroPcPXppX9G9F5fGowfeIWReyXw0aSy8D9BvNfA7duAQzXtG7IG1Uf8dY20cNw6b5DEsDKYoryu3Fd8PP54dkBp3ferYsaNmgWCOjNjLTYETqBWgJFfqwLQT9DoXSG7oA0eYY_p1wvllLhfObcYJlMlKcpkKOf291uMmYPz__gJYqOJ23trMResj5j4u_uMyoIIRrI4jF84D4ycklM6C_VJMRREjJtGbvaU47GdRvVtyqVziRtD6g3x24Kj1PiTa3cWPe8Rlnr2hC-YOnL6jBH5fPAB_N2LcwoSwarFM0gA8WRRKfujTna6XDM7xc3x6h5s2DglNiSfdcT0gPQxdmSR4MqPvWz9HZd5WNkH3LQUkDTd7-5NX6yrhvuB-l444Y1b5EE8GTYedLNifncKoh4w4cInlf5eaFyrEAcMlDbm_aeoSOsuTP1uLUyqu48NHyNxiwXLCPgdVQJYqXszr2BImiuzCWvUhzsK_MSnU7OM6bhtRr-i465Z-pFCIXyaye4mBE4PaUxnWk9CMqEyyYYTyf0jMjtNVhz8G1k_dhzOMuR5fiNexvN9e7vk6DfUGQAZUxPB-Xt4rdbyUnaZGumpU1RLldVlqrRtEWPrjo9AWHJfiKmhogKrI2CgifF_09Y2RKGWVhrey4xvYsnGoMTa9BF3uxuHUV7dOXM7CmhJyiXkskQlq6NdsJ8ZeSXptNMkdjWmWuttxsre9Xs_7HdNjZsSEaEAUYX2gPUjXBPUM_xrMnBs60M1v6ugG2W27gwb69F5bZ6GOH83_3WoaR5ycRQX4I5GgTd39uSBaQZuQ=w1809-h921?auditContext=forDisplay",
       "name": "DonMatteo VPN",
@@ -303,371 +303,13 @@ EOF
     }
   },
   "platforms": {
-    "ios": [
-      {
-        "id": "clash-mi",
-        "name": "Clash Mi",
-        "isFeatured": true,
-        "urlScheme": "clash://install-config?overwrite=no&name=🛡️🚀 DonMatteoVPN&url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://apps.apple.com/ru/app/clash-mi/id6744321968",
-              "buttonText": {
-                "en": "Download from the RU App Store",
-                "ru": "Скачать с RU App Store"
-              }
-            },
-            {
-              "buttonLink": "https://apps.apple.com/us/app/clash-mi/id6744321968",
-              "buttonText": {
-                "en": "Download from the Global App Store",
-                "ru": "Скачать с Global App Store"
-              }
-            }
-          ],
-          "description": {
-            "en": "1. Open the App Store page and install the app. \n2. Launch it, in the VPN configuration permissions window, click Allow\n3. Enter your phone password.\n4. Come back here after installation.",
-            "ru": "1. Откройте страницу в App Store и установите приложение. \n2. Запустите его, в окне разрешения VPN-конфигурации нажмите Allow\n3. Введите свой пароль от телефона.\n4. Вернитесь после установки сюда."
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "5. Tap the button below — the app will open and the subscription will be added automatically.",
-            "ru": "5. Нажмите кнопку ниже — приложение откроется, и подписка добавится автоматически."
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "6. On the main page, click the Disconnected button in the permissions window that appears. \nVPN configurations, click Allow and enter your password to connect to the VPN.",
-            "ru": "6. На главной странице нажми кнопку Disconnected,  в появившемся окне разрешения \nVPN-конфигурации нажмите Allow и введите свой пароль для подключения к VPN."
-          }
-        }
-      }
-    ],
-    "android": [
-      {
-        "id": "flclash",
-        "name": "FlClashX",
-        "isFeatured": true,
-        "urlScheme": "flclash://install-config?url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "http://n8n-chevereto-8d6daa-193-23-216-20.traefik.me/images/2025/11/17/d0d7f25caa51fb667f64b63db9203cc3.mp4",
-              "buttonText": {
-                "en": "🎞 VIDEO INSTRUCTIONS 👁‍🗨",
-                "ru": "🎞 ВИДЕО ИНСТРУКЦИЯ 👁‍🗨"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-android-arm64-v8a.apk",
-              "buttonText": {
-                "en": "Download APK (arm64-v8a)",
-                "ru": "Скачать APK (arm64-v8a)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-android-armeabi-v7a.apk",
-              "buttonText": {
-                "en": "Download APK (armeabi-v7a)",
-                "ru": "Скачать APK (armeabi-v7a)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-android-x86_64.apk",
-              "buttonText": {
-                "en": "Download APK (x86_64)",
-                "ru": "Скачать APK (x86_64)"
-              }
-            }
-          ],
-          "description": {
-            "en": "1. Download the FlClash APK and install it. \n2. Launch the app and grant all permissions.\n3. Come back here after installation.\n    DO YOU KNOW WHICH FILE TO DOWNLOAD? SEE BELOW!!",
-            "ru": "1. Скачайте FlClash APK и установите. \n2. Запустите приложение и дайте все разрешения.\n3. Вернитесь после установки сюда.\n    ЕСЛИ СЛОЖНО, СМОТРИТЕ ВИДЕО ИНСТРУКЦИЮ 👇👇"
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "4. Click the button below to add a subscription.",
-            "ru": "4. Нажмите кнопку ниже, чтобы добавить подписку"
-          }
-        },
-        "additionalAfterAddSubscriptionStep": {
-          "buttons": [],
-          "title": {
-            "en": "If the subscription is not added",
-            "ru": "Если подписка не добавилась"
-          },
-          "description": {
-            "en": "5. If nothing happens after clicking on the button, add the subscription manually. \n    Click the Get Link button in the upper-right corner of this page and copy the link. \n    In FlClash, go to the Profiles section, click the + button, select the URL,\n    paste your copied link and click Send.",
-            "ru": "5. Если после нажатия на кнопку ничего не произошло, добавьте подписку вручную. \n    Нажмите на этой страницу кнопку Получить ссылку в правом верхнем углу, скопируйте ссылку. \n    В FlClash перейдите в раздел Профили, нажмите кнопку +, выберите URL, \n    вставьте вашу скопированную ссылку и нажмите Отправить."
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "6. Select the added profile in the Profiles section. \n    In the Control Panel, click the enable button in the lower-right corner. \n    After launching, in the Proxy section, you can change the choice of the server you are connected to. \n    connect and choose a connection for the available services at your discretion!\n\nChapter  \"PROXY\" 🛡️ Via VPN is the main tab.\n   Example:\nLet's say you need Discord to always work through Germany.\n• Click on the 💬 Discord group.\n• Select 🇩🇪 Germany from the drop-down list.\n\nReady! Now all other traffic will go through the server selected in 🛡️ Via VPN,\n and Discord — strictly through Germany.",
-            "ru": "6. Выберите добавленный профиль в разделе Профили. \n    В Панели управления нажмите кнопку включить в правом нижнем углу. \n    После запуска в разделе Прокси вы можете изменить выбор сервера к которому вас \n    подключить и выбрать подключение для доступных сервисов на свое усмотрение!\n\nРаздел  \"ПРОКСИ\" 🛡️ Через VPN - основная вкладка.\n   Пример:\nПредположим, вам нужно, чтобы именно Discord всегда работал через Германию.\n• Нажмите на группу 💬 Discord.\n• В раскрывшемся списке выберите 🇩🇪 Германия.\n\nГотово! Теперь весь остальной трафик будет идти через сервер выбранный в 🛡️ Через VPN,\n а Discord — строго через Германию."
-          }
-        },
-        "additionalBeforeAddSubscriptionStep": {
-          "title": {
-            "en": "How to determine which APK to download!",
-            "ru": "Как определить какой APK качать?"
-          },
-          "description": {
-            "en": "3.1. Download DevCheck Device & System Info, \n3.2. Launch and go to the \"SPECIFICATIONS\" section\n3.3. In the \"ARCHITECTURE\" column, the item ABI and Supported ABIs\n       They specify the format that suits you.",
-            "ru": "3.1. Качаем DevCheck Device & System Info, \n3.2. Запустить и перейти в раздел \"ХАРАКТЕРИСТИКИ\"\n3.3. В графе \"АРХИТЕКТУРА\" пункт ABI и Поддерживаемые ABI\n       В них указан формат который вам подойдет."
-          },
-          "buttons": [
-            {
-              "buttonLink": "https://play.google.com/store/apps/details?id=flar2.devcheck",
-              "buttonText": {
-                "en": "Download System Info on Google Play",
-                "ru": "Скачать System Info в Google Play"
-              }
-            }
-          ]
-        }
-      }
-    ],
-    "linux": [
-      {
-        "id": "flclash",
-        "name": "FlClashX",
-        "isFeatured": true,
-        "urlScheme": "flclash://install-config?url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-linux-amd64.AppImage",
-              "buttonText": {
-                "en": "Download Linux (AppImage x64)",
-                "ru": "Скачать Linux (AppImage x64)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-linux-amd64.deb",
-              "buttonText": {
-                "en": "Download Linux (DebPackage x64)",
-                "ru": "Скачать Linux (DebPackage x64)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-linux-amd64.rpm",
-              "buttonText": {
-                "en": "Download Linux (RpmPackage x64)",
-                "ru": "Скачать Linux (RpmPackage x64)"
-              }
-            }
-          ],
-          "description": {
-            "en": "1. Download the required version of FlClash and install it. \n2. Launch the application.\n3. Come back here after installation.",
-            "ru": "1. Скачайте FlClash нужной версии и установите. \n2. Запустите приложение.\n3. Вернитесь после установки сюда."
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "4. Click the button below to add subscription",
-            "ru": "4. Нажмите кнопку ниже, чтобы добавить подписку"
-          }
-        },
-        "additionalAfterAddSubscriptionStep": {
-          "buttons": [],
-          "title": {
-            "en": "If the subscription is not added",
-            "ru": "Если подписка не добавилась"
-          },
-          "description": {
-            "en": "5. If nothing happens after clicking on the button, add the subscription manually. \n    Click the Get Link button in the upper-right corner of this page and copy the link. \n    In FlClash, go to the Profiles section, click the + button, select the URL, paste your \n    copy the link and click Send",
-            "ru": "5. Если после нажатия на кнопку ничего не произошло, добавьте подписку вручную. \n    Нажмите на этой страницу кнопку Получить ссылку в правом верхнем углу, скопируйте ссылку. \n    В FlClash перейдите в раздел Профили, нажмите кнопку +, выберите URL, вставьте вашу \n    скопированную ссылку и нажмите Отправить"
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "6. Select the added profile in the Profiles section. \n    In the Control Panel, click the enable button in the lower-right corner. \n    After launching, in the Proxy section, you can change the choice of the server you are connected to. \n    connect and choose a connection for the available services at your discretion!\n\nChapter  \"PROXY\" 🛡️ Via VPN is the main tab.\n   Example:\nLet's say you need Discord to always work through Germany.\n• Click on the 💬 Discord group.\n• Select 🇩🇪 Germany from the drop-down list.\n\nReady! Now all other traffic will go through the server selected in 🛡️ Via VPN,\n and Discord — strictly through Germany.",
-            "ru": "6. Выберите добавленный профиль в разделе Профили. \n    В Панели управления нажмите кнопку включить в правом нижнем углу. \n    После запуска в разделе Прокси вы можете изменить выбор сервера к которому вас \n    подключить и выбрать подключение для доступных сервисов на свое усмотрение!\n\nРаздел  \"ПРОКСИ\" 🛡️ Через VPN - основная вкладка.\n   Пример:\nПредположим, вам нужно, чтобы именно Discord всегда работал через Германию.\n• Нажмите на группу 💬 Discord.\n• В раскрывшемся списке выберите 🇩🇪 Германия.\n\nГотово! Теперь весь остальной трафик будет идти через сервер выбранный в 🛡️ Через VPN,\n а Discord — строго через Германию."
-          }
-        }
-      }
-    ],
-    "macos": [
-      {
-        "id": "flclash",
-        "name": "FlClashX",
-        "isFeatured": true,
-        "urlScheme": "flclash://install-config?url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-macos-arm64.dmg",
-              "buttonText": {
-                "en": "Download macOS (Apple Silicon)",
-                "ru": "Скачать macOS (Apple Silicon)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-macos-amd64.dmg",
-              "buttonText": {
-                "en": "Download macOS (Intel X64)",
-                "ru": "Скачать macOS (Intel X64)"
-              }
-            }
-          ],
-          "description": {
-            "en": "1. Download the required version of FlClash and install it. \n2. Launch the application.\n3. Come back here after installation.",
-            "ru": "1. Скачайте FlClash нужной версии и установите. \n2. Запустите приложение.\n3. Вернитесь после установки сюда."
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "4. Click the button below to add subscription",
-            "ru": "4. Нажмите кнопку ниже, чтобы добавить подписку"
-          }
-        },
-        "additionalAfterAddSubscriptionStep": {
-          "buttons": [],
-          "title": {
-            "en": "If the subscription is not added",
-            "ru": "Если подписка не добавилась"
-          },
-          "description": {
-            "en": "5. If nothing happens after clicking on the button, add the subscription manually. \n    Click the Get Link button in the upper-right corner of this page and copy the link. \n    In FlClash, go to the Profiles section, click the + button, select the URL, paste your \n    copy the link and click Send",
-            "ru": "5. Если после нажатия на кнопку ничего не произошло, добавьте подписку вручную. \n    Нажмите на этой страницу кнопку Получить ссылку в правом верхнем углу, скопируйте ссылку. \n    В FlClash перейдите в раздел Профили, нажмите кнопку +, выберите URL, вставьте вашу \n    скопированную ссылку и нажмите Отправить"
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "6. Select the added profile in the Profiles section. \n    In the Control Panel, click the enable button in the lower-right corner. \n    After launching, in the Proxy section, you can change the choice of the server you are connected to. \n    connect and choose a connection for the available services at your discretion!\n\nChapter  \"PROXY\" 🛡️ Via VPN is the main tab.\n   Example:\nLet's say you need Discord to always work through Germany.\n• Click on the 💬 Discord group.\n• Select 🇩🇪 Germany from the drop-down list.\n\nReady! Now all other traffic will go through the server selected in 🛡️ Via VPN,\n and Discord — strictly through Germany.",
-            "ru": "6. Выберите добавленный профиль в разделе Профили. \n    В Панели управления нажмите кнопку включить в правом нижнем углу. \n    После запуска в разделе Прокси вы можете изменить выбор сервера к которому вас \n    подключить и выбрать подключение для доступных сервисов на свое усмотрение!\n\nРаздел  \"ПРОКСИ\" 🛡️ Через VPN - основная вкладка.\n   Пример:\nПредположим, вам нужно, чтобы именно Discord всегда работал через Германию.\n• Нажмите на группу 💬 Discord.\n• В раскрывшемся списке выберите 🇩🇪 Германия.\n\nГотово! Теперь весь остальной трафик будет идти через сервер выбранный в 🛡️ Через VPN,\n а Discord — строго через Германию."
-          }
-        }
-      }
-    ],
-    "windows": [
-      {
-        "id": "flclash",
-        "name": "FlClashX",
-        "isFeatured": true,
-        "urlScheme": "flclash://install-config?url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-windows-amd64-setup.exe",
-              "buttonText": {
-                "en": "Download for Windows (Setup)",
-                "ru": "Скачать Windows (Setup)"
-              }
-            }
-          ],
-          "description": {
-            "en": "1. Download FlClash and install it. \n2. Launch the application.\n3. Come back here after installation.",
-            "ru": "1. Скачайте FlClash и установите. \n2. Запустите приложение.\n3. Вернитесь после установки сюда."
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "4. Click the button below to add subscription",
-            "ru": "4. Нажмите кнопку ниже, чтобы добавить подписку"
-          }
-        },
-        "additionalAfterAddSubscriptionStep": {
-          "buttons": [],
-          "title": {
-            "en": "If the subscription is not added",
-            "ru": "Если подписка не добавилась"
-          },
-          "description": {
-            "en": "5. If nothing happens after clicking on the button, add the subscription manually. \n    Click the Get Link button in the upper-right corner of this page and copy the link. \n    In FlClash, go to the Profiles section, click the + button, select the URL, paste your \n    copy the link and click Send",
-            "ru": "5. Если после нажатия на кнопку ничего не произошло, добавьте подписку вручную. \n    Нажмите на этой страницу кнопку Получить ссылку в правом верхнем углу, скопируйте ссылку. \n    В FlClash перейдите в раздел Профили, нажмите кнопку +, выберите URL, вставьте вашу \n    скопированную ссылку и нажмите Отправить"
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "6. Select the added profile in the Profiles section. \n    In the Control Panel, click the enable button in the lower-right corner. \n    After launching, in the Proxy section, you can change the choice of the server you are connected to. \n    connect and choose a connection for the available services at your discretion!\n\nChapter  \"PROXY\" 🛡️ Via VPN is the main tab.\n   Example:\nLet's say you need Discord to always work through Germany.\n• Click on the 💬 Discord group.\n• Select 🇩🇪 Germany from the drop-down list.\n\nReady! Now all other traffic will go through the server selected in 🛡️ Via VPN,\n and Discord — strictly through Germany.",
-            "ru": "6. Выберите добавленный профиль в разделе Профили. \n    В Панели управления нажмите кнопку включить в правом нижнем углу. \n    После запуска в разделе Прокси вы можете изменить выбор сервера к которому вас \n    подключить и выбрать подключение для доступных сервисов на свое усмотрение!\n\nРаздел  \"ПРОКСИ\" 🛡️ Через VPN - основная вкладка.\n   Пример:\nПредположим, вам нужно, чтобы именно Discord всегда работал через Германию.\n• Нажмите на группу 💬 Discord.\n• В раскрывшемся списке выберите 🇩🇪 Германия.\n\nГотово! Теперь весь остальной трафик будет идти через сервер выбранный в 🛡️ Через VPN,\n а Discord — строго через Германию."
-          }
-        }
-      }
-    ],
-    "androidTV": [
-      {
-        "id": "flclash",
-        "name": "FlClashX",
-        "isFeatured": true,
-        "urlScheme": "flclash://install-config?url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-android-arm64-v8a.apk",
-              "buttonText": {
-                "en": "Download APK (arm64-v8a)",
-                "ru": "Скачать APK (arm64-v8a)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-android-armeabi-v7a.apk",
-              "buttonText": {
-                "en": "Download APK (armeabi-v7a)",
-                "ru": "Скачать APK (armeabi-v7a)"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/pluralplay/FlClashX/releases/download/v0.2.1/FlClashX-0.2.1-android-x86_64.apk",
-              "buttonText": {
-                "en": "Download APK (x86_64)",
-                "ru": "Скачать APK (x86_64)"
-              }
-            }
-          ],
-          "description": {
-            "en": "Download and install FlClash APK on your TV. Most modern TVs use ARMv8 (64-bit). If installation fails, try ARMv7 (32-bit). x86_64 is for TVs or boxes with Intel or AMD processors (rare).",
-            "ru": "1. Скачайте и установите FlClash APK на ваш телевизор. \n  Большинство современных телевизоров используют Arm64-v8a. \n  Если установка не удалась, попробуйте Armeabi-v7a или x86_64\n\n"
-          }
-        },
-        "additionalBeforeAddSubscriptionStep": {
-          "buttons": [],
-          "description": {
-            "en": "2. In the TV application, click Add Profile \n    In the Profiles section, select Add from phone. \n3. On your phone, in the Profiles section, tap the three-dot button and select Send to TV.",
-            "ru": "2. В приложении на телевизоре нажмите кнопку Добавить профиль \n    в разделе Профили, выберите пункт Добавить с телефона. \n3. На телефоне в разделе Профили нажмите кнопку с тремя точками и выберите пункт Отправить на ТВ."
-          },
-          "title": {
-            "en": "How to add a subscription on TV",
-            "ru": "Как добавить подписку на телевизоре"
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "5. Click the button below to add subscription, if you opened the subscription page on your TV",
-            "ru": "5. Нажмите кнопку ниже, чтобы добавить подписку, если вы открыли страницу подписки на телевизоре"
-          }
-        },
-        "additionalAfterAddSubscriptionStep": {
-          "buttons": [],
-          "title": {
-            "en": "If the subscription is not added",
-            "ru": "Если подписка не добавилась"
-          },
-          "description": {
-            "en": "6. If nothing happens after clicking on the button, add the subscription manually. \n    On this page, click the Get Link button in the upper-right corner and copy the link. \n    Paste it into any text editor or into any window where you can type text.\n    You will see your individual link.\n    In FlClash, go to the Profiles section, click the + button, select the URL, enter the link and click Send",
-            "ru": "6. Если после нажатия на кнопку ничего не произошло, добавьте подписку вручную. \n    Нажмите на этой странице кнопку Получить ссылку в правом верхнем углу, скопируйте ссылку. \n    Вставьте в любой текстовый редактор или в любое окно где можно набирать текст.\n    Вы увидите вашу индивидуальную ссылку.\n    В FlClash перейдите в раздел Профили, нажмите кнопку +, выберите URL, пропишите ссылку и нажмите Отправить"
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "6. Select the added profile in the Profiles section. \n    In the Control Panel, click the enable button in the lower-right corner. \n    After launching, in the Proxy section, you can change the choice of the server you are connected to. \n    connect and choose a connection for the available services at your discretion!\n\nChapter  \"PROXY\" 🛡️ Via VPN is the main tab.\n   Example:\nLet's say you need Discord to always work through Germany.\n• Click on the 💬 Discord group.\n• Select 🇩🇪 Germany from the drop-down list.\n\nReady! Now all other traffic will go through the server selected in 🛡️ Via VPN,\n and Discord — strictly through Germany.",
-            "ru": "Выберите добавленный профиль в разделе Профили. В Панели управления нажмите кнопку включить в правом нижнем углу. После запуска в разделе Прокси вы можете изменить выбор сервера6. Выберите добавленный профиль в разделе Профили. \n    В Панели управления нажмите кнопку включить в правом нижнем углу. \n    После запуска в разделе Прокси вы можете изменить выбор сервера к которому вас \n    подключить и выбрать подключение для доступных сервисов на свое усмотрение!\n\nРаздел  \"ПРОКСИ\" 🛡️ Через VPN - основная вкладка.\n   Пример:\nПредположим, вам нужно, чтобы именно Discord всегда работал через Германию.\n• Нажмите на группу 💬 Discord.\n• В раскрывшемся списке выберите 🇩🇪 Германия.\n\nГотово! Теперь весь остальной трафик будет идти через сервер выбранный в 🛡️ Через VPN,\n а Discord — строго через Германию. к которому вас подключит. "
-          }
-        }
-      }
-    ],
-    "appleTV": []
+    "ios": [], "android": [], "linux": [], "macos": [], "windows": [], "androidTV": [], "appleTV": []
   }
 }
 EOF
 
-    # 5. Получение SSL
-    log "🔒 Получаю SSL сертификаты (Certbot)..."
+    # 5. SSL
+    log "🔒 Получаю SSL сертификаты..."
     DOMAINS="-d auth.$MAIN_DOMAIN -d panrem.$MAIN_DOMAIN -d subrem.$MAIN_DOMAIN -d hooks.$MAIN_DOMAIN -d miniapp.$MAIN_DOMAIN -d apibot.$MAIN_DOMAIN -d subapp.$MAIN_DOMAIN"
     
     if certbot certonly --nginx --non-interactive --agree-tos -m admin@$MAIN_DOMAIN $DOMAINS; then
@@ -679,7 +321,7 @@ EOF
         systemctl start nginx
     fi
 
-    # 6. Настройка Nginx
+    # 6. Nginx Config
     log "⚙️ Настраиваю Nginx..."
     if [ -f "$NGINX_CONF_DIR/nginx.conf" ]; then
         mv "$NGINX_CONF_DIR/nginx.conf" "$NGINX_CONF_DIR/nginx.conf.bak.$(date +%s)"
@@ -853,20 +495,161 @@ EOF
     log "🔄 Перезагружаю Nginx..."
     run_cmd nginx -t && run_cmd systemctl reload nginx
 
-    # 7. Запуск Docker
-    log "🚀 Запускаю контейнеры..."
-    cd "$INSTALL_DIR"
+    log "🚀 Запускаю Панель..."
+    cd "$PANEL_DIR"
     run_cmd docker compose up -d
 
-    echo ""
-    echo -e "${C_GREEN}✅ УСТАНОВКА ЗАВЕРШЕНА!${C_RESET}"
+    echo -e "\n${C_GREEN}✅ ПАНЕЛЬ УСТАНОВЛЕНА!${C_RESET}"
     echo -e "Панель: https://panrem.$MAIN_DOMAIN"
-    echo -e "TinyAuth Логин: $TA_USER"
-    echo -e "TinyAuth Пароль: (твой пароль)"
-    echo -e "Подписка: https://subrem.$MAIN_DOMAIN"
-    echo -e "Мини-апп: https://subapp.$MAIN_DOMAIN"
-    
-    read -p "Нажми Enter, чтобы вернуться..."
+    echo -e "TinyAuth: $TA_USER / (твой пароль)"
+    wait_enter
 }
 
-main_install
+# ============================================================ #
+#                    ЛОГИКА УСТАНОВКИ НОДЫ                     #
+# ============================================================ #
+install_node_logic() {
+    clear
+    echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_CYAN}║               УСТАНОВКА НОДЫ REMNAWAVE                       ║${C_RESET}"
+    echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+    
+    check_dependencies
+    
+    read -p "Введи URL Панели (например, https://panrem.domain.com): " PANEL_URL
+    read -p "Введи Node Secret (из настроек узла в панели): " NODE_SECRET
+    
+    if [[ -z "$PANEL_URL" || -z "$NODE_SECRET" ]]; then error "Данные не могут быть пустыми."; fi
+
+    log "📂 Создаю папку ноды..."
+    run_cmd mkdir -p "$NODE_DIR"
+
+    log "📝 Создаю docker-compose.yml для Ноды..."
+    cat <<EOF > "$NODE_DIR/docker-compose.yml"
+services:
+  remnanode:
+    image: remnawave/node:latest
+    container_name: remnanode
+    restart: always
+    network_mode: host
+    environment:
+      - REMNAWAVE_PANEL_URL=$PANEL_URL
+      - REMNAWAVE_NODE_SECRET=$NODE_SECRET
+      # Опционально: SSL сертификаты, если нужны
+      # - SSL_CERT_PATH=/etc/letsencrypt/live/domain/fullchain.pem
+      # - SSL_KEY_PATH=/etc/letsencrypt/live/domain/privkey.pem
+    volumes:
+      # Если нужны сертификаты, раскомментируй:
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
+      - remnanode-data:/app/data
+
+volumes:
+  remnanode-data:
+EOF
+
+    log "🚀 Запускаю Ноду..."
+    cd "$NODE_DIR"
+    run_cmd docker compose up -d
+
+    echo -e "\n${C_GREEN}✅ НОДА ЗАПУЩЕНА!${C_RESET}"
+    wait_enter
+}
+
+# ============================================================ #
+#                    МЕНЮ УПРАВЛЕНИЯ                           #
+# ============================================================ #
+
+manage_panel_menu() {
+    while true; do
+        clear
+        echo -e "${C_CYAN}--- УПРАВЛЕНИЕ ПАНЕЛЬЮ ---${C_RESET}"
+        echo "1. 📜 Смотреть логи (все)"
+        echo "2. 🔄 Перезагрузить Панель"
+        echo "3. ⬆️  Обновить Панель (Pull & Up)"
+        echo "4. 🛑 Остановить Панель"
+        echo "b. 🔙 Назад"
+        read -p "Выбор: " choice
+        case $choice in
+            1) cd "$PANEL_DIR" && docker compose logs -f ;;
+            2) cd "$PANEL_DIR" && docker compose restart && echo "✅ Перезагружено." && sleep 2 ;;
+            3) cd "$PANEL_DIR" && docker compose pull && docker compose up -d && echo "✅ Обновлено." && sleep 2 ;;
+            4) cd "$PANEL_DIR" && docker compose down && echo "🛑 Остановлено." && sleep 2 ;;
+            [bB]) break ;;
+            *) ;;
+        esac
+    done
+}
+
+manage_node_menu() {
+    while true; do
+        clear
+        echo -e "${C_CYAN}--- УПРАВЛЕНИЕ НОДОЙ ---${C_RESET}"
+        echo "1. 📜 Смотреть логи"
+        echo "2. 🔄 Перезагрузить Ноду"
+        echo "3. ⬆️  Обновить Ноду"
+        echo "4. 🛑 Остановить Ноду"
+        echo "b. 🔙 Назад"
+        read -p "Выбор: " choice
+        case $choice in
+            1) cd "$NODE_DIR" && docker compose logs -f ;;
+            2) cd "$NODE_DIR" && docker compose restart && echo "✅ Перезагружено." && sleep 2 ;;
+            3) cd "$NODE_DIR" && docker compose pull && docker compose up -d && echo "✅ Обновлено." && sleep 2 ;;
+            4) cd "$NODE_DIR" && docker compose down && echo "🛑 Остановлено." && sleep 2 ;;
+            [bB]) break ;;
+            *) ;;
+        esac
+    done
+}
+
+uninstall_menu() {
+    echo -e "${C_RED}⚠️  ВНИМАНИЕ! ЭТО УДАЛИТ ВСЕ ДАННЫЕ!${C_RESET}"
+    read -p "Ты уверен? (y/n): " confirm
+    if [[ "$confirm" == "y" ]]; then
+        echo "Удаляю Панель..."
+        if [ -d "$PANEL_DIR" ]; then cd "$PANEL_DIR" && docker compose down -v; rm -rf "$PANEL_DIR"; fi
+        echo "Удаляю Ноду..."
+        if [ -d "$NODE_DIR" ]; then cd "$NODE_DIR" && docker compose down -v; rm -rf "$NODE_DIR"; fi
+        echo "✅ Всё удалено."
+        wait_enter
+    fi
+}
+
+# ============================================================ #
+#                    ГЛАВНОЕ МЕНЮ МОДУЛЯ                       #
+# ============================================================ #
+main_menu() {
+    while true; do
+        clear
+        echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_CYAN}║          REMNAWAVE MANAGER (RESHALA EDITION)                 ║${C_RESET}"
+        echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "   1. 💿 Установить Панель (High-Load + TinyAuth)"
+        echo "   2. 📡 Установить Ноду (Remnanode)"
+        echo "   -------------------------------------------"
+        echo "   3. 🛠  Управление Панелью (Логи, Рестарт, Обнова)"
+        echo "   4. 🛠  Управление Нодой (Логи, Рестарт, Обнова)"
+        echo "   -------------------------------------------"
+        echo "   5. 🗑  Удалить всё к чертям"
+        echo "   b. 🔙 Выход в главное меню Решалы"
+        echo ""
+        read -p "Твой выбор: " choice
+        
+        case $choice in
+            1) install_panel_logic ;;
+            2) install_node_logic ;;
+            3) 
+                if [ -d "$PANEL_DIR" ]; then manage_panel_menu; else echo "❌ Панель не установлена."; sleep 2; fi 
+                ;;
+            4) 
+                if [ -d "$NODE_DIR" ]; then manage_node_menu; else echo "❌ Нода не установлена."; sleep 2; fi 
+                ;;
+            5) uninstall_menu ;;
+            [bB]) break ;;
+            *) echo "Не тупи."; sleep 1 ;;
+        esac
+    done
+}
+
+# Запуск
+main_menu
