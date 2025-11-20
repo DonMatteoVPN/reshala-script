@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21121 - FULL FAT FIX       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21122 - FULL FAT FIX       ==
 # ============================================================ #
 # ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
 # ==    2. Исправлено отображение журнала.                  ==
@@ -16,8 +16,11 @@ set -uo pipefail
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21121"
-readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh"
+readonly VERSION="v2.21122"
+# Убедись, что ветка (dev/main) правильная!
+readonly REPO_BRANCH="dev" 
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
+readonly MODULES_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/modules"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
@@ -47,6 +50,28 @@ UPDATE_CHECK_STATUS="OK"
 # ============================================================ #
 #                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
 # ============================================================ #
+
+run_module() {
+    local module_name="$1"
+    local module_url="${MODULES_URL}/${module_name}"
+    local temp_file="/tmp/${module_name}"
+
+    printf "%b\n" "${C_CYAN}☁️ Загружаю модуль ${module_name} из облака...${C_RESET}"
+    
+    # Скачиваем модуль
+    if curl -s -L --fail "$module_url" -o "$temp_file"; then
+        chmod +x "$temp_file"
+        log "Запуск модуля: $module_name"
+        # Запускаем
+        bash "$temp_file"
+        # Удаляем после выполнения
+        rm -f "$temp_file"
+    else
+        printf "%b\n" "${C_RED}❌ Ошибка загрузки модуля. Проверь интернет или наличие файла в репозитории.${C_RESET}"
+        log "Ошибка загрузки модуля $module_name с $module_url"
+        sleep 2
+    fi
+}
 
 # Запуск команд с sudo, если нужно
 run_cmd() { 
@@ -1028,6 +1053,7 @@ show_menu() {
 
         printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
         echo "   [7] 🐳 Управление Docker"
+        echo "   [8] 💿 Установить Панель Remnawave (High-Load)"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             printf "   %b[u] ‼️ОБНОВИТЬ РЕШАЛУ‼️%b\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
@@ -1066,6 +1092,7 @@ show_menu() {
             5) if [[ "$SERVER_TYPE" != "Чистый сервак" && "$SERVER_TYPE" != "Сервак не целка" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
             6) security_menu;;
             7) docker_cleanup_menu;;
+            8) run_module "install_panel.sh";;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
             [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
