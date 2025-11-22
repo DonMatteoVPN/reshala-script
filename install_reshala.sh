@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21128 - FULL FAT FIX       ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21129 - NECRO FIX EDITION   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21128"
+readonly VERSION="v2.21129"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -907,9 +907,9 @@ security_menu() {
 }
 
 # ============================================================ #
-#                   ОБНОВЛЕНИЕ СИСТЕМЫ                         #
+#                   ОБНОВЛЕНИЕ СИСТЕМЫ (C FIX EOL)             #
 # ============================================================ #
-system_update_wizard() {
+fix_eol_and_update() {
     # Проверяем, есть ли apt (Debian/Ubuntu)
     if ! command -v apt &> /dev/null; then 
         echo "Утилита apt не найдена. Похоже, это не Debian/Ubuntu."
@@ -918,57 +918,68 @@ system_update_wizard() {
 
     clear
     printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║               ОБНОВЛЕНИЕ СИСТЕМЫ (APT)                       ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}║          ОБНОВЛЕНИЕ СИСТЕМЫ + EOL FIX (APT)                  ║${C_RESET}"
     printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
     echo ""
-    printf "%b\n" "${C_BOLD}Будут выполнены следующие действия:${C_RESET}"
-    printf "  1. %b\n" "${C_GREEN}apt update${C_RESET}       - Обновление списков пакетов"
-    printf "  2. %b\n" "${C_GREEN}apt upgrade${C_RESET}      - Обновление установленных программ"
-    printf "  3. %b\n" "${C_GREEN}apt full-upgrade${C_RESET} - Полное обновление (с разрешением конфликтов)"
-    printf "  4. %b\n" "${C_GREEN}apt autoremove${C_RESET}   - Удаление неиспользуемых зависимостей"
-    printf "  5. %b\n" "${C_GREEN}apt autoclean${C_RESET}    - Очистка кэша пакетов"
-    printf "  6. %b\n" "${C_GREEN}apt install sudo${C_RESET} - Установка утилиты sudo (если нет)"
-    echo ""
+    printf "%b\n" "${C_BOLD}Попытка стандартного обновления...${C_RESET}"
     
-    read -p "Запустить полное обновление? (y/n): " confirm_upd
-    if [[ "$confirm_upd" == "y" || "$confirm_upd" == "Y" ]]; then
-        echo ""
-        log "Запущено полное обновление системы..."
-        printf "%b\n" "${C_YELLOW}🚀 Поехали! Это может занять время...${C_RESET}"
-        
-        run_cmd apt update
-        run_cmd apt upgrade -y
-        run_cmd apt full-upgrade -y
-        run_cmd apt autoremove -y
-        run_cmd apt autoclean
+    # Сначала пробуем обновиться по-человечески
+    if run_cmd apt-get update; then
+        # Если update прошёл успешно
+        printf "\n%b\n" "${C_GREEN}✅ Репозитории доступны. Запускаю обновление...${C_RESET}"
+        run_cmd apt-get upgrade -y
+        run_cmd apt-get full-upgrade -y
+        run_cmd apt-get autoremove -y
+        run_cmd apt-get autoclean
         run_cmd apt install -y sudo
         
-        # Запоминаем дату обновления
         save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-        
-        printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена и очищена.${C_RESET}"
-        log "Обновление системы завершено успешно."
+        printf "\n%b\n" "${C_GREEN}✅ Система обновлена.${C_RESET}"
+        log "Обновление системы (стандартное) успешно."
         wait_for_enter
     else
-        echo "Ок, отмена."
-        # Если отказался, тоже запоминаем, чтобы сегодня больше не спрашивать
-        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-        sleep 1
+        # Если update упал (например, 404 Not Found из-за EOL)
+        printf "\n%b\n" "${C_RED}❌ ОШИБКА ОБНОВЛЕНИЯ!${C_RESET}"
+        printf "%s\n" "Похоже, твоя версия Ubuntu устарела (EOL) и официальные зеркала её послали."
+        printf "%s\n" "Я могу переключить источники на архив (old-releases), чтобы оживить труп."
+        echo ""
+        read -p "🚑 Применить FIX для EOL версий? (y/n): " confirm_fix
+        
+        if [[ "$confirm_fix" == "y" || "$confirm_fix" == "Y" ]]; then
+            log "Применяю EOL fix..."
+            printf "\n%b\n" "${C_YELLOW}🔧 Ремонтирую sources.list...${C_RESET}"
+            
+            # Делаем бэкап, если ещё нет
+            if [ ! -f /etc/apt/sources.list.backup ]; then
+                run_cmd cp /etc/apt/sources.list /etc/apt/sources.list.backup
+                echo "   -> Бэкап создан: sources.list.backup"
+            fi
+            
+            # Магия sed для замены ссылок на old-releases
+            run_cmd sed -i -r 's/([a-z]{2}\.)?archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            run_cmd sed -i -r 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            
+            printf "%b\n" "${C_GREEN}✅ Ссылки заменены. Пробую обновить снова...${C_RESET}"
+            
+            if run_cmd apt-get update; then
+                run_cmd apt-get upgrade -y
+                run_cmd apt-get full-upgrade -y
+                run_cmd apt-get autoremove -y
+                run_cmd apt-get autoclean
+                run_cmd apt install -y sudo
+                
+                save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+                printf "\n%b\n" "${C_GREEN}✅ Труп ожил! Система обновлена через old-releases.${C_RESET}"
+                log "Обновление системы (EOL fix) успешно."
+            else
+                printf "\n%b\n" "${C_RED}❌ Всё равно не работает. Проверь интернет или настройки DNS.${C_RESET}"
+                log "Обновление после EOL fix не удалось."
+            fi
+        else
+            echo "Ну и ладно. Живи с ошибками."
+        fi
+        wait_for_enter
     fi
-}
-
-offer_initial_update() {
-    # Проверяем, предлагали ли мы уже сегодня обновление
-    local last_check; last_check=$(load_path "LAST_SYS_UPDATE")
-    local today; today=$(date +%Y%m%d)
-    
-    if [ "$last_check" == "$today" ]; then
-        # Уже спрашивали сегодня, пропускаем
-        return
-    fi
-    
-    # Если не спрашивали - запускаем визард
-    system_update_wizard
 }
 
 # ============================================================ #
@@ -1027,7 +1038,7 @@ show_menu() {
         fi
 
         printf "\n%s\n\n" "Чё делать будем, босс?";
-        printf "   [0] %b\n" "🔄 Обновить систему (apt update & upgrade)"
+        printf "   [0] %b\n" "🚑 Обновить систему / FIX EOL (Ubuntu Fix)"
         echo "   [1] 🚀 Управление «Форсажем» (BBR+CAKE)"
         echo "   [2] 🌐 Управление IPv6"
         echo "   [3] 📜 Посмотреть журнал «Решалы»"
@@ -1075,7 +1086,7 @@ show_menu() {
         log "Пользователь выбрал пункт меню: $choice"
 
         case $choice in
-            0) system_update_wizard;;
+            0) fix_eol_and_update;;
             1) apply_bbr; wait_for_enter;;
             2) ipv6_menu;;
             3) view_logs_realtime "$LOGFILE" "Решалы";;
@@ -1112,9 +1123,6 @@ main() {
             exit 1;
         fi
         trap "rm -f /tmp/tmp.*" EXIT
-        
-        # Предлагаем обновление (если сегодня еще не предлагали)
-        offer_initial_update
         
         show_menu
     fi
