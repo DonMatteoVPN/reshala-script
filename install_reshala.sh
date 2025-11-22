@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21138 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21139 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21138"
+readonly VERSION="v2.21139"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -119,8 +119,69 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# === НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОПРЕДЕЛЕНИЯ ВЕРСИЙ ===
+# === НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ V4 (СЕТЬ И ВЫРАВНИВАНИЕ) ===
 
+_ensure_net_tools() {
+    if ! command -v ethtool &>/dev/null; then
+        # Тихая установка ethtool для определения скорости порта
+        run_cmd apt-get update -qq && run_cmd apt-get install -y -qq ethtool >/dev/null 2>&1
+    fi
+}
+
+get_port_speed() {
+    # Пытаемся узнать, какой кабель воткнут (1Gbps, 10Gbps и т.д.)
+    local iface
+    iface=$(ip route | grep default | head -n1 | awk '{print $5}')
+    
+    local speed=""
+    
+    # Способ 1: cat /sys/class/net/...
+    if [ -f "/sys/class/net/$iface/speed" ]; then
+        local raw_speed
+        raw_speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
+        # Если скорость валидная и больше 0
+        if [[ "$raw_speed" =~ ^[0-9]+$ ]] && [ "$raw_speed" -gt 0 ]; then
+            speed="${raw_speed}Mbps"
+        fi
+    fi
+    
+    # Способ 2: ethtool (если первый не сработал)
+    if [ -z "$speed" ] && command -v ethtool &>/dev/null; then
+        speed=$(ethtool "$iface" 2>/dev/null | grep "Speed:" | awk '{print $2}')
+    fi
+    
+    # Красивое форматирование
+    if [ "$speed" == "1000Mbps" ]; then speed="1 Gbps"; fi
+    if [ "$speed" == "10000Mbps" ]; then speed="10 Gbps"; fi
+    if [ "$speed" == "2500Mbps" ]; then speed="2.5 Gbps"; fi
+    
+    echo "${speed:-Virtual Port}"
+}
+
+run_speedtest_moscow() {
+    clear
+    printf "%b\n" "${C_CYAN}🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ...${C_RESET}"
+    echo "   (Используем официальный speedtest-cli, сервер MTS/Megafon/Beeline)"
+    
+    if ! command -v speedtest-cli &>/dev/null; then
+        echo "   Installing speedtest-cli..."
+        run_cmd apt-get update -qq
+        run_cmd apt-get install -y speedtest-cli >/dev/null
+    fi
+    
+    echo ""
+    # ID серверов в Москве: 
+    # 11599 - MTS (Moscow)
+    # 16976 - Beeline (Moscow)
+    # 22157 - Rostelecom (Moscow)
+    # Используем Beeline как стабильный
+    printf "%b\n" "${C_YELLOW}⏳ Измеряю... Не дёргайся.${C_RESET}"
+    speedtest-cli --server 16976 --simple
+    
+    echo ""
+    printf "%b\n" "${C_GREEN}✅ Тест завершён.${C_RESET}"
+    wait_for_enter
+}
 # Проверяет, относится ли имя контейнера к экосистеме Remnawave
 is_remnawave_container() {
     local name="$1"
@@ -1307,6 +1368,9 @@ display_header() {
     local hoster_info; hoster_info=$(get_hoster_info)
     local users_online; users_online=$(get_active_users)
     
+    # СКОРОСТЬ ПОРТА
+    local port_speed; port_speed=$(get_port_speed)
+    
     # Сеть
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
@@ -1320,8 +1384,8 @@ display_header() {
     local ipv6_status; ipv6_status=$(check_ipv6_status)
 
     clear
-    # Ширина левой колонки. 14 символов хватит всем.
-    local w=14
+    # Ширина левой колонки УВЕЛИЧЕНА до 18 для идеального выравнивания
+    local w=18
 
     printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
     printf "%b\n" "${C_CYAN}║${C_RESET}"
@@ -1345,7 +1409,7 @@ display_header() {
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
-    # --- БЛОК 3: STATUS (ВЫРОВНЕННЫЙ) ---
+    # --- БЛОК 3: STATUS ---
     printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
     
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
@@ -1369,6 +1433,8 @@ display_header() {
         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Web-Server" "$WEB_SERVER" 
     fi
     
+    # Разделитель для сетевых настроек
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %b\n" "Канал (Link)" "${C_BOLD}${port_speed}${C_RESET}"
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : %b  |  IPv6: %b\n" "Тюнинг" "$cc_status" "$ipv6_status"
     
     printf "%b\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
@@ -1376,9 +1442,6 @@ display_header() {
 
 show_menu() {
     # === ЗАЩИТА ОТ CTRL+C (ANTI-SPAM EDITION) ===
-    # \r - возврат каретки в начало
-    # \033[K - очистка строки
-    # sleep 0.8 - задержка, чтобы сообщение не мигало как стробоскоп
     trap 'printf "\r\033[K%b" "${C_RED}🛑 Куда собрался? Жми [q], чтобы выйти как нормальный пацан!${C_RESET}"; sleep 0.8' SIGINT
 
     while true; do
@@ -1398,7 +1461,6 @@ show_menu() {
         echo "   [3] 📜 Посмотреть журнал «Решалы»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] 🤖 Посмотреть логи Бота"; fi
         
-        # Логика для кнопки логов (Панель/Нода)
         if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
              echo "   [5] 📊 Посмотреть логи Панели (Основное)"
         elif [[ "$SERVER_TYPE" == "Панель" ]]; then
@@ -1410,6 +1472,7 @@ show_menu() {
         printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
         echo "   [7] 🐳 Управление Docker"
         echo "   [8] 💿 Установить Панель Remnawave (High-Load)"
+        printf "   [9] %b\n" "⚡ Тест скорости до Москвы (Speedtest)"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             printf "   %b[u] ‼️ОБНОВИТЬ РЕШАЛУ‼️%b\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
@@ -1424,14 +1487,10 @@ show_menu() {
 
         local choice=""
         
-        # Читаем ввод. Если нажали Ctrl+C, read вернёт ошибку.
-        # Мы её ловим, сбрасываем и идем на новый круг цикла (где сработает clear).
         if ! read -r -p "Твой выбор, босс: " choice; then
-            # Здесь ничего писать не надо, trap уже всё показал
             continue
         fi
 
-        # Логируем выбор пользователя
         log "Пользователь выбрал пункт меню: $choice"
 
         case $choice in
@@ -1444,10 +1503,10 @@ show_menu() {
             6) security_menu;;
             7) docker_cleanup_menu;;
             8) run_module "install_panel.sh";;
+            9) run_speedtest_moscow;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
             [qQ]) 
-                # Снимаем ловушку перед выходом, чтобы в консоли вернулось нормальное поведение
                 trap - SIGINT
                 echo "Был рад помочь. Не обосрись. 🥃"
                 break
