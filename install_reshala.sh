@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21135 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21136 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21135"
+readonly VERSION="v2.21136"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -262,6 +262,74 @@ run_update() {
 # ============================================================ #
 #                 СБОР ИНФОРМАЦИИ О СИСТЕМЕ                    #
 # ============================================================ #
+# === chistka cpu (FIXED) ===
+get_cpu_info_clean() {
+    local model
+    # Берем модель, выкидываем лишнее, оставляем только первую строку
+    model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/Intel(R) //g; s/Xeon(R) //g; s/CPU //g; s/ @.*//g' | xargs)
+    
+    if [ -z "$model" ]; then
+        # Запасной вариант через lscpu
+        model=$(lscpu | grep "Model name" | head -n 1 | cut -d: -f2 | xargs)
+    fi
+    
+    # Если всё еще мусор, режем жестко
+    echo "$model" | head -n 1 | cut -c 1-35
+}
+
+# === ШКАЛА ЗАГРУЗКИ (VISUAL BAR) ===
+draw_bar() {
+    local perc=$1
+    local size=10
+    local filled=$(( perc * size / 100 ))
+    local empty=$(( size - filled ))
+    
+    # Цвет меняется от нагрузки: Зеленый -> Желтый -> Красный
+    local color="${C_GREEN}"
+    [ "$perc" -gt 70 ] && color="${C_YELLOW}"
+    [ "$perc" -gt 90 ] && color="${C_RED}"
+    
+    printf "${C_GRAY}["
+    printf "${color}"
+    for ((i=0; i<filled; i++)); do printf "■"; done
+    printf "${C_GRAY}"
+    for ((i=0; i<empty; i++)); do printf "□"; done
+    printf "${C_GRAY}] ${color}%s%%${C_RESET}" "$perc"
+}
+
+get_ram_visual() {
+    local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local perc=$(( 100 * ram_used / ram_total ))
+    
+    local bar
+    bar=$(draw_bar "$perc")
+    
+    # Красивый текст: 4GB / 16GB
+    local ram_str
+    if [ "$ram_total" -gt 1024 ]; then
+        ram_str=$(awk "BEGIN {printf \"%.1fG\", $ram_used/1024}")
+    else
+        ram_str="${ram_used}M"
+    fi
+    
+    echo "$bar ($ram_str)"
+}
+
+get_location() {
+    # Получаем страну (Code), например FI
+    local country
+    country=$(curl -s --connect-timeout 2 ipinfo.io/country 2>/dev/null || echo "UNK")
+    echo "$country"
+}
+
+get_active_users() {
+    # Считаем уникальных юзеров
+    local count
+    count=$(who | cut -d' ' -f1 | sort | uniq | wc -l)
+    echo "$count"
+}
+
 get_docker_version() { 
     local container_name="$1"
     local version=""
@@ -1174,16 +1242,18 @@ fix_eol_and_update() {
 display_header() {
     # Собираем данные
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
+    local location; location=$(get_location)
     local os_ver; os_ver=$(get_os_ver)
     local kernel; kernel=$(get_kernel)
     local uptime; uptime=$(get_uptime)
     local virt; virt=$(get_virt_type)
     local ping; ping=$(get_ping_google)
-    local cpu_info; cpu_info=$(get_cpu_info)
+    local cpu_info; cpu_info=$(get_cpu_info_clean) # Используем новую чистую функцию
     local cpu_load; cpu_load=$(get_cpu_load)
-    local ram_info; ram_info=$(get_ram_swap_info)
+    local ram_visual; ram_visual=$(get_ram_visual) # Визуальная шкала
     local disk_info; disk_info=$(get_disk_info)
     local hoster_info; hoster_info=$(get_hoster_info)
+    local users_online; users_online=$(get_active_users)
     
     # Сетевые данные
     local net_status; net_status=$(get_net_status)
@@ -1201,24 +1271,24 @@ display_header() {
     # Ширина левой колонки
     local w=12
 
-    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} от боса DonMatteo ]═══════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- БЛОК 1: СИСТЕМА ---
     printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "ОС / Ядро" "$os_ver ($kernel)"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Аптайм" "$uptime"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}  (Юзеров: $users_online)\n" "Аптайм" "$uptime"
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Виртуалка" "$virt"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_YELLOW}%s${C_RESET}  (Пинг: $ping)\n" "IP Адрес" "$ip_addr"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_YELLOW}%s${C_RESET}  (Пинг: $ping) [${C_CYAN}$location${C_RESET}]\n" "IP Адрес" "$ip_addr"
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
     
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- БЛОК 2: РЕСУРСЫ ---
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "CPU Модель" "$cpu_info"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "CPU" "$cpu_info"
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Память" "$ram_info"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Память" "$ram_visual"
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Диск" "$disk_info"
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
