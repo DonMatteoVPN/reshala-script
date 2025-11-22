@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21140 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21141 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21140"
+readonly VERSION="v2.21141"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -129,59 +129,71 @@ _ensure_net_tools() {
 }
 
 get_port_speed() {
-    # Пытаемся узнать, какой кабель воткнут (1Gbps, 10Gbps и т.д.)
     local iface
     iface=$(ip route | grep default | head -n1 | awk '{print $5}')
-    
     local speed=""
     
-    # Способ 1: cat /sys/class/net/...
+    # 1. Пробуем через sysfs
     if [ -f "/sys/class/net/$iface/speed" ]; then
-        local raw_speed
-        raw_speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
-        # Если скорость валидная и больше 0
-        if [[ "$raw_speed" =~ ^[0-9]+$ ]] && [ "$raw_speed" -gt 0 ]; then
-            speed="${raw_speed}Mbps"
+        local raw
+        raw=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
+        # Если скорость > 0, значит она настоящая
+        if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -gt 0 ]; then
+            speed="${raw}Mbps"
         fi
     fi
     
-    # Способ 2: ethtool (если первый не сработал)
+    # 2. Пробуем ethtool, если стоит
     if [ -z "$speed" ] && command -v ethtool &>/dev/null; then
         speed=$(ethtool "$iface" 2>/dev/null | grep "Speed:" | awk '{print $2}')
     fi
     
-    # Красивое форматирование
+    # Если скорость не определена или Unknown - возвращаем пустоту, чтобы не позориться
+    if [[ "$speed" == "" ]] || [[ "$speed" == "Unknown!" ]]; then
+        return
+    fi
+    
+    # Красивый вывод
     if [ "$speed" == "1000Mbps" ]; then speed="1 Gbps"; fi
     if [ "$speed" == "10000Mbps" ]; then speed="10 Gbps"; fi
     if [ "$speed" == "2500Mbps" ]; then speed="2.5 Gbps"; fi
     
-    echo "${speed:-Virtual Port}"
+    echo "$speed"
 }
 
 run_speedtest_moscow() {
     clear
     printf "%b\n" "${C_CYAN}🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ...${C_RESET}"
-    echo "   (Используем официальный speedtest-cli, сервер MTS/Megafon/Beeline)"
     
+    # Тихая установка, если нет утилиты
     if ! command -v speedtest-cli &>/dev/null; then
-        echo "   Installing speedtest-cli..."
-        run_cmd apt-get update -qq
-        run_cmd apt-get install -y speedtest-cli >/dev/null
+        echo "   Installing speedtest-cli (тихий режим)..."
+        # Глушим весь вывод apt, чтобы не было простыни
+        export DEBIAN_FRONTEND=noninteractive
+        run_cmd apt-get update -qq >/dev/null 2>&1
+        run_cmd apt-get install -y -qq speedtest-cli >/dev/null 2>&1
+    fi
+    
+    echo "   📡 Ищу лучший сервер в Москве..."
+    
+    # Пытаемся получить список серверов и грепнуть Москву
+    # Берем первый живой ID из списка
+    local server_id
+    server_id=$(speedtest-cli --list 2>/dev/null | grep -i "Moscow" | head -n 1 | awk -F')' '{print $1}')
+    
+    if [ -z "$server_id" ]; then
+        printf "%b\n" "${C_YELLOW}⚠️  Серверы в Москве не отвечают списком. Пробую авто-выбор ближайшего...${C_RESET}"
+        speedtest-cli --simple
+    else
+        printf "%b\n" "${C_GREEN}✅ Найден сервер ID: $server_id (Moscow). Тестируем...${C_RESET}"
+        speedtest-cli --server "$server_id" --simple
     fi
     
     echo ""
-    # ID серверов в Москве: 
-    # 11599 - MTS (Moscow)
-    # 16976 - Beeline (Moscow)
-    # 22157 - Rostelecom (Moscow)
-    # Используем Beeline как стабильный
-    printf "%b\n" "${C_YELLOW}⏳ Измеряю... Не дёргайся.${C_RESET}"
-    speedtest-cli --server 16976 --simple
-    
-    echo ""
-    printf "%b\n" "${C_GREEN}✅ Тест завершён.${C_RESET}"
+    printf "%b\n" "${C_GREEN}😎 Тест завершён.${C_RESET}"
     wait_for_enter
 }
+
 # Проверяет, относится ли имя контейнера к экосистеме Remnawave
 is_remnawave_container() {
     local name="$1"
@@ -1347,7 +1359,7 @@ fix_eol_and_update() {
 #                   ГЛАВНОЕ МЕНЮ И ИНФО-ПАНЕЛЬ                 #
 # ============================================================ #
 display_header() {
-    # Собираем данные
+    # Сбор данных
     local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
     local location; location=$(get_location)
     local os_ver; os_ver=$(get_os_ver)
@@ -1360,18 +1372,14 @@ display_header() {
     local cpu_load_viz; cpu_load_viz=$(get_cpu_load_visual)
     local ram_viz; ram_viz=$(get_ram_visual)
     
-    # Разбираем диск
     local disk_raw; disk_raw=$(get_disk_visual)
     local disk_type; disk_type=$(echo "$disk_raw" | cut -d'|' -f1)
     local disk_viz; disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
     
     local hoster_info; hoster_info=$(get_hoster_info)
     local users_online; users_online=$(get_active_users)
-    
-    # СКОРОСТЬ ПОРТА
     local port_speed; port_speed=$(get_port_speed)
     
-    # Сеть
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
     local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
@@ -1380,62 +1388,64 @@ display_header() {
         if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}MAX (bbr+cake)${C_RESET}"; 
         else cc_status="${C_GREEN}ON (bbr+$qdisc)${C_RESET}"; fi
     else cc_status="${C_YELLOW}STOCK ($cc)${C_RESET}"; fi
-    
     local ipv6_status; ipv6_status=$(check_ipv6_status)
 
     clear
-    # Ширина левой колонки УВЕЛИЧЕНА до 18 для идеального выравнивания
-    local w=18
-
+    
+    # ШАПКА
     printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
-    # --- БЛОК 1: СИСТЕМА ---
+    # --- СИСТЕМА (Ручное выравнивание) ---
     printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "ОС / Ядро" "$os_ver ($kernel)"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}  (Юзеров: $users_online)\n" "Аптайм" "$uptime"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Виртуалка" "$virt"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_YELLOW}%s${C_RESET}  (Пинг: $ping) [${C_CYAN}$location${C_RESET}]\n" "IP Адрес" "$ip_addr"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
+    #                                12345678901234
+    printf "║ ${C_GRAY}ОС / Ядро      :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$os_ver ($kernel)"
+    printf "║ ${C_GRAY}Аптайм         :${C_RESET} ${C_WHITE}%s${C_RESET}  (Юзеров: $users_online)\n" "$uptime"
+    printf "║ ${C_GRAY}Виртуалка      :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$virt"
+    printf "║ ${C_GRAY}IP Адрес       :${C_RESET} ${C_YELLOW}%s${C_RESET}  (Пинг: $ping) [${C_CYAN}$location${C_RESET}]\n" "$ip_addr"
+    printf "║ ${C_GRAY}Хостер         :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$hoster_info"
     
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
-    # --- БЛОК 2: РЕСУРСЫ ---
+    # --- ЖЕЛЕЗО ---
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "CPU Модель" "$cpu_info"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Загрузка CPU" "$cpu_load_viz"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Память (RAM)" "$ram_viz"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Диск ($disk_type)" "$disk_viz"
+    printf "║ ${C_GRAY}CPU Модель     :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$cpu_info"
+    printf "║ ${C_GRAY}Загрузка CPU   :${C_RESET} %s\n" "$cpu_load_viz"
+    printf "║ ${C_GRAY}Память (RAM)   :${C_RESET} %s\n" "$ram_viz"
+    printf "║ ${C_GRAY}Диск (%-3s)     :${C_RESET} %s\n" "$disk_type" "$disk_viz"
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
-    # --- БЛОК 3: STATUS ---
+    # --- STATUS ---
     printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
     
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Remnawave" "🔥 COMBO (Панель + Нода)"
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Версии" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET}\n" "🔥 COMBO (Панель + Нода)"
+        printf "║ ${C_GRAY}Версии         :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${PANEL_VERSION})\n" "Remnawave" "Панель управления"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET} (v${PANEL_VERSION})\n" "Панель управления"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${NODE_VERSION})\n" "Remnawave" "Боевая Нода"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET} (v${NODE_VERSION})\n" "Боевая Нода"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_RED}%s${C_RESET}\n" "Remnawave" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ"
+         printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_RED}%s${C_RESET}\n" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ"
     else
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Remnawave" "Не установлена"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Не установлена"
     fi
 
     if [ "$BOT_DETECTED" -eq 1 ]; then 
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}АКТИВЕН${C_RESET} (v${BOT_VERSION})\n" "Bedalaga" 
+        printf "║ ${C_GRAY}Bedalaga       :${C_RESET} ${C_CYAN}АКТИВЕН${C_RESET} (v${BOT_VERSION})\n"
     fi
     
     if [[ "$WEB_SERVER" != "Не определён" ]]; then 
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Web-Server" "$WEB_SERVER" 
+        printf "║ ${C_GRAY}Web-Server     :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$WEB_SERVER" 
     fi
     
-    # Разделитель для сетевых настроек
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %b\n" "Канал (Link)" "${C_BOLD}${port_speed}${C_RESET}"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %b  |  IPv6: %b\n" "Тюнинг" "$cc_status" "$ipv6_status"
+    # Показываем скорость порта только если она определена
+    if [ -n "$port_speed" ]; then
+        printf "║ ${C_GRAY}Канал (Link)   :${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$port_speed"
+    fi
+
+    printf "║ ${C_GRAY}Тюнинг         :${C_RESET} %b  |  IPv6: %b\n" "$cc_status" "$ipv6_status"
     
     printf "%b\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
 }
