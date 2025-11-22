@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21136 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21137 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21136"
+readonly VERSION="v2.21137"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -259,61 +259,107 @@ run_update() {
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
-# ============================================================ #
-#                 СБОР ИНФОРМАЦИИ О СИСТЕМЕ                    #
-# ============================================================ #
-# === chistka cpu (FIXED) ===
+# === НОВЫЕ ФУНКЦИИ ДЛЯ DASHBOARD v3.0 (GRAPHIC EDITION) ===
+
+# --- УЛУЧШЕННАЯ ЧИСТКА ИМЕНИ CPU ---
 get_cpu_info_clean() {
     local model
-    # Берем модель, выкидываем лишнее, оставляем только первую строку
-    model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/Intel(R) //g; s/Xeon(R) //g; s/CPU //g; s/ @.*//g' | xargs)
+    # Берем из /proc/cpuinfo
+    model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2)
     
+    # Если пусто, пробуем lscpu
     if [ -z "$model" ]; then
-        # Запасной вариант через lscpu
-        model=$(lscpu | grep "Model name" | head -n 1 | cut -d: -f2 | xargs)
+        model=$(lscpu | grep "Model name" | head -n 1 | cut -d: -f2)
     fi
-    
-    # Если всё еще мусор, режем жестко
-    echo "$model" | head -n 1 | cut -c 1-35
+
+    # Чистка: убираем (R), (TM), частоту (@ 2.40GHz), лишние пробелы
+    # Но ОСТАВЛЯЕМ бренды (Intel, AMD, Ryzen, Xeon)
+    echo "$model" | sed 's/(R)//g; s/(TM)//g; s/ @.*//g; s/CPU//g; s/Processor//g; s/Compute Engine//g' | xargs
 }
 
-# === ШКАЛА ЗАГРУЗКИ (VISUAL BAR) ===
+# --- УНИВЕРСАЛЬНАЯ РИСОВАЛКА БАРОВ ---
 draw_bar() {
     local perc=$1
     local size=10
-    local filled=$(( perc * size / 100 ))
+    
+    # Защита от дурака (если > 100%)
+    local bar_perc=$perc
+    [ "$bar_perc" -gt 100 ] && bar_perc=100
+    
+    local filled=$(( bar_perc * size / 100 ))
     local empty=$(( size - filled ))
     
-    # Цвет меняется от нагрузки: Зеленый -> Желтый -> Красный
+    # Цвет: Зеленый < 70% < Желтый < 90% < Красный
     local color="${C_GREEN}"
-    [ "$perc" -gt 70 ] && color="${C_YELLOW}"
-    [ "$perc" -gt 90 ] && color="${C_RED}"
+    [ "$perc" -ge 70 ] && color="${C_YELLOW}"
+    [ "$perc" -ge 90 ] && color="${C_RED}"
     
     printf "${C_GRAY}["
     printf "${color}"
     for ((i=0; i<filled; i++)); do printf "■"; done
     printf "${C_GRAY}"
     for ((i=0; i<empty; i++)); do printf "□"; done
-    printf "${C_GRAY}] ${color}%s%%${C_RESET}" "$perc"
+    printf "${C_GRAY}] ${color}%3s%%${C_RESET}" "$perc"
 }
 
+# --- RAM С БАРОМ И ТОЧНЫМИ ЦИФРАМИ ---
 get_ram_visual() {
     local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
     local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    
+    # Защита от деления на ноль
+    if [ "$ram_total" -eq 0 ]; then echo "N/A"; return; fi
+    
     local perc=$(( 100 * ram_used / ram_total ))
+    local bar; bar=$(draw_bar "$perc")
     
-    local bar
-    bar=$(draw_bar "$perc")
-    
-    # Красивый текст: 4GB / 16GB
-    local ram_str
+    # Красивые цифры (GB если много, MB если мало)
+    local used_str; local total_str
     if [ "$ram_total" -gt 1024 ]; then
-        ram_str=$(awk "BEGIN {printf \"%.1fG\", $ram_used/1024}")
+        used_str=$(awk "BEGIN {printf \"%.1fG\", $ram_used/1024}")
+        total_str=$(awk "BEGIN {printf \"%.1fG\", $ram_total/1024}")
     else
-        ram_str="${ram_used}M"
+        used_str="${ram_used}M"
+        total_str="${ram_total}M"
     fi
     
-    echo "$bar ($ram_str)"
+    echo "$bar ($used_str / $total_str)"
+}
+
+# --- ДИСК С БАРОМ ---
+get_disk_visual() {
+    local root_device; root_device=$(df / | awk 'NR==2 {print $1}')
+    local main_disk; main_disk=$(lsblk -no pkname "$root_device" 2>/dev/null || basename "$root_device" | sed 's/[0-9]*$//')
+    
+    # Тип диска
+    local disk_type="HDD"
+    if [ -f "/sys/block/$main_disk/queue/rotational" ]; then 
+        if [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then disk_type="SSD"; fi
+    elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi
+
+    # Цифры
+    local used; used=$(df -h / | awk 'NR==2 {print $3}')
+    local total; total=$(df -h / | awk 'NR==2 {print $2}')
+    local perc_str; perc_str=$(df / | awk 'NR==2 {print $5}' | tr -d '%')
+    
+    local bar; bar=$(draw_bar "$perc_str")
+    
+    # Возвращаем: TYPE|STRING  (чтобы разделить в display_header)
+    echo "$disk_type|$bar ($used / $total)"
+}
+
+# --- НАГРУЗКА CPU С БАРОМ ---
+get_cpu_load_visual() {
+    local cores; cores=$(nproc)
+    local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | xargs)
+    
+    # Считаем процент нагрузки (Load / Cores * 100)
+    local perc
+    perc=$(awk "BEGIN {printf \"%.0f\", ($load / $cores) * 100}")
+    
+    local bar; bar=$(draw_bar "$perc")
+    
+    echo "$bar ($load / $cores vCore)"
 }
 
 get_location() {
@@ -1248,14 +1294,20 @@ display_header() {
     local uptime; uptime=$(get_uptime)
     local virt; virt=$(get_virt_type)
     local ping; ping=$(get_ping_google)
-    local cpu_info; cpu_info=$(get_cpu_info_clean) # Используем новую чистую функцию
-    local cpu_load; cpu_load=$(get_cpu_load)
-    local ram_visual; ram_visual=$(get_ram_visual) # Визуальная шкала
-    local disk_info; disk_info=$(get_disk_info)
+    
+    local cpu_info; cpu_info=$(get_cpu_info_clean)
+    local cpu_load_viz; cpu_load_viz=$(get_cpu_load_visual)
+    local ram_viz; ram_viz=$(get_ram_visual)
+    
+    # Разбираем диск на Тип и Бар
+    local disk_raw; disk_raw=$(get_disk_visual)
+    local disk_type; disk_type=$(echo "$disk_raw" | cut -d'|' -f1)
+    local disk_viz; disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
+    
     local hoster_info; hoster_info=$(get_hoster_info)
     local users_online; users_online=$(get_active_users)
     
-    # Сетевые данные
+    # Сеть
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
     local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
@@ -1268,8 +1320,8 @@ display_header() {
     local ipv6_status; ipv6_status=$(check_ipv6_status)
 
     clear
-    # Ширина левой колонки
-    local w=12
+    # Ширина левой колонки (чтобы двоеточия стояли ровно)
+    local w=14
 
     printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
     printf "%b\n" "${C_CYAN}║${C_RESET}"
@@ -1286,17 +1338,16 @@ display_header() {
     
     # --- БЛОК 2: РЕСУРСЫ ---
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "CPU" "$cpu_info"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Память" "$ram_visual"
-    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Диск" "$disk_info"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "CPU Модель" "$cpu_info"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Загрузка CPU" "$cpu_load_viz"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Память (RAM)" "$ram_viz"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %s\n" "Диск ($disk_type)" "$disk_viz"
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- БЛОК 3: СОФТ И СЕТЬ ---
     printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
     
-    # Логика отображения статуса установки
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Тип" "🔥 COMBO (Панель + Нода)"
         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Версии" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}"
