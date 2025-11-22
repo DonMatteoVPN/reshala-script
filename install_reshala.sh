@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21133 - Пока хуячим   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21134 - Пока хуячим   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21133"
+readonly VERSION="v2.21134"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -295,8 +295,87 @@ get_docker_version() {
     image_id=$(run_cmd docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
     echo "latest (образ: ${image_id:0:7})"
 }
+# === НОВЫЕ ФУНКЦИИ ДЛЯ DASHBOARD v2.0 ===
 
-scan_server_state() {
+get_os_ver() {
+    if [ -f /etc/os-release ]; then
+        # Вытаскиваем красивое имя, например "Ubuntu 22.04.3 LTS"
+        grep -oP 'PRETTY_NAME="\K[^"]+' /etc/os-release | head -n 1
+    else
+        echo "Linux (Unknown)"
+    fi
+}
+
+get_kernel() {
+    uname -r | cut -d'-' -f1  # Показываем только версию ядра, без лишнего мусора
+}
+
+get_uptime() {
+    # Красивый аптайм: "2 days, 4 hours" или "15 min"
+    uptime -p | sed 's/up //;s/ hours\?,/ч/;s/ minutes\?/мин/;s/ days\?,/д/;s/ weeks\?,/нед/'
+}
+
+get_virt_type() {
+    local virt
+    virt=$(systemd-detect-virt 2>/dev/null)
+    if [ "$virt" == "kvm" ] || [ "$virt" == "qemu" ]; then
+        echo "KVM (Честное железо)"
+    elif [ "$virt" == "lxc" ] || [ "$virt" == "openvz" ]; then
+        echo "Container ($virt) - ⚠️"
+    elif [ "$virt" == "none" ]; then
+        echo "Bare Metal (Дед)"
+    else
+        echo "${virt:-Unknown}"
+    fi
+}
+
+get_ping_google() {
+    # Пинг до гугла, берем среднее значение. Быстро, дерзко.
+    local p
+    p=$(ping -c 1 -W 1 8.8.8.8 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | cut -d' ' -f1)
+    if [ -z "$p" ]; then
+        echo "OFFLINE ❌"
+    else
+        echo "${p} ms ⚡"
+    fi
+}
+
+# УЛУЧШЕННАЯ версия CPU (чистит мусор RHEL/QEMU)
+get_cpu_info() { 
+    local model
+    model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//')
+    # Если lscpu выдал дичь типа "QEMU Virtual CPU", пробуем /proc/cpuinfo
+    if [[ "$model" == *"QEMU"* ]] || [[ "$model" == *"Common KVM"* ]] || [ -z "$model" ]; then
+        model=$(cat /proc/cpuinfo | grep 'model name' | head -n 1 | cut -d: -f2 | xargs)
+    fi
+    # Если всё ещё пусто или мусор
+    if [ -z "$model" ]; then model="Unknown CPU"; fi
+    
+    # Обрезаем слишком длинные названия, чтобы не ломать таблицу
+    echo "$model" | cut -c 1-35
+}
+
+# УЛУЧШЕННАЯ версия RAM + SWAP
+get_ram_swap_info() {
+    local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local swap_used; swap_used=$(free -m | grep Swap | awk '{print $3}')
+    
+    # Конвертируем в ГБ, если больше 1024МБ, иначе в МБ
+    local ram_str
+    if [ "$ram_total" -gt 1024 ]; then
+        ram_str=$(awk "BEGIN {printf \"%.1f/%.1f GB\", $ram_used/1024, $ram_total/1024}")
+    else
+        ram_str="${ram_used}/${ram_total} MB"
+    fi
+
+    if [ "$swap_used" -ne 0 ]; then
+        echo "$ram_str (Swap: ${swap_used}MB)"
+    else
+        echo "$ram_str"
+    fi
+}
+scan_server_state() { 
     # Сброс переменных перед сканированием
     SERVER_TYPE="Чистый сервак"
     PANEL_VERSION=""
@@ -1092,41 +1171,85 @@ fix_eol_and_update() {
 #                   ГЛАВНОЕ МЕНЮ И ИНФО-ПАНЕЛЬ                 #
 # ============================================================ #
 display_header() {
-    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info); 
+    # Собираем данные
+    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
+    local os_ver; os_ver=$(get_os_ver)
+    local kernel; kernel=$(get_kernel)
+    local uptime; uptime=$(get_uptime)
+    local virt; virt=$(get_virt_type)
+    local ping; ping=$(get_ping_google)
+    local cpu_info; cpu_info=$(get_cpu_info)
+    local cpu_load; cpu_load=$(get_cpu_load)
+    local ram_info; ram_info=$(get_ram_swap_info)
+    local disk_info; disk_info=$(get_disk_info)
+    local hoster_info; hoster_info=$(get_hoster_info)
     
-    clear; local max_label_width=11
-    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"
+    # Сетевые данные
+    local net_status; net_status=$(get_net_status)
+    local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
+    local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
+    local cc_status
+    if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then 
+        if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}MAX (bbr+cake)${C_RESET}"; 
+        else cc_status="${C_GREEN}ON (bbr+$qdisc)${C_RESET}"; fi
+    else cc_status="${C_YELLOW}STOCK ($cc)${C_RESET}"; fi
     
-    # Логика отображения статуса
+    local ipv6_status; ipv6_status=$(check_ipv6_status)
+
+    clear
+    # Ширина левой колонки
+    local w=12
+
+    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    
+    # --- БЛОК 1: СИСТЕМА ---
+    printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "ОС / Ядро" "$os_ver ($kernel)"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Аптайм" "$uptime"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Виртуалка" "$virt"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_YELLOW}%s${C_RESET}  (Пинг: $ping)\n" "IP Адрес" "$ip_addr"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
+    
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    
+    # --- БЛОК 2: РЕСУРСЫ ---
+    printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "CPU Модель" "$cpu_info"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Память" "$ram_info"
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Диск" "$disk_info"
+
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    
+    # --- БЛОК 3: СОФТ И СЕТЬ ---
+    printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
+    
+    # Логика отображения статуса установки
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "Панель v${PANEL_VERSION} и Нода v${NODE_VERSION}"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Тип" "🔥 COMBO (Панель + Нода)"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Версии" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "Панель v${PANEL_VERSION}"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${PANEL_VERSION})\n" "Тип" "Панель управления"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "Нода v${NODE_VERSION}"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${NODE_VERSION})\n" "Тип" "Боевая Нода"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-         printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_RED}%s${C_RESET}\n" "Установка" "СЕРВАК НЕ ЦЕЛКА (Левый софт)"
+         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_RED}%s${C_RESET}\n" "Тип" "ГРЯЗНЫЙ СЕРВЕР"
     else
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Тип" "Чистый лист"
     fi
 
-    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "v${BOT_VERSION}"; fi
-    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"
-    printf "%b\n" "${C_CYAN}╚${C_RESET}"
+    if [ "$BOT_DETECTED" -eq 1 ]; then 
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}АКТИВЕН${C_RESET} (v${BOT_VERSION})\n" "Бот" 
+    fi
+    
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then 
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Web" "$WEB_SERVER" 
+    fi
+    
+    printf "║ ${C_GRAY}%-${w}s${C_RESET} : %b  |  IPv6: %b\n" "Тюнинг" "$cc_status" "$ipv6_status"
+    
+    printf "%b\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
 }
 
 show_menu() {
