@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21137 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21138 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21137"
+readonly VERSION="v2.21138"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1299,7 +1299,7 @@ display_header() {
     local cpu_load_viz; cpu_load_viz=$(get_cpu_load_visual)
     local ram_viz; ram_viz=$(get_ram_visual)
     
-    # Разбираем диск на Тип и Бар
+    # Разбираем диск
     local disk_raw; disk_raw=$(get_disk_visual)
     local disk_type; disk_type=$(echo "$disk_raw" | cut -d'|' -f1)
     local disk_viz; disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
@@ -1320,7 +1320,7 @@ display_header() {
     local ipv6_status; ipv6_status=$(check_ipv6_status)
 
     clear
-    # Ширина левой колонки (чтобы двоеточия стояли ровно)
+    # Ширина левой колонки. 14 символов хватит всем.
     local w=14
 
     printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
@@ -1345,28 +1345,28 @@ display_header() {
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
-    # --- БЛОК 3: СОФТ И СЕТЬ ---
+    # --- БЛОК 3: STATUS (ВЫРОВНЕННЫЙ) ---
     printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
     
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Тип" "🔥 COMBO (Панель + Нода)"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Remnawave" "🔥 COMBO (Панель + Нода)"
         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Версии" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${PANEL_VERSION})\n" "Тип" "Панель управления"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${PANEL_VERSION})\n" "Remnawave" "Панель управления"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${NODE_VERSION})\n" "Тип" "Боевая Нода"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_GREEN}%s${C_RESET} (v${NODE_VERSION})\n" "Remnawave" "Боевая Нода"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_RED}%s${C_RESET}\n" "Тип" "ГРЯЗНЫЙ СЕРВЕР"
+         printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_RED}%s${C_RESET}\n" "Remnawave" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ"
     else
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Тип" "Чистый лист"
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_WHITE}%s${C_RESET}\n" "Remnawave" "Не установлена"
     fi
 
     if [ "$BOT_DETECTED" -eq 1 ]; then 
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}АКТИВЕН${C_RESET} (v${BOT_VERSION})\n" "Бот" 
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}АКТИВЕН${C_RESET} (v${BOT_VERSION})\n" "Bedalaga" 
     fi
     
     if [[ "$WEB_SERVER" != "Не определён" ]]; then 
-        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Web" "$WEB_SERVER" 
+        printf "║ ${C_GRAY}%-${w}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Web-Server" "$WEB_SERVER" 
     fi
     
     printf "║ ${C_GRAY}%-${w}s${C_RESET} : %b  |  IPv6: %b\n" "Тюнинг" "$cc_status" "$ipv6_status"
