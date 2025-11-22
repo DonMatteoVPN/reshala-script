@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21141 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21142 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21141"
+readonly VERSION="v2.21142"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -121,6 +121,53 @@ get_net_status() {
 
 # === НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ V4 (СЕТЬ И ВЫРАВНИВАНИЕ) ===
 
+# === КАЛЬКУЛЯТОР ВМЕСТИМОСТИ (BRAIN) ===
+calculate_vpn_capacity() {
+    local upload_speed=$1  # В Мбит/с (если пусто, считаем только по железу)
+    
+    # 1. Ресурсы железа
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local cpu_cores; cpu_cores=$(nproc)
+    
+    # 2. Резерв памяти под систему и панель
+    local reserved_mem=256 # Под систему
+    if [[ "$SERVER_TYPE" == *"Панель"* ]]; then
+        reserved_mem=$((reserved_mem + 800)) # Панель + БД жрут нормально так
+    fi
+    
+    local available_ram=$((ram_total - reserved_mem))
+    if [ "$available_ram" -lt 0 ]; then available_ram=0; fi
+    
+    # 3. Считаем лимит по RAM (Xray ~4-5 МБ на юзера при активной долбежке)
+    local max_users_ram=$((available_ram / 4))
+    
+    # 4. Считаем лимит по CPU (грубо: 1 ядро тащит ~300-500 активных туннелей с шифрованием)
+    local max_users_cpu=$((cpu_cores * 400))
+    
+    # Итого по железу (берем меньшее из RAM и CPU)
+    local hw_limit=$max_users_ram
+    [ "$max_users_cpu" -lt "$max_users_ram" ] && hw_limit=$max_users_cpu
+    
+    # 5. Если есть скорость сети - считаем лимит канала
+    if [ -n "$upload_speed" ]; then
+        # Убираем дроби
+        local clean_speed=${upload_speed%.*}
+        
+        # Расчет: даем юзеру гарантию ~2 Мбит (HD видео). 
+        # В реальности оверселлинг работает x3-x5, но мы считаем честно "комфортных" юзеров.
+        local net_limit=$((clean_speed / 2))
+        
+        # Финальный вердикт: что узкое место - сеть или железо?
+        if [ "$net_limit" -lt "$hw_limit" ]; then
+            echo "$net_limit (Упор в канал)"
+        else
+            echo "$hw_limit (Упор в железо)"
+        fi
+    else
+        # Если скорости нет, возвращаем теоретический предел железа
+        echo "$hw_limit (Теория)"
+    fi
+}
 _ensure_net_tools() {
     if ! command -v ethtool &>/dev/null; then
         # Тихая установка ethtool для определения скорости порта
@@ -165,32 +212,52 @@ run_speedtest_moscow() {
     clear
     printf "%b\n" "${C_CYAN}🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ...${C_RESET}"
     
-    # Тихая установка, если нет утилиты
+    # Тихая установка
     if ! command -v speedtest-cli &>/dev/null; then
         echo "   Installing speedtest-cli (тихий режим)..."
-        # Глушим весь вывод apt, чтобы не было простыни
         export DEBIAN_FRONTEND=noninteractive
         run_cmd apt-get update -qq >/dev/null 2>&1
         run_cmd apt-get install -y -qq speedtest-cli >/dev/null 2>&1
     fi
     
     echo "   📡 Ищу лучший сервер в Москве..."
-    
-    # Пытаемся получить список серверов и грепнуть Москву
-    # Берем первый живой ID из списка
     local server_id
     server_id=$(speedtest-cli --list 2>/dev/null | grep -i "Moscow" | head -n 1 | awk -F')' '{print $1}')
     
+    local output
     if [ -z "$server_id" ]; then
-        printf "%b\n" "${C_YELLOW}⚠️  Серверы в Москве не отвечают списком. Пробую авто-выбор ближайшего...${C_RESET}"
-        speedtest-cli --simple
+        printf "%b\n" "${C_YELLOW}⚠️  Серверы в Москве молчат. Авто-выбор...${C_RESET}"
+        output=$(speedtest-cli --simple)
     else
-        printf "%b\n" "${C_GREEN}✅ Найден сервер ID: $server_id (Moscow). Тестируем...${C_RESET}"
-        speedtest-cli --server "$server_id" --simple
+        printf "%b\n" "${C_GREEN}✅ Тестирую через ID: $server_id (Moscow)...${C_RESET}"
+        output=$(speedtest-cli --server "$server_id" --simple)
+    fi
+    
+    # Парсим результаты
+    local ping=$(echo "$output" | grep "Ping" | awk '{print $2}')
+    local dl=$(echo "$output" | grep "Download" | awk '{print $2}')
+    local ul=$(echo "$output" | grep "Upload" | awk '{print $2}')
+    
+    echo ""
+    echo "══════════════════════════════════════════════════"
+    printf "   %bPING:%b      %s ms\n" "${C_GRAY}" "${C_RESET}" "$ping"
+    printf "   %bСКАЧКА:%b    %s Mbit/s\n" "${C_GREEN}" "${C_RESET}" "$dl"
+    printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul"
+    echo "══════════════════════════════════════════════════"
+    
+    # Расчет емкости
+    if [ -n "$ul" ]; then
+        local capacity
+        capacity=$(calculate_vpn_capacity "$ul")
+        
+        echo ""
+        printf "%b💎 ВЕРДИКТ РЕШАЛЫ:%b\n" "${C_BOLD}" "${C_RESET}"
+        echo "   С таким каналом эта нода потянет примерно:"
+        printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
+        echo "   (Расчет из гарантии 2 Мбит/с на рыло для комфорта)"
     fi
     
     echo ""
-    printf "%b\n" "${C_GREEN}😎 Тест завершён.${C_RESET}"
     wait_for_enter
 }
 
@@ -1380,6 +1447,9 @@ display_header() {
     local users_online; users_online=$(get_active_users)
     local port_speed; port_speed=$(get_port_speed)
     
+    # РАСЧЕТ ПОТЕНЦИАЛА (без скорости, чисто железо)
+    local potential_users; potential_users=$(calculate_vpn_capacity "")
+    
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
     local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
@@ -1444,6 +1514,9 @@ display_header() {
     if [ -n "$port_speed" ]; then
         printf "║ ${C_GRAY}Канал (Link)   :${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$port_speed"
     fi
+    
+    # Показываем теоретический потенциал железа
+    printf "║ ${C_GRAY}Вместимость    :${C_RESET} ${C_WHITE}~%s юзеров${C_RESET}\n" "$potential_users"
 
     printf "║ ${C_GRAY}Тюнинг         :${C_RESET} %b  |  IPv6: %b\n" "$cc_status" "$ipv6_status"
     
