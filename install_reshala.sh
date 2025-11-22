@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21134 - Пока хуячим   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21135 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21134"
+readonly VERSION="v2.21135"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -24,6 +24,7 @@ C_YELLOW='\033[1;33m'
 C_CYAN='\033[0;36m'
 C_BOLD='\033[1m'
 C_GRAY='\033[0;90m'
+C_WHITE='\033[1;37m'
 
 # --- Глобальные переменные состояния ---
 SERVER_TYPE="Чистый сервак"
@@ -1200,7 +1201,7 @@ display_header() {
     # Ширина левой колонки
     local w=12
 
-    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} от боса DonMatteo ]═══════════╗${C_RESET}"
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- БЛОК 1: СИСТЕМА ---
