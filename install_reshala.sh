@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21129 - NECRO FIX EDITION   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21130 - NECRO FIX EDITION   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21129"
+readonly VERSION="v2.21130"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -909,74 +909,127 @@ security_menu() {
 # ============================================================ #
 #                   ОБНОВЛЕНИЕ СИСТЕМЫ (C FIX EOL)             #
 # ============================================================ #
+# ============================================================ #
+#          ОБНОВЛЕНИЕ СИСТЕМЫ + EOL FIX (ULTRA EDITION)        #
+# ============================================================ #
 fix_eol_and_update() {
     # Проверяем, есть ли apt (Debian/Ubuntu)
     if ! command -v apt &> /dev/null; then 
-        echo "Утилита apt не найдена. Похоже, это не Debian/Ubuntu."
+        echo "Утилита apt не найдена. Похоже, это не Debian/Ubuntu. Я тут бессилен."
+        wait_for_enter
         return
     fi
 
     clear
     printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║          ОБНОВЛЕНИЕ СИСТЕМЫ + EOL FIX (APT)                  ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}║      ОБНОВЛЕНИЕ СИСТЕМЫ + EOL RESURRECTION (ULTRA)           ║${C_RESET}"
     printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
     echo ""
-    printf "%b\n" "${C_BOLD}Попытка стандартного обновления...${C_RESET}"
     
-    # Сначала пробуем обновиться по-человечески
+    # 1. Проверка интернета перед боем
+    printf "%b" "[*] Проверяю связь с внешним миром... "
+    if curl -s --connect-timeout 3 google.com >/dev/null; then
+        printf "%b\n" "${C_GREEN}Есть контакт.${C_RESET}"
+    else
+        printf "%b\n" "${C_RED}Связи нет!${C_RESET}"
+        echo "   Проверь DNS или кабель. Я не волшебник, без инета не обновлю."
+        wait_for_enter
+        return
+    fi
+
+    printf "%b\n" "${C_BOLD}[*] Попытка стандартного обновления (apt update)...${C_RESET}"
+    
+    # 2. Пробуем обновиться по-человечески
     if run_cmd apt-get update; then
-        # Если update прошёл успешно
-        printf "\n%b\n" "${C_GREEN}✅ Репозитории доступны. Запускаю обновление...${C_RESET}"
+        # Если update прошёл успешно - просто обновляем
+        printf "\n%b\n" "${C_GREEN}✅ Зеркала живы. Работаем по штатному расписанию.${C_RESET}"
         run_cmd apt-get upgrade -y
         run_cmd apt-get full-upgrade -y
         run_cmd apt-get autoremove -y
         run_cmd apt-get autoclean
-        run_cmd apt install -y sudo
+        
+        # Проверка на наличие sudo (бывает слетает в минималках)
+        if ! command -v sudo &> /dev/null; then
+             echo "   -> Ставлю sudo..."
+             run_cmd apt-get install -y sudo
+        fi
         
         save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-        printf "\n%b\n" "${C_GREEN}✅ Система обновлена.${C_RESET}"
-        log "Обновление системы (стандартное) успешно."
+        printf "\n%b\n" "${C_GREEN}✅ Система обновлена. Живи и радуйся.${C_RESET}"
+        log "Обновление системы (Standard) успешно."
         wait_for_enter
     else
-        # Если update упал (например, 404 Not Found из-за EOL)
-        printf "\n%b\n" "${C_RED}❌ ОШИБКА ОБНОВЛЕНИЯ!${C_RESET}"
-        printf "%s\n" "Похоже, твоя версия Ubuntu устарела (EOL) и официальные зеркала её послали."
-        printf "%s\n" "Я могу переключить источники на архив (old-releases), чтобы оживить труп."
+        # 3. Если упало - предлагаем некромантию
+        printf "\n%b\n" "${C_RED}❌ ОШИБКА ОБНОВЛЕНИЯ! (404 Not Found и прочая дичь)${C_RESET}"
+        printf "%s\n" "Похоже, твоя Ubuntu протухла (EOL). Официальные зеркала тебя отшили."
+        printf "%s\n" "Я могу переключить источники на архив (old-releases), чтобы оживить этот труп."
         echo ""
-        read -p "🚑 Применить FIX для EOL версий? (y/n): " confirm_fix
+        read -p "🚑 Врубаем режим Некроманта (Fix EOL)? (y/n): " confirm_fix
         
         if [[ "$confirm_fix" == "y" || "$confirm_fix" == "Y" ]]; then
-            log "Применяю EOL fix..."
-            printf "\n%b\n" "${C_YELLOW}🔧 Ремонтирую sources.list...${C_RESET}"
+            log "Запуск процедуры EOL Fix..."
             
-            # Делаем бэкап, если ещё нет
-            if [ ! -f /etc/apt/sources.list.backup ]; then
-                run_cmd cp /etc/apt/sources.list /etc/apt/sources.list.backup
-                echo "   -> Бэкап создан: sources.list.backup"
+            # --- БЭКАП (Логика Backups.sh, но умнее) ---
+            local BACKUP_DIR="/var/backups/reshala/apt_sources"
+            local TIMESTAMP
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            
+            printf "\n%b\n" "${C_YELLOW}📦 Делаю бэкап конфигов в ${BACKUP_DIR}...${C_RESET}"
+            run_cmd mkdir -p "$BACKUP_DIR"
+            
+            if [ -f /etc/apt/sources.list ]; then
+                run_cmd cp /etc/apt/sources.list "$BACKUP_DIR/sources.list.$TIMESTAMP"
+                echo "   -> sources.list сохранён."
             fi
             
-            # Магия sed для замены ссылок на old-releases
-            run_cmd sed -i -r 's/([a-z]{2}\.)?archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-            run_cmd sed -i -r 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            if [ -d /etc/apt/sources.list.d ] && [ "$(ls -A /etc/apt/sources.list.d 2>/dev/null)" ]; then
+                run_cmd cp -r /etc/apt/sources.list.d "$BACKUP_DIR/sources.list.d.$TIMESTAMP"
+                echo "   -> sources.list.d/ сохранён."
+            fi
+
+            # --- ЛЕЧЕНИЕ (Логика fix-eol + wsl-fix) ---
+            printf "\n%b\n" "${C_YELLOW}🔧 Переписываю адреса зеркал (sed surgery)...${C_RESET}"
             
-            printf "%b\n" "${C_GREEN}✅ Ссылки заменены. Пробую обновить снова...${C_RESET}"
+            # Лечим основной sources.list
+            # 1. Обычные архивы (archive.ubuntu.com -> old-releases.ubuntu.com)
+            run_cmd sed -i -r 's/([a-z]{2}\.)?archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            # 2. Безопасность (security.ubuntu.com -> old-releases.ubuntu.com)
+            run_cmd sed -i -r 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            # 3. Порты для ARM/RPi (ports.ubuntu.com -> old-releases.ubuntu.com)
+            # ВАЖНО: ports.ubuntu.com переезжает на old-releases.ubuntu.com/ubuntu-ports/
+            # Но обычно структура пути сохраняется, меняется только домен.
+            run_cmd sed -i -r 's/ports.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+
+            # Пробуем лечить и файлы в .d (иногда там прячется всякое)
+            if [ -d /etc/apt/sources.list.d ]; then
+                find /etc/apt/sources.list.d -name "*.list" -type f -exec sudo sed -i -r 's/([a-z]{2}\.)?archive.ubuntu.com/old-releases.ubuntu.com/g' {} +
+                find /etc/apt/sources.list.d -name "*.list" -type f -exec sudo sed -i -r 's/security.ubuntu.com/old-releases.ubuntu.com/g' {} +
+            fi
+            
+            printf "%b\n" "${C_GREEN}✅ Ссылки заменены. Вторая попытка обновления...${C_RESET}"
             
             if run_cmd apt-get update; then
+                printf "\n%b\n" "${C_GREEN}✨ ПОЛУЧИЛОСЬ! Труп дышит!${C_RESET}"
+                echo "Запускаю полное обновление..."
                 run_cmd apt-get upgrade -y
                 run_cmd apt-get full-upgrade -y
                 run_cmd apt-get autoremove -y
                 run_cmd apt-get autoclean
-                run_cmd apt install -y sudo
                 
                 save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-                printf "\n%b\n" "${C_GREEN}✅ Труп ожил! Система обновлена через old-releases.${C_RESET}"
-                log "Обновление системы (EOL fix) успешно."
+                printf "\n%b\n" "${C_GREEN}✅ EOL Fix успешно применён, система обновлена.${C_RESET}"
+                log "Обновление системы (EOL fix) успешно завершено."
             else
-                printf "\n%b\n" "${C_RED}❌ Всё равно не работает. Проверь интернет или настройки DNS.${C_RESET}"
+                printf "\n%b\n" "${C_RED}❌ Не прокатило. Пациент скорее мёртв.${C_RESET}"
+                echo "Возможные причины:"
+                echo "1. У тебя совсем дикая версия Ubuntu."
+                echo "2. Проблемы с DNS или фаерволом."
+                echo "3. Ты пытаешься обновить то, что обновлению не подлежит."
+                echo "Бэкап лежит тут: $BACKUP_DIR"
                 log "Обновление после EOL fix не удалось."
             fi
         else
-            echo "Ну и ладно. Живи с ошибками."
+            echo "Хозяин - барин. Сиди на тухлой системе."
         fi
         wait_for_enter
     fi
