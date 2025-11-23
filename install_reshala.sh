@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21165 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21166 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21165"
+readonly VERSION="v2.21166"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -171,6 +171,13 @@ _deploy_key_to_host() {
         return 1
     fi
     
+    # === ЛЕЧЕНИЕ ПЕРЕУСТАНОВКИ ===
+    # Удаляем старый отпечаток сервера, чтобы SSH не орал "Host key verification failed"
+    # Это нужно, если ты переустановил сервер, а IP остался тот же.
+    ssh-keygen -R "$ip" >/dev/null 2>&1
+    ssh-keygen -R "[${ip}]:${port}" >/dev/null 2>&1
+    # =============================
+
     printf "   👉 %s@%s:%s... " "$user" "$ip" "$port"
     
     # Проверяем доступ (Тихо)
@@ -182,10 +189,13 @@ _deploy_key_to_host() {
     printf "\n   %b🔓 Вводи пароль (один раз), чтобы закинуть ключ...${C_RESET}\n" "${C_YELLOW}"
     
     # Кидаем ключ
+    # Добавил -o StrictHostKeyChecking=no, чтобы он сам принял новый отпечаток
     if ssh-copy-id -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "${user}@${ip}"; then
         printf "   ✅ %b\n" "${C_GREEN}Ключ установлен!${C_RESET}"
+        return 0
     else
-        printf "   ❌ %b\n" "${C_RED}Не удалось (неверный пароль?)${C_RESET}"
+        printf "   ❌ %b\n" "${C_RED}Не удалось (неверный пароль или SSH недоступен)${C_RESET}"
+        return 1
     fi
 }
 
@@ -2132,7 +2142,7 @@ manage_fleet() {
                     clear
                     printf "%b\n" "${C_CYAN}🚀 SKYNET UPLINK: ${C_WHITE}$s_name${C_RESET}"
                     
-                    # 1. ПРОВЕРКА ПАРОЛЯ SUDO
+                    # 1. ПРОВЕРКА ПАРОЛЯ SUDO (Если юзер не root и пароля нет)
                     if [[ "$s_user" != "root" ]]; then
                         if [[ -z "$s_pass" ]]; then
                             echo ""
@@ -2148,45 +2158,57 @@ manage_fleet() {
                         fi
                     fi
 
-                    # Функция-обертка для команд через sudo
-                    # Если есть пароль, используем sudo -S, иначе просто команду (для root)
+                    # Функция-обертка
                     run_remote() {
                         local cmd="$1"
                         if [[ "$s_user" == "root" ]]; then
                             ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$cmd"
                         else
-                            # Экранируем пароль и команду для bash -c
-                            # Используем sudo -S -p '' чтобы не выводил prompt
                             local sudo_cmd="echo '$s_pass' | sudo -S -p '' bash -c \"$cmd\""
                             ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_cmd"
                         fi
                     }
 
                     # 2. ПРОВЕРКА ДОСТУПА
+                    printf "📡 Проверка связи... "
                     if ! ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
-                        printf "%b\n" "${C_RED}⛔ Нет доступа по SSH!${C_RESET}"
-                        read -p "Попробовать закинуть ключ заново? (y/n): " try_fix
-                        if [[ "$try_fix" == "y" ]]; then
-                            _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$s_key"
+                        printf "%b\n" "${C_RED}СБОЙ!${C_RESET}"
+                        echo ""
+                        printf "%b\n" "${C_YELLOW}⚠️  Сервер не отвечает или ключ отклонён.${C_RESET}"
+                        echo "Возможные причины:"
+                        echo "1. Сервер был ПЕРЕУСТАНОВЛЕН (сменился отпечаток)."
+                        echo "2. Слетёл SSH-ключ."
+                        echo "3. Сервер просто лежит."
+                        echo ""
+                        read -p "🚑 Попробовать восстановить доступ (сброс ключей)? (y/n): " try_fix
+                        if [[ "$try_fix" == "y" || "$try_fix" == "Y" ]]; then
+                            echo "🔧 Запускаю протокол восстановления..."
+                            if _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$s_key"; then
+                                echo "✅ Доступ восстановлен. Пробуем войти..."
+                                sleep 1
+                            else
+                                echo "❌ Не вышло. Проверь пароль или IP."
+                                wait_for_enter
+                                continue
+                            fi
+                        else
+                            continue
                         fi
-                        continue
+                    else
+                        printf "%b\n" "${C_GREEN}OK${C_RESET}"
                     fi
                     
                     # 3. СВЕРКА ВЕРСИЙ
                     echo "🔍 Сверка версий..."
-                    # Тут хитро: grep может не иметь прав на чтение, если файл root:root 700
-                    # Поэтому даже grep пускаем через нашу обертку run_remote
                     local check_cmd="if [ -f /usr/local/bin/reshala ]; then cat /usr/local/bin/reshala | grep 'readonly VERSION' | cut -d'\"' -f2; else echo 'NONE'; fi"
                     
                     local remote_ver
                     remote_ver=$(run_remote "$check_cmd")
-                    
-                    # Очистка вывода от лишнего мусора (иногда sudo плюет ошибки в stdout)
                     remote_ver=$(echo "$remote_ver" | tail -n 1 | tr -d '\r')
 
                     local need_install=0
                     if [[ "$remote_ver" == *"NONE"* ]] || [[ -z "$remote_ver" ]]; then
-                        echo "⚠️  Решала не установлен (или нет доступа)."
+                        echo "⚠️  Решала не установлен."
                         need_install=1
                     elif [[ "$remote_ver" != "$VERSION" ]]; then
                         echo "⚠️  Обновление ($remote_ver -> $VERSION)..."
@@ -2197,21 +2219,17 @@ manage_fleet() {
                     
                     if [ $need_install -eq 1 ]; then
                         printf "%b\n" "${C_YELLOW}📦 Загрузка агента на сервер...${C_RESET}"
-                        # Команда установки. Скачиваем во временный файл, потом sudo install
                         local install_cmd="wget -q -O /tmp/reshala_inst.sh ${SCRIPT_URL} && bash /tmp/reshala_inst.sh install && rm /tmp/reshala_inst.sh"
                         run_remote "$install_cmd"
                     fi
                     
-                    # 4. ЗАПУСК (ИНТЕРАКТИВ)
+                    # 4. ЗАПУСК
                     printf "%b\n" "${C_GREEN}✅ Входим...${C_RESET}"
                     sleep 1
                     
                     if [[ "$s_user" == "root" ]]; then
                         ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo SKYNET_MODE=1 reshala"
                     else
-                        # МАГИЯ SUDO:
-                        # 1. echo PASS | sudo -S -v -> Обновляет timestamp (вводит пароль скрытно)
-                        # 2. sudo reshala -> Запускается уже без пароля, так как timestamp свежий
                         ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "echo '$s_pass' | sudo -S -p '' -v 2>/dev/null && sudo SKYNET_MODE=1 reshala"
                     fi
                     
