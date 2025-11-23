@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21144 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21145 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21144"
+readonly VERSION="v2.21145"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -236,65 +236,82 @@ run_speedtest_moscow() {
     printf "%b\n" "${C_RED}🛑 РУКИ УБРАЛ ОТ КЛАВИАТУРЫ!${C_RESET}"
     echo "   Ща я буду нагружать канал по полной программе."
     echo "   Не тыкай кнопки, не дыши, не обновляй порнуху в соседней вкладке."
-    printf "%b\n" "${C_YELLOW}⏳ Жди результата молча. Используем официальный клиент Ookla...${C_RESET}"
+    printf "%b\n" "${C_YELLOW}⏳ Жди результата молча (CSV режим)...${C_RESET}"
     echo ""
     # ======================
 
-    local output
-    # Запускаем официальный клиент
-    # --accept-license --accept-gdpr : принимаем соглашения
-    # --server-id 16976 : Beeline Moscow (обычно живой)
+    # Инициализируем переменные, чтобы скрипт не падал (set -u fix)
+    local ping="0"
+    local dl="0"
+    local ul="0"
+    local csv_output=""
+
+    # Запускаем в режиме CSV: "server_id","sponsor","server_name","timestamp","distance","ping","download","upload","share","ip"
+    # Поля: Ping=6, Download=7 (bytes), Upload=8 (bytes)
     
-    # Сначала пробуем конкретный сервер в Москве (Beeline)
-    if output=$(speedtest --accept-license --accept-gdpr --server-id 16976 2>&1); then
-        : # Всё ок
-    else
-        printf "%b\n" "${C_YELLOW}⚠️  Beeline Moscow занят. Ищу любой сервер в Москве...${C_RESET}"
-        # Ищем ID сервера в Москве через search
+    # Пробуем Beeline (16976)
+    csv_output=$(speedtest --accept-license --accept-gdpr --server-id 16976 -f csv 2>/dev/null)
+    
+    # Если Билайн сдох, пробуем автовыбор
+    if [ -z "$csv_output" ] || [[ "$csv_output" == *"error"* ]]; then
+        printf "%b\n" "${C_YELLOW}⚠️  Билайн занят, ищем любой живой сервер...${C_RESET}"
+        # Ищем ID московского сервера
         local search_id
         search_id=$(speedtest --accept-license --accept-gdpr -L | grep -i "Moscow" | head -n 1 | awk '{print $1}')
         
         if [ -n "$search_id" ]; then
-             output=$(speedtest --accept-license --accept-gdpr --server-id "$search_id" 2>&1)
+            csv_output=$(speedtest --accept-license --accept-gdpr --server-id "$search_id" -f csv 2>/dev/null)
         else
-             # Если совсем всё плохо - автовыбор
-             output=$(speedtest --accept-license --accept-gdpr 2>&1)
+            csv_output=$(speedtest --accept-license --accept-gdpr -f csv 2>/dev/null)
         fi
     fi
-    
-    # Парсим результаты (формат официального клиента отличается)
-    # Output example:
-    # Latency:     3.45 ms
-    # Download:   100.22 Mbps
-    # Upload:     50.33 Mbps
-    
-    local ping=$(echo "$output" | grep "Latency:" | awk '{print $2}')
-    local dl=$(echo "$output" | grep "Download:" | awk '{print $2}')
-    local ul=$(echo "$output" | grep "Upload:" | awk '{print $2}')
-    
-    echo ""
-    echo "══════════════════════════════════════════════════"
-    printf "   %bPING:%b      %s ms\n" "${C_GRAY}" "${C_RESET}" "$ping"
-    printf "   %bСКАЧКА:%b    %s Mbit/s\n" "${C_GREEN}" "${C_RESET}" "$dl"
-    printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul"
-    echo "══════════════════════════════════════════════════"
-    
-    # Расчет емкости и СОХРАНЕНИЕ
-    if [ -n "$ul" ]; then
-        # Округляем до целого
-        local clean_ul=$(echo "$ul" | cut -d'.' -f1)
-        save_path "LAST_UPLOAD_SPEED" "$clean_ul"
+
+    # Проверяем, получили ли мы данные
+    if [ -n "$csv_output" ] && [[ "$csv_output" != *"error"* ]]; then
+        # Удаляем кавычки из CSV
+        local clean_csv=$(echo "$csv_output" | tr -d '"')
         
-        local capacity
-        capacity=$(calculate_vpn_capacity "$ul")
+        # Парсим поля
+        local raw_ping=$(echo "$clean_csv" | cut -d',' -f6)
+        local raw_dl=$(echo "$clean_csv" | cut -d',' -f7)
+        local raw_ul=$(echo "$clean_csv" | cut -d',' -f8)
+        
+        # Конвертация:
+        # Ping - оставляем как есть
+        # Download/Upload - приходят в байтах/сек. Переводим в Mбит/с: (X * 8) / 1000000
+        
+        # Используем awk для математики (чтобы не тянуть bc)
+        ping=$(echo "$raw_ping" | awk '{printf "%.1f", $1}')
+        dl=$(echo "$raw_dl" | awk '{printf "%.2f", $1 * 8 / 1000000}')
+        ul=$(echo "$raw_ul" | awk '{printf "%.2f", $1 * 8 / 1000000}')
         
         echo ""
-        printf "%b💎 ВЕРДИКТ РЕШАЛЫ:%b\n" "${C_BOLD}" "${C_RESET}"
-        echo "   С таким каналом эта нода потянет примерно:"
-        printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
-        echo "   (Результат сохранён для главного меню)"
+        echo "══════════════════════════════════════════════════"
+        printf "   %bPING:%b      %s ms\n" "${C_GRAY}" "${C_RESET}" "$ping"
+        printf "   %bСКАЧКА:%b    %s Mbit/s\n" "${C_GREEN}" "${C_RESET}" "$dl"
+        printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul"
+        echo "══════════════════════════════════════════════════"
+        
+        # Расчет емкости и СОХРАНЕНИЕ
+        # Проверяем, что ul - это число и оно больше 1
+        if [[ $(echo "$ul > 1" | awk '{print ($1 > 0)}') -eq 1 ]]; then
+            # Округляем до целого для конфига
+            local clean_ul=$(echo "$ul" | cut -d'.' -f1)
+            save_path "LAST_UPLOAD_SPEED" "$clean_ul"
+            
+            local capacity
+            capacity=$(calculate_vpn_capacity "$ul")
+            
+            echo ""
+            printf "%b💎 ВЕРДИКТ РЕШАЛЫ:%b\n" "${C_BOLD}" "${C_RESET}"
+            echo "   С таким каналом эта нода потянет примерно:"
+            printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
+            echo "   (Результат сохранён для главного меню)"
+        else
+            printf "\n%b❌ Ошибка: получены нулевые данные. Попробуй позже.%b\n" "${C_RED}" "${C_RESET}"
+        fi
     else
-        printf "\n%b❌ Не удалось получить данные. Попробуй позже.%b\n" "${C_RED}" "${C_RESET}"
+        printf "\n%b❌ Не удалось подключиться к Speedtest. Попробуй позже или проверь инет.%b\n" "${C_RED}" "${C_RESET}"
     fi
     
     echo ""
