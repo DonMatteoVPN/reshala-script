@@ -70,6 +70,12 @@ wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/hea
 ```bash
 sudo reshala
 ```
+У кого вообще тупняк то нужно еще это
+
+```bash
+apt update
+apt install sudo
+```
 
 И наслаждайся. Скрипт сам проверит обновления при запуске.
 
