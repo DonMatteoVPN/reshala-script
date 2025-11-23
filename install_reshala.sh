@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21142 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21143 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21142"
+readonly VERSION="v2.21143"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -224,6 +224,15 @@ run_speedtest_moscow() {
     local server_id
     server_id=$(speedtest-cli --list 2>/dev/null | grep -i "Moscow" | head -n 1 | awk -F')' '{print $1}')
     
+    # === ПРЕДУПРЕЖДЕНИЕ ДЛЯ ОСОБО ОДАРЕННЫХ ===
+    echo ""
+    printf "%b\n" "${C_RED}🛑 РУКИ УБРАЛ ОТ КЛАВИАТУРЫ!${C_RESET}"
+    echo "   Ща я буду нагружать канал по полной программе."
+    echo "   Не тыкай кнопки, не дыши, не обновляй порнуху в соседней вкладке."
+    printf "%b\n" "${C_YELLOW}⏳ Жди результата молча. Это займёт секунд 30...${C_RESET}"
+    echo ""
+    # ==========================================
+
     local output
     if [ -z "$server_id" ]; then
         printf "%b\n" "${C_YELLOW}⚠️  Серверы в Москве молчат. Авто-выбор...${C_RESET}"
@@ -245,8 +254,12 @@ run_speedtest_moscow() {
     printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul"
     echo "══════════════════════════════════════════════════"
     
-    # Расчет емкости
+    # Расчет емкости и СОХРАНЕНИЕ
     if [ -n "$ul" ]; then
+        # Округляем до целого для сохранения (147.48 -> 147)
+        local clean_ul=$(echo "$ul" | cut -d'.' -f1)
+        save_path "LAST_UPLOAD_SPEED" "$clean_ul"
+        
         local capacity
         capacity=$(calculate_vpn_capacity "$ul")
         
@@ -254,7 +267,7 @@ run_speedtest_moscow() {
         printf "%b💎 ВЕРДИКТ РЕШАЛЫ:%b\n" "${C_BOLD}" "${C_RESET}"
         echo "   С таким каналом эта нода потянет примерно:"
         printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
-        echo "   (Расчет из гарантии 2 Мбит/с на рыло для комфорта)"
+        echo "   (Результат сохранён для главного меню)"
     fi
     
     echo ""
@@ -1447,8 +1460,20 @@ display_header() {
     local users_online; users_online=$(get_active_users)
     local port_speed; port_speed=$(get_port_speed)
     
-    # РАСЧЕТ ПОТЕНЦИАЛА (без скорости, чисто железо)
-    local potential_users; potential_users=$(calculate_vpn_capacity "")
+    # --- ЛОГИКА ВМЕСТИМОСТИ ---
+    local saved_speed; saved_speed=$(load_path "LAST_UPLOAD_SPEED")
+    local capacity_display
+    
+    if [ -n "$saved_speed" ] && [ "$saved_speed" -gt 0 ]; then
+        # Если есть сохраненный тест
+        local real_cap; real_cap=$(calculate_vpn_capacity "$saved_speed")
+        capacity_display="${C_GREEN}~${real_cap}${C_RESET}"
+    else
+        # Если теста не было
+        local theory_cap; theory_cap=$(calculate_vpn_capacity "")
+        capacity_display="${C_WHITE}~${theory_cap}${C_RESET} ${C_YELLOW}[Тест: 9]${C_RESET}"
+    fi
+    # --------------------------
     
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
@@ -1515,8 +1540,8 @@ display_header() {
         printf "║ ${C_GRAY}Канал (Link)   :${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$port_speed"
     fi
     
-    # Показываем теоретический потенциал железа
-    printf "║ ${C_GRAY}Вместимость    :${C_RESET} ${C_WHITE}~%s юзеров${C_RESET}\n" "$potential_users"
+    # Вместимость с учетом сохраненного теста
+    printf "║ ${C_GRAY}Вместимость    :${C_RESET} %b юзеров\n" "$capacity_display"
 
     printf "║ ${C_GRAY}Тюнинг         :${C_RESET} %b  |  IPv6: %b\n" "$cc_status" "$ipv6_status"
     
