@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21166 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21167 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21166"
+readonly VERSION="v2.21167"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -2241,6 +2241,122 @@ manage_fleet() {
     done
 }
 
+# ============================================================ #
+#                МОДУЛЬ УСТАНОВКИ REMNAWAVE (MENU)             #
+# ============================================================ #
+
+install_node_logic() {
+    clear
+    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║             📡 УСТАНОВКА БОЕВОЙ НОДЫ (XRAY)                  ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo ""
+    echo "Куда будем ставить ноду?"
+    echo "   [1] 🏠 На ЭТОТ сервер (Localhost)"
+    echo "   [2] 🌐 На удаленный сервер из Флота (Skynet)"
+    echo ""
+    echo "   [b] 🔙 Отмена"
+    
+    local target_choice
+    read -r -p "Твой выбор: " target_choice
+    
+    case "$target_choice" in
+        1)
+            # Локальная установка - просто качаем модуль
+            run_module "install_node.sh"
+            ;;
+        2)
+            # Установка через SKYNET
+            echo ""
+            echo "🔎 Сканирую флот..."
+            
+            if [ ! -s "$FLEET_FILE" ]; then
+                printf "%b\n" "${C_RED}❌ Твой флот пуст! Сначала добавь сервера в меню [0].${C_RESET}"
+                wait_for_enter
+                return
+            fi
+            
+            # Выводим список серверов
+            local i=1
+            local servers_list=()
+            echo "----------------------------------------------------------------"
+            while IFS='|' read -r name user ip port key_path pass; do
+                [[ -z "$name" ]] && continue
+                servers_list[$i]="$name|$user|$ip|$port|$key_path|$pass"
+                printf "   [%d] %b%-15s%b (%s)\n" "$i" "${C_WHITE}" "$name" "${C_RESET}" "$ip"
+                ((i++))
+            done < "$FLEET_FILE"
+            echo "----------------------------------------------------------------"
+            
+            local s_id
+            read -p "Выбери сервер (номер): " s_id
+            
+            if [[ "$s_id" =~ ^[0-9]+$ ]] && [ -n "${servers_list[$s_id]:-}" ]; then
+                IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "${servers_list[$s_id]}"
+                if [[ ! -f "$s_key" ]]; then s_key="$HOME/.ssh/id_ed25519"; fi
+                
+                echo ""
+                printf "%b\n" "${C_CYAN}🚀 Начинаю операцию на: $s_name ($s_ip)...${C_RESET}"
+                
+                # Формируем команду для удаленного запуска
+                # Мы говорим удаленному серверу: "Скачай install_node.sh и запусти его"
+                local remote_cmd="wget -qO /tmp/install_node.sh ${MODULES_URL}/install_node.sh && chmod +x /tmp/install_node.sh && sudo /tmp/install_node.sh"
+                
+                if [[ "$s_user" == "root" ]]; then
+                    ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$remote_cmd"
+                else
+                    # Если юзер не root, используем sudo с паролем (если есть) или интерактивно
+                    if [ -n "$s_pass" ]; then
+                        local sudo_remote_cmd="echo '$s_pass' | sudo -S -p '' bash -c \"$remote_cmd\""
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_remote_cmd"
+                    else
+                        echo "⚠️ Нет сохраненного пароля sudo. Придется вводить руками."
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$remote_cmd"
+                    fi
+                fi
+                
+                printf "\n%b\n" "${C_GREEN}✅ Операция на удаленном сервере завершена.${C_RESET}"
+                wait_for_enter
+            else
+                echo "❌ Неверный выбор."
+                sleep 1
+            fi
+            ;;
+        [bB]) return ;;
+        *) echo "Не тупи."; sleep 1 ;;
+    esac
+}
+
+menu_remnawave_setup() {
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║           💿 УСТАНОВКА REMNAWAVE (ВЫБОР КОМПОНЕНТА)          ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "Что ставим, босс?"
+        echo ""
+        echo "   [1] 🎛️  ПАНЕЛЬ УПРАВЛЕНИЯ (Backend + Frontend)"
+        echo "       -> Ставить на мощный/основной сервер."
+        echo ""
+        echo "   [2] 📡 БОЕВАЯ НОДА (Xray + Nginx)"
+        echo "       -> Ставить на чистый сервер для раздачи VPN."
+        echo ""
+        echo "   [b] 🔙 Назад"
+        echo "------------------------------------------------------"
+        
+        local choice
+        read -r -p "Выбор: " choice
+        
+        case $choice in
+            1) run_module "install_panel.sh"; return ;; # Возврат после установки
+            2) install_node_logic; return ;;            # Возврат после установки
+            [bB]) break ;;
+            *) ;;
+        esac
+    done
+}
+
 show_menu() {
     trap 'printf "\r\033[K%b" "${C_RED}🛑 Куда собрался? Жми [q], чтобы выйти!${C_RESET}"; sleep 0.8' SIGINT
 
@@ -2306,7 +2422,7 @@ show_menu() {
             1) menu_service;;
             2) menu_logs;;
             3) menu_docker;;
-            4) run_module "install_panel.sh";;
+            4) menu_remnawave_setup;;
             5) echo "Бот скоро подъедет."; wait_for_enter ;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
