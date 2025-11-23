@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21146 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21147 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21146"
+readonly VERSION="v2.21147"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -119,52 +119,53 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# === НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ V4 (СЕТЬ И ВЫРАВНИВАНИЕ) ===
-
-# === КАЛЬКУЛЯТОР ВМЕСТИМОСТИ (BRAIN) ===
+# === КАЛЬКУЛЯТОР ВМЕСТИМОСТИ (REALISTIC EDITION) ===
 calculate_vpn_capacity() {
-    local upload_speed=$1  # В Мбит/с (если пусто, считаем только по железу)
+    local upload_speed=$1  # В Мбит/с
     
     # 1. Ресурсы железа
     local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
     local cpu_cores; cpu_cores=$(nproc)
     
-    # 2. Резерв памяти под систему и панель
-    local reserved_mem=256 # Под систему
-    if [[ "$SERVER_TYPE" == *"Панель"* ]]; then
-        reserved_mem=$((reserved_mem + 800)) # Панель + БД жрут нормально так
-    fi
-    
-    local available_ram=$((ram_total - reserved_mem))
+    # Считаем реально свободную память (Total - Used)
+    # Оставляем буфер 100МБ, чтобы линукс не сдох
+    local available_ram=$((ram_total - ram_used - 100))
     if [ "$available_ram" -lt 0 ]; then available_ram=0; fi
     
-    # 3. Считаем лимит по RAM (Xray ~4-5 МБ на юзера при активной долбежке)
-    local max_users_ram=$((available_ram / 4))
+    # 2. Лимит по RAM 
+    # Xray эффективен. Активный юзер ест ~2-3 МБ (если не Ddos).
+    # Берем 3 МБ для надежности.
+    local max_users_ram=$((available_ram / 3))
     
-    # 4. Считаем лимит по CPU (грубо: 1 ядро тащит ~300-500 активных туннелей с шифрованием)
-    local max_users_cpu=$((cpu_cores * 400))
+    # 3. Лимит по CPU 
+    # Xeon v4 тащит много. ~500 юзеров на ядро в смешанном режиме.
+    local max_users_cpu=$((cpu_cores * 500))
     
-    # Итого по железу (берем меньшее из RAM и CPU)
+    # Железный лимит (меньшее из RAM и CPU)
     local hw_limit=$max_users_ram
     [ "$max_users_cpu" -lt "$max_users_ram" ] && hw_limit=$max_users_cpu
     
-    # 5. Если есть скорость сети - считаем лимит канала
+    # 4. Лимит по КАНАЛУ (С учетом оверселлинга)
     if [ -n "$upload_speed" ]; then
-        # Убираем дроби
         local clean_speed=${upload_speed%.*}
         
-        # Расчет: даем юзеру гарантию ~2 Мбит (HD видео). 
-        # В реальности оверселлинг работает x3-x5, но мы считаем честно "комфортных" юзеров.
-        local net_limit=$((clean_speed / 2))
+        # ЛОГИКА ПРОВАЙДЕРА:
+        # Не все качают одновременно. Коэффициент мультиплексирования ~1.5 - 2.
+        # То есть на 100 Мбит можно посадить 150-200 человек (смешанный трафик).
+        # Формула: (Скорость * 1.5)
+        local net_limit=$(awk "BEGIN {printf \"%.0f\", $clean_speed * 1.5}")
         
-        # Финальный вердикт: что узкое место - сеть или железо?
+        # ФИНАЛЬНЫЙ ВЕРДИКТ
         if [ "$net_limit" -lt "$hw_limit" ]; then
+            # Если канал узкий
             echo "$net_limit (Упор в канал)"
         else
-            echo "$hw_limit (Упор в железо)"
+            # Если канал широкий, упремся в память или проц
+            # (Скорее всего в память, т.к. у тебя 1GB всего)
+            echo "$hw_limit (Упор в RAM/CPU)"
         fi
     else
-        # Если скорости нет, возвращаем теоретический предел железа
         echo "$hw_limit (Теория)"
     fi
 }
