@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21153 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21155 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21153"
+readonly VERSION="v2.21155"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -61,11 +61,12 @@ safe_read() {
     echo "${result:-$default}"
 }
 
-# === SSH KEY UTILS (ADVANCED) ===
+# === SSH KEY UTILS (FIXED & SILENT) ===
 
 _ensure_master_key() {
     if [ ! -f ~/.ssh/id_ed25519 ]; then
-        echo "🔑 Генерирую МАСТЕР-КЛЮЧ (id_ed25519)..."
+        # >&2 означает "выводи на экран, но не пиши в переменную результата"
+        echo "🔑 Генерирую МАСТЕР-КЛЮЧ (id_ed25519)..." >&2
         ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -q
     fi
     echo ~/.ssh/id_ed25519
@@ -76,7 +77,7 @@ _generate_specific_key() {
     local key_path="$HOME/.ssh/id_reshala_${name// /_}" # Заменяем пробелы на _
     
     if [ ! -f "$key_path" ]; then
-        echo "🔑 Генерирую УНИКАЛЬНЫЙ ключ для $name..."
+        echo "🔑 Генерирую УНИКАЛЬНЫЙ ключ для $name..." >&2
         ssh-keygen -t ed25519 -f "$key_path" -N "" -q
     fi
     echo "$key_path"
@@ -113,15 +114,18 @@ _deploy_key_to_host() {
     local user=$3
     local key_path=$4
 
+    # Очистка переменной пути от мусора (на всякий случай)
+    key_path=$(echo "$key_path" | tr -d '\r' | xargs)
+
     if [ ! -f "$key_path" ]; then
-        echo "❌ Ошибка: Ключ $key_path не найден!"
+        echo "❌ Ошибка: Ключ '$key_path' не найден!"
         return 1
     fi
     
     printf "   👉 %s@%s:%s (Ключ: %s)... " "$user" "$ip" "$port" "$(basename "$key_path")"
     
-    # Проверяем доступ с ЭТИМ ключом
-    if ssh -q -o BatchMode=yes -o ConnectTimeout=4 -i "$key_path" -p "$port" "${user}@${ip}" exit; then
+    # Проверяем доступ (StrictHostKeyChecking=no чтобы не спрашивал yes/no)
+    if ssh -q -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "${user}@${ip}" exit; then
         printf "%b\n" "${C_GREEN}Уже доступен!${C_RESET}"
         return 0
     fi
@@ -129,7 +133,7 @@ _deploy_key_to_host() {
     # Если доступа нет, кидаем ключ
     printf "\n   %b🔓 Нужен вход (пароль) для установки ключа...${C_RESET}\n" "${C_YELLOW}"
     
-    # ssh-copy-id с конкретным ключом
+    # ssh-copy-id с подавлением вопросов
     if ssh-copy-id -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "${user}@${ip}"; then
         printf "   ✅ %b\n" "${C_GREEN}Ключ залетел!${C_RESET}"
     else
@@ -1991,14 +1995,16 @@ manage_fleet() {
                     local selected="${servers[$choice]}"
                     IFS='|' read -r s_name s_user s_ip s_port s_key <<< "$selected"
                     
-                    # Если ключа нет в базе (старая версия), берем дефолт
                     s_key=${s_key:-$HOME/.ssh/id_ed25519}
+                    # Чистим путь на всякий случай
+                    s_key=$(echo "$s_key" | xargs)
                     
                     clear
                     printf "%b\n" "${C_CYAN}🚀 ТЕЛЕПОРТАЦИЯ: ${C_WHITE}$s_name${C_RESET}"
                     echo "Ключ: $(basename "$s_key")"
                     
-                    if ! ssh -q -o BatchMode=yes -o ConnectTimeout=2 -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
+                    # Добавил -o StrictHostKeyChecking=no
+                    if ! ssh -q -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
                         printf "%b\n" "${C_RED}⛔ Нет доступа по ключу!${C_RESET}"
                         read -p "Попробовать закинуть ключ сейчас? (y/n): " try_fix
                         if [[ "$try_fix" == "y" ]]; then
@@ -2008,13 +2014,14 @@ manage_fleet() {
                         fi
                     fi
                     
-                    # Проверка Решалы
-                    if ssh -i "$s_key" -p "$s_port" "$s_user@$s_ip" "[ -f /usr/local/bin/reshala ]"; then
-                        ssh -t -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo reshala"
+                    # Проверка Решалы (тоже с флагом молчания)
+                    if ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "[ -f /usr/local/bin/reshala ]"; then
+                        # Интерактивный режим требует -t
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo reshala"
                     else
                         printf "%b\n" "${C_YELLOW}⚠️ Ставлю Решалу на удаленный сервер...${C_RESET}"
-                        ssh -t -i "$s_key" -p "$s_port" "$s_user@$s_ip" "wget -qO- ${SCRIPT_URL} | sudo bash -s install"
-                        ssh -t -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo reshala"
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "wget -qO- ${SCRIPT_URL} | sudo bash -s install"
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo reshala"
                     fi
                 fi
                 ;;
