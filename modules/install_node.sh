@@ -320,27 +320,60 @@ setup_certificates() {
                 /root/.acme.sh/acme.sh --install-cert -d "$NODE_DOMAIN" --key-file "$CERT_DIR/privkey.pem" --fullchain-file "$CERT_DIR/fullchain.pem" --reloadcmd "$RELOAD_CMD"
                 ;;
             
-            2) # Panel Copy (SMART 7-DAY CHECK)
-                echo "📥 Настройка УМНОГО копирования (за 7 дней до конца)..."
+            2) # Panel Copy (MANUAL SELECTION)
+                echo "📥 Подключаюсь к Панели для поиска сертификатов..."
                 
-                # Поиск пути на удаленном сервере (упрощенный поиск из прошлого примера, вставь полный если надо)
-                local FOUND_PATH=""
-                local PATHS=("/root/.acme.sh/${NODE_DOMAIN}_ecc" "/root/.acme.sh/${NODE_DOMAIN}" "/etc/letsencrypt/live/${NODE_DOMAIN}")
-                
+                # 1. Сканируем удаленные пути (Let's Encrypt и Acme.sh)
+                # Используем ls -d, чтобы получить список папок
+                local RAW_LIST
                 if [ $IS_LOCAL_PANEL -eq 1 ]; then
-                    for p in "${PATHS[@]}"; do [[ -f "$p/fullchain.pem" ]] && FOUND_PATH="$p" && break; done
+                    RAW_LIST=$(ls -d /etc/letsencrypt/live/* /root/.acme.sh/*_ecc /root/.acme.sh/* 2>/dev/null)
                 else
-                    for p in "${PATHS[@]}"; do
-                        if sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "[ -f $p/fullchain.pem ]"; then FOUND_PATH="$p"; break; fi
-                    done
-                fi
-                
-                if [ -z "$FOUND_PATH" ]; then 
-                    echo "⚠️ Авто-поиск не нашел путь. Использую дефолт: /etc/letsencrypt/live/$NODE_DOMAIN"
-                    FOUND_PATH="/etc/letsencrypt/live/$NODE_DOMAIN"
+                    # Экранируем * для удаленного shell
+                    RAW_LIST=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "ls -d /etc/letsencrypt/live/* /root/.acme.sh/*_ecc /root/.acme.sh/* 2>/dev/null")
                 fi
 
-                # Скрипт проверки даты
+                # 2. Фильтруем мусор (файлы .conf, ca и т.д.) и собираем массив
+                local OPTIONS=()
+                local i=1
+                echo ""
+                echo "🔎 Найдены сертификаты на Панели:"
+                echo "---------------------------------------------------"
+                
+                for p in $RAW_LIST; do
+                    # Игнорируем системные файлы acme.sh
+                    if [[ "$p" == *"http.header"* || "$p" == *"ca.conf"* || "$p" == *"account.conf"* ]]; then continue; fi
+                    # Проверяем, есть ли внутри файлы ключей (грубая проверка по имени папки)
+                    # (Можно усложнить, но это замедлит работу по SSH)
+                    
+                    OPTIONS+=("$p")
+                    echo "   [$i] $p"
+                    ((i++))
+                done
+                
+                if [ ${#OPTIONS[@]} -eq 0 ]; then
+                    echo "❌ На Панели не найдено папок с сертификатами!"
+                    echo "Проверь пути /etc/letsencrypt/live и /root/.acme.sh"
+                    read -e -p "Введи путь вручную: " FOUND_PATH
+                else
+                    echo "---------------------------------------------------"
+                    echo "   [m] Ввести путь вручную"
+                    local choice
+                    read -p "Выбери сертификат (номер): " choice
+                    
+                    if [[ "$choice" == "m" ]]; then
+                        read -e -p "Введи полный путь: " FOUND_PATH
+                    elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "${OPTIONS[$((choice-1))]}" ]; then
+                        FOUND_PATH="${OPTIONS[$((choice-1))]}"
+                    else
+                        echo "❌ Неверный выбор."; exit 1
+                    fi
+                fi
+
+                echo "✅ Выбран путь: $FOUND_PATH"
+                echo "📥 Копирую..."
+
+                # Скрипт обновления (Smart Renew)
                 cat <<EOF > "$SMART_RENEW_SCRIPT"
 #!/bin/bash
 CERT="$CERT_DIR/fullchain.pem"
@@ -350,36 +383,50 @@ if [ ! -f "\$CERT" ]; then
     echo "Сертификата нет."
     NEED_RENEW=1
 else
-    # Проверяем дату окончания
     if openssl x509 -checkend \$(( 7 * 86400 )) -noout -in "\$CERT"; then
-        echo "Сертификат валиден еще более 7 дней."
+        echo "Сертификат валиден."
         NEED_RENEW=0
     else
-        echo "Сертификат истекает скоро!"
+        echo "Срок истекает!"
         NEED_RENEW=1
     fi
 fi
 
 if [ "\$NEED_RENEW" -eq 1 ]; then
-    echo "Копирую свежий..."
+    echo "Копирую с Панели ($FOUND_PATH)..."
 EOF
+
+                # Генерация команд копирования
                 if [ $IS_LOCAL_PANEL -eq 1 ]; then
+                    # Local
+                    cp -L "$FOUND_PATH/fullchain."* "$CERT_DIR/fullchain.pem" 2>/dev/null
+                    cp -L "$FOUND_PATH/"*key* "$CERT_DIR/privkey.pem" 2>/dev/null
+                    # В скрипт обновления
                     echo "    cp -L $FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem" >> "$SMART_RENEW_SCRIPT"
                     echo "    cp -L $FOUND_PATH/*key* $CERT_DIR/privkey.pem" >> "$SMART_RENEW_SCRIPT"
                 else
+                    # SSH
+                    # Сначала пробуем скопировать сейчас, чтобы убедиться что работает
+                    # Ищем fullchain (он может быть .pem или .cer)
+                    sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.*" "$CERT_DIR/fullchain.pem" 2>/dev/null
+                    # Ищем ключ (privkey.pem или domain.key)
+                    sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/*key*" "$CERT_DIR/privkey.pem" 2>/dev/null
+                    
+                    # В скрипт обновления
                     echo "    sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem" >> "$SMART_RENEW_SCRIPT"
                     echo "    sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/*key* $CERT_DIR/privkey.pem" >> "$SMART_RENEW_SCRIPT"
                 fi
 
+                # Финализация скрипта
                 cat <<EOF >> "$SMART_RENEW_SCRIPT"
     chmod 644 $CERT_DIR/*
     $RELOAD_CMD
+    echo "Обновлено."
 fi
 EOF
                 chmod +x "$SMART_RENEW_SCRIPT"
-                # Первый запуск
-                bash "$SMART_RENEW_SCRIPT"
-                # Cron (Ежедневно)
+                
+                # Добавляем в Cron
                 echo "0 3 * * * root $SMART_RENEW_SCRIPT >> /var/log/cert-renew.log 2>&1" > "$CRON_FILE"
                 ;;
             
