@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21162 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21163 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21162"
+readonly VERSION="v2.21163"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1912,9 +1912,7 @@ FLEET_FILE="${HOME}/.reshala_fleet"
 # Функция-санитар: чинит файл базы
 _sanitize_fleet_database() {
     if [ -f "$FLEET_FILE" ]; then
-        # Удаляем пустые строки
         sed -i '/^$/d' "$FLEET_FILE"
-        # Добавляем перенос строки в конец, если его нет
         [ -s "$FLEET_FILE" ] && [ "$(tail -c1 "$FLEET_FILE" | wc -l)" -eq 0 ] && echo "" >> "$FLEET_FILE"
     fi
 }
@@ -1953,8 +1951,10 @@ manage_fleet() {
                 
                 # Пинг SSH
                 local status="${C_RED}OFF${C_RESET}"
-                # ВАЖНО: Флаг -n запрещает SSH читать stdin, чтобы он не сожрал следующие строки файла!
-                if timeout 1 ssh -n -q -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "$user@$ip" exit 2>/dev/null; then 
+                
+                # ИЗМЕНЕНИЕ ЗДЕСЬ: timeout 3 и ConnectTimeout=3
+                # Даем серверу 3 секунды на ответ, чтобы не моргало через океан
+                if timeout 3 ssh -n -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "$user@$ip" exit 2>/dev/null; then 
                     status="${C_GREEN}ON${C_RESET} "
                 fi
                 
@@ -2061,6 +2061,7 @@ manage_fleet() {
                     clear
                     printf "%b\n" "${C_CYAN}🚀 SKYNET UPLINK: ${C_WHITE}$s_name${C_RESET}"
                     
+                    # Доступ (тоже 3 сек)
                     if ! ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
                         printf "%b\n" "${C_RED}⛔ Нет доступа!${C_RESET}"
                         echo "1. Сервер выключен."
