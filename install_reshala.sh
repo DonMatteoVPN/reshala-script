@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21156 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21157 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21156"
+readonly VERSION="v2.21157"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -62,6 +62,78 @@ safe_read() {
 }
 
 # === SSH KEY UTILS (SILENT & WORKING) ===
+
+menu_keys_management() {
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║               🔑 УПРАВЛЕНИЕ SSH КЛЮЧАМИ                      ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "Доступные ключи:"
+        echo "--------------------------------------------------"
+        
+        # Собираем массив ключей
+        local keys=()
+        local i=1
+        
+        # 1. Мастер-ключ
+        if [ -f "$HOME/.ssh/id_ed25519" ]; then
+            keys[$i]="$HOME/.ssh/id_ed25519|MASTER KEY (Основной)"
+            printf "   [%d] %b%-30s%b (Дефолтный)\n" "$i" "${C_GREEN}" "MASTER KEY" "${C_RESET}"
+            ((i++))
+        fi
+        
+        # 2. Уникальные ключи
+        for k in ~/.ssh/id_reshala_*; do
+            if [[ -f "$k" ]] && [[ "$k" != *.pub ]]; then
+                local k_name=$(basename "$k" | sed 's/id_reshala_//')
+                keys[$i]="$k|$k_name"
+                printf "   [%d] %b%-30s%b (Для сервера: %s)\n" "$i" "${C_YELLOW}" "UNIQUE KEY" "${C_RESET}" "$k_name"
+                ((i++))
+            fi
+        done
+        
+        echo "--------------------------------------------------"
+        echo "   [b] 🔙 Назад"
+        echo ""
+        
+        local choice
+        read -r -p "Выбери ключ для просмотра: " choice || continue
+        
+        if [[ "$choice" == "b" || "$choice" == "B" ]]; then break; fi
+        
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${keys[$choice]}" ]; then
+            IFS='|' read -r k_path k_desc <<< "${keys[$choice]}"
+            
+            echo ""
+            echo "Что показать?"
+            echo "   1) 🔓 ПУБЛИЧНЫЙ (Public)  -> Чтобы закинуть на сервер"
+            echo "   2) 🔐 ПРИВАТНЫЙ (Private) -> Чтобы скопировать себе на ПК/Телефон"
+            local type_choice; type_choice=$(safe_read "Выбор: " "1")
+            
+            if [[ "$type_choice" == "1" ]]; then
+                echo ""
+                echo "👇 Скопируй эту строку и вставь в /root/.ssh/authorized_keys на сервере:"
+                printf "%b\n" "${C_GREEN}$(cat "${k_path}.pub")${C_RESET}"
+                echo ""
+                wait_for_enter
+            elif [[ "$type_choice" == "2" ]]; then
+                echo ""
+                printf "%b\n" "${C_RED}☢️  ВНИМАНИЕ! ЭТО СЕКРЕТНЫЙ КЛЮЧ! ☢️${C_RESET}"
+                echo "Никому не показывай. Скопируй и сразу очисти экран."
+                read -p "Нажми Enter, чтобы показать..."
+                echo ""
+                # Выводим ключ
+                cat "$k_path"
+                echo ""
+                echo "--------------------------------------------------"
+                read -p "Нажми Enter, чтобы СКРЫТЬ и очистить экран..."
+                clear # Стираем следы
+            fi
+        fi
+    done
+}
 
 _ensure_master_key() {
     if [ ! -f ~/.ssh/id_ed25519 ]; then
@@ -1851,23 +1923,27 @@ manage_fleet() {
         
         local i=1
         local servers=()
+        
         if [ ! -s "$FLEET_FILE" ]; then
             echo "   (Пусто. Добавь сервер [a])"
         else
+            # Читаем файл построчно
             while IFS='|' read -r name user ip port key_path || [ -n "$name" ]; do
-                [ -z "$name" ] && continue
+                # 1. Фильтр от говна: Если нет имени или IP - пропускаем строку
+                if [[ -z "$name" ]] || [[ -z "$ip" ]]; then continue; fi
+                
+                # 2. Валидация ключа
+                if [[ ! -f "$key_path" ]]; then key_path="$HOME/.ssh/id_ed25519"; fi
                 
                 servers[$i]="$name|$user|$ip|$port|$key_path"
                 
-                # Какой ключ?
+                # Отображение типа ключа
                 local kp_display="Master"
                 if [[ "$key_path" == *"id_reshala_"* ]]; then kp_display="Unique"; fi
                 
-                # Пинг SSH (быстрый чек)
+                # Пинг (быстрый)
                 local status="${C_RED}OFF${C_RESET}"
-                local actual_key="${key_path:-$HOME/.ssh/id_ed25519}"
-                
-                if ssh -q -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=no -i "$actual_key" -p "$port" "$user@$ip" exit 2>/dev/null; then 
+                if ssh -q -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "$user@$ip" exit 2>/dev/null; then 
                     status="${C_GREEN}ON${C_RESET} "
                 fi
                 
@@ -1877,8 +1953,10 @@ manage_fleet() {
         fi
         echo "----------------------------------------------------------------"
         echo "   [a] ➕ Добавить сервер (+ Ключ)"
+        echo "   [k] 🔑 Посмотреть/Скопировать ключи"
         echo "   [e] ✏️ Редактировать сервер"
         echo "   [d] 🗑️ Удалить сервер"
+        echo "   [x] ☢️ Сброс настроек (Удалить всю базу)"
         echo "   [b] 🔙 Назад в главное меню"
         echo ""
         
@@ -1890,12 +1968,12 @@ manage_fleet() {
                 echo ""; echo "--- НОВЫЙ БОЕЦ ---"
                 local s_name; s_name=$(safe_read "Имя: " "")
                 local s_ip; s_ip=$(safe_read "IP: " "")
-                local s_user; s_user=$(safe_read "User: " "root")
-                local s_port; s_port=$(safe_read "Port: " "22")
+                local s_user; s_user=$(safe_read "User (Enter=root): " "root")
+                local s_port; s_port=$(safe_read "Port (Enter=22): " "22")
                 
                 if [[ -n "$s_name" && -n "$s_ip" ]]; then
                     echo ""; echo "Выбери ключ:"
-                    echo "1) Общий Мастер-ключ"
+                    echo "1) Общий Мастер-ключ (Рекомендую)"
                     echo "2) Создать УНИКАЛЬНЫЙ ключ"
                     local k_choice; k_choice=$(safe_read "Вариант (1/2): " "1")
                     
@@ -1909,48 +1987,103 @@ manage_fleet() {
                     echo ""; echo "🚀 Пробуем закинуть ключ..."
                     _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$final_key"
                     
+                    # Записываем в базу
                     echo "$s_name|$s_user|$s_ip|$s_port|$final_key" >> "$FLEET_FILE"
                     echo "✅ Сохранено."
                     sleep 1
+                else
+                    echo "❌ Отмена: Не указано Имя или IP."
+                    sleep 1
                 fi
+                ;;
+            [kK])
+                # Запускаем новый менеджер ключей
+                menu_keys_management
                 ;;
             [eE])
                 local edit_num; edit_num=$(safe_read "Номер: " "")
                 if [[ "$edit_num" =~ ^[0-9]+$ ]] && [ -n "${servers[$edit_num]}" ]; then
-                    # Тут логика редактирования (как была раньше, сократил для места)
-                    # ... (код редактирования идентичен прошлой версии)
-                    echo "Функция редактирования..." # Вставь сюда код из прошлого ответа если надо
+                    IFS='|' read -r old_name old_user old_ip old_port old_key <<< "${servers[$edit_num]}"
+                    echo "--- РЕДАКТИРОВАНИЕ [$old_name] ---"
+                    local new_name; new_name=$(safe_read "Имя [$old_name]: " "$old_name")
+                    local new_ip; new_ip=$(safe_read "IP [$old_ip]: " "$old_ip")
+                    local new_user; new_user=$(safe_read "User [$old_user]: " "$old_user")
+                    local new_port; new_port=$(safe_read "Port [$old_port]: " "$old_port")
+                    
+                    # Перезапись файла
+                    local temp_file="${FLEET_FILE}.tmp"
+                    local line_count=1
+                    # Читаем файл заново для надежности
+                    while IFS='|' read -r n u i p k || [ -n "$n" ]; do
+                        [ -z "$n" ] && continue
+                        if [ "$line_count" -eq "$edit_num" ]; then
+                            echo "$new_name|$new_user|$new_ip|$new_port|$old_key" >> "$temp_file"
+                        else
+                            echo "$n|$u|$i|$p|$k" >> "$temp_file"
+                        fi
+                        ((line_count++))
+                    done < "$FLEET_FILE"
+                    mv "$temp_file" "$FLEET_FILE"
+                    echo "✅ Обновлено."
                 fi
                 ;;
             [dD])
                 local del_num; del_num=$(safe_read "Номер: " "")
-                if [[ "$del_num" =~ ^[0-9]+$ ]]; then sed -i "${del_num}d" "$FLEET_FILE"; fi
+                if [[ "$del_num" =~ ^[0-9]+$ ]]; then 
+                    # Удаляем строку (с учетом пустых строк, sed удаляет физическую строку)
+                    # Лучше пересобрать файл как в Edit, но sed быстрее для простых случаев
+                    # Учтем, что в файле могут быть пустые строки, поэтому sed по номеру строки - риск.
+                    # Надежнее пересобрать массив.
+                    
+                    local temp_file="${FLEET_FILE}.tmp"
+                    local line_count=1
+                    while IFS='|' read -r n u i p k || [ -n "$n" ]; do
+                        [ -z "$n" ] && continue
+                        if [ "$line_count" -ne "$del_num" ]; then
+                            echo "$n|$u|$i|$p|$k" >> "$temp_file"
+                        fi
+                        ((line_count++))
+                    done < "$FLEET_FILE"
+                    [ -f "$temp_file" ] && mv "$temp_file" "$FLEET_FILE"
+                    echo "🗑️ Удалено."
+                fi
+                ;;
+            [xX])
+                echo ""
+                printf "%b\n" "${C_RED}☢️  ВНИМАНИЕ! ЭТО УДАЛИТ ВЕСЬ СПИСОК СЕРВЕРОВ!${C_RESET}"
+                read -p "Ты уверен? (yes/no): " confirm
+                if [[ "$confirm" == "yes" ]]; then
+                    rm -f "$FLEET_FILE"
+                    touch "$FLEET_FILE"
+                    echo "🗑️ База уничтожена. Начинай с чистого листа."
+                    sleep 1
+                fi
                 ;;
             [bB]) break ;;
             *)
+                # ТЕЛЕПОРТАЦИЯ
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$choice]}" ]; then
-                    # === CONNECT LOGIC ===
                     local selected="${servers[$choice]}"
                     IFS='|' read -r s_name s_user s_ip s_port s_key <<< "$selected"
-                    s_key=${s_key:-$HOME/.ssh/id_ed25519}
-                    s_key=$(echo "$s_key" | xargs)
+                    
+                    # Дефолт ключ если пусто
+                    if [[ ! -f "$s_key" ]]; then s_key="$HOME/.ssh/id_ed25519"; fi
                     
                     clear
                     printf "%b\n" "${C_CYAN}🚀 SKYNET UPLINK: ${C_WHITE}$s_name${C_RESET}"
                     
-                    # 1. Проверка доступа
+                    # 1. Доступ
                     if ! ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
-                        printf "%b\n" "${C_RED}⛔ Нет доступа по ключу!${C_RESET}"
-                        read -p "Попробовать прокинуть ключ? (y/n): " try_fix
+                        printf "%b\n" "${C_RED}⛔ Нет доступа! (Ключ не подходит или сервер лежит)${C_RESET}"
+                        read -p "Попробовать закинуть ключ заново? (y/n): " try_fix
                         if [[ "$try_fix" == "y" ]]; then
                             _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$s_key"
                         fi
                         continue
                     fi
                     
-                    # 2. Проверка версии и наличия
-                    echo "🔍 Сверка версий протоколов..."
-                    # Получаем версию удаленного решалы (если есть)
+                    # 2. Версия
+                    echo "🔍 Сверка версий..."
                     local remote_ver_cmd="if [ -f /usr/local/bin/reshala ]; then grep 'readonly VERSION' /usr/local/bin/reshala | cut -d'\"' -f2; else echo 'NONE'; fi"
                     local remote_ver
                     remote_ver=$(ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$remote_ver_cmd")
@@ -1960,25 +2093,24 @@ manage_fleet() {
                         echo "⚠️  Решала не установлен."
                         need_install=1
                     elif [[ "$remote_ver" != "$VERSION" ]]; then
-                        echo "⚠️  Версии не совпадают (Local: $VERSION vs Remote: $remote_ver)."
+                        echo "⚠️  Обновление протокола ($remote_ver -> $VERSION)..."
                         need_install=1
                     else
-                        echo "✅ Версии синхронизированы ($VERSION)."
+                        echo "✅ Версии совпадают."
                     fi
                     
                     if [ $need_install -eq 1 ]; then
-                        printf "%b\n" "${C_YELLOW}📦 Инсталляция актуальной версии на удаленный сервер...${C_RESET}"
-                        # Удаляем старый (на всякий) и ставим новый
+                        printf "%b\n" "${C_YELLOW}📦 Загрузка обновления на удаленный сервер...${C_RESET}"
                         ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "rm -f /usr/local/bin/reshala; wget -qO- ${SCRIPT_URL} | sudo bash -s install"
                     fi
                     
-                    # 3. ЗАПУСК В РЕЖИМЕ SKYNET
-                    # Передаем SKYNET_MODE=1 чтобы там изменилось меню
-                    printf "%b\n" "${C_GREEN}✅ Соединение установлено. Передаю управление...${C_RESET}"
+                    # 3. ЗАПУСК
+                    printf "%b\n" "${C_GREEN}✅ Управление передано. Входим...${C_RESET}"
                     sleep 1
+                    # -t обязателен для меню
                     ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo SKYNET_MODE=1 reshala"
                     
-                    printf "\n%b\n" "${C_CYAN}🔙 Сеанс связи с $s_name завершен.${C_RESET}"
+                    printf "\n%b\n" "${C_CYAN}🔙 Связь с $s_name разорвана. Мы дома.${C_RESET}"
                     sleep 1
                 fi
                 ;;
