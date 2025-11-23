@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21147 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21148 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21147"
+readonly VERSION="v2.21148"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -119,7 +119,7 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# === КАЛЬКУЛЯТОР ВМЕСТИМОСТИ (REALISTIC EDITION) ===
+# === КАЛЬКУЛЯТОР ВМЕСТИМОСТИ (TRUE REALISTIC EDITION) ===
 calculate_vpn_capacity() {
     local upload_speed=$1  # В Мбит/с
     
@@ -128,47 +128,55 @@ calculate_vpn_capacity() {
     local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
     local cpu_cores; cpu_cores=$(nproc)
     
-    # Считаем реально свободную память (Total - Used)
-    # Оставляем буфер 100МБ, чтобы линукс не сдох
-    local available_ram=$((ram_total - ram_used - 100))
+    # Считаем РЕАЛЬНО доступную память.
+    # Оставляем буфер 250МБ системе, чтобы она не задыхалась.
+    local available_ram=$((ram_total - ram_used - 250))
     if [ "$available_ram" -lt 0 ]; then available_ram=0; fi
     
     # 2. Лимит по RAM 
-    # Xray эффективен. Активный юзер ест ~2-3 МБ (если не Ddos).
-    # Берем 3 МБ для надежности.
-    local max_users_ram=$((available_ram / 3))
+    # Активная сессия Xray + буферы TCP жрут память.
+    # Берем 4 МБ на юзера (это честный расчет для стабильности).
+    local max_users_ram=$((available_ram / 4))
     
     # 3. Лимит по CPU 
-    # Xeon v4 тащит много. ~500 юзеров на ядро в смешанном режиме.
-    local max_users_cpu=$((cpu_cores * 500))
+    # У тебя Ryzen 9 — это зверь. Он вывезет дохера.
+    # Считаем 600 юзеров на ядро (шифрование ест проц).
+    local max_users_cpu=$((cpu_cores * 600))
     
     # Железный лимит (меньшее из RAM и CPU)
     local hw_limit=$max_users_ram
-    [ "$max_users_cpu" -lt "$max_users_ram" ] && hw_limit=$max_users_cpu
+    local hw_reason="RAM"
     
-    # 4. Лимит по КАНАЛУ (С учетом оверселлинга)
+    if [ "$max_users_cpu" -lt "$max_users_ram" ]; then 
+        hw_limit=$max_users_cpu
+        hw_reason="CPU"
+    fi
+    
+    # 4. Лимит по КАНАЛУ (Самое важное)
     if [ -n "$upload_speed" ]; then
         local clean_speed=${upload_speed%.*}
         
-        # ЛОГИКА ПРОВАЙДЕРА:
-        # Не все качают одновременно. Коэффициент мультиплексирования ~1.5 - 2.
-        # То есть на 100 Мбит можно посадить 150-200 человек (смешанный трафик).
-        # Формула: (Скорость * 1.5)
-        local net_limit=$(awk "BEGIN {printf \"%.0f\", $clean_speed * 1.5}")
+        # ЛОГИКА:
+        # Активный юзер (YouTube/Insta/TikTok) потребляет в среднем 1.2 - 1.5 Мбит.
+        # Да, есть оверселлинг, но мы считаем КОМФОРТНЫХ активных юзеров.
+        # Коэффициент 0.8 от скорости (это примерно 1.25 Мбит на юзера).
+        # Пример: 400 Мбит * 0.8 = 320 юзеров.
+        local net_limit=$(awk "BEGIN {printf \"%.0f\", $clean_speed * 0.8}")
         
-        # ФИНАЛЬНЫЙ ВЕРДИКТ
+        # ФИНАЛЬНЫЙ ВЕРДИКТ: Кто слабое звено?
         if [ "$net_limit" -lt "$hw_limit" ]; then
             # Если канал узкий
-            echo "$net_limit (Упор в канал)"
+            echo "$net_limit (Упор в Канал)"
         else
-            # Если канал широкий, упремся в память или проц
-            # (Скорее всего в память, т.к. у тебя 1GB всего)
-            echo "$hw_limit (Упор в RAM/CPU)"
+            # Если канал широкий, упремся в железо (обычно RAM)
+            echo "$hw_limit (Упор в $hw_reason)"
         fi
     else
-        echo "$hw_limit (Теория)"
+        # Если теста не было
+        echo "$hw_limit (Лимит $hw_reason)"
     fi
 }
+
 _ensure_net_tools() {
     if ! command -v ethtool &>/dev/null; then
         # Тихая установка ethtool для определения скорости порта
