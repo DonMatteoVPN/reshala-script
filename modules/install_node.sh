@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================ #
-# ==   МОДУЛЬ УСТАНОВКИ БОЕВОЙ НОДЫ (VLESS-WS-TLS-MIMIC)    ==
-# ==             SPECIAL FOR REMNAWAVE PANEL                ==
+# ==   МОДУЛЬ УСТАНОВКИ REMNAWAVE NODE (VLESS-WS-TLS)       ==
+# ==          BASED ON BEST PRACTICES & RESHALA STYLE       ==
 # ============================================================ #
 
 # --- Цвета ---
@@ -11,58 +11,62 @@ C_GREEN='\033[0;32m'
 C_YELLOW='\033[1;33m'
 C_CYAN='\033[0;36m'
 C_BOLD='\033[1m'
-C_GRAY='\033[0;90m'
 
-# --- Пути ---
+# --- Конфигурация ---
 INSTALL_DIR="/opt/remnawave-node"
 CERT_DIR="/root/certs_node"
 SITE_DIR="/var/www/html"
 ROTATE_SCRIPT="/usr/local/bin/reshala-rotate-site"
+CRON_FILE="/etc/cron.d/remnawave-node"
 
 # --- Глобальные переменные ---
 NODE_DOMAIN=""
 NODE_SECRET=""
 CERT_STRATEGY="" 
+CF_TOKEN=""
+CF_EMAIL=""
 PANEL_IP=""
 PANEL_PORT="22"
 PANEL_USER="root"
 PANEL_PASS=""
 IS_LOCAL_PANEL=0
-CF_TOKEN=""
-CF_EMAIL=""
 
-# --- Утилиты ---
-run_cmd() { 
-    if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi
-}
+run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
+safe_read() { read -e -p "$1" -i "$2" result; echo "${result:-$2}"; }
 
-safe_read() {
-    local prompt="$1"
-    local default="$2"
-    local result
-    if [ -n "$default" ]; then
-        read -e -p "$prompt" -i "$default" result
-    else
-        read -e -p "$prompt" result
+# ============================================================ #
+#                     ПРОВЕРКА СТАТУСА                         #
+# ============================================================ #
+check_existing_installation() {
+    if [ -d "$INSTALL_DIR" ] || docker ps | grep -q "remnanode"; then
+        clear
+        printf "%b\n" "${C_RED}╔══════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_RED}║       ⚠️  ВНИМАНИЕ! НОДА УЖЕ УСТАНОВЛЕНА! ⚠️             ║${C_RESET}"
+        printf "%b\n" "${C_RED}╚══════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "   [1] 🔄 СНЕСТИ И ПЕРЕУСТАНОВИТЬ (Полный сброс)"
+        echo "   [2] 🛠  Только обновить конфиги (Docker Compose)"
+        echo "   [b] 🔙 Отмена"
+        
+        local choice=$(safe_read "Твой выбор: " "b")
+        case "$choice" in
+            1) 
+                echo "🧨 Уничтожаю старую ноду..."
+                if [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
+                    cd "$INSTALL_DIR" && docker compose down -v 2>/dev/null
+                fi
+                rm -rf "$INSTALL_DIR"
+                rm -f "$CRON_FILE"
+                echo "✅ Площадка зачищена."
+                ;;
+            2)
+                echo "🔧 Режим обновления..."
+                # Пропускаем сбор данных, используем существующие (если найдем) или запрашиваем минимум
+                # Для простоты в этом режиме мы просто перезапишем docker-compose, но данные спросим заново
+                ;;
+            *) exit 0 ;;
+        esac
     fi
-    echo "${result:-$default}"
-}
-
-# Проверка, является ли IP локальным
-check_if_local() {
-    local ip=$1
-    if [[ "$ip" == "127.0.0.1" || "$ip" == "localhost" ]]; then
-        return 0
-    fi
-    
-    # Получаем свои IP
-    local my_ips
-    my_ips=$(hostname -I)
-    if [[ "$my_ips" == *"$ip"* ]]; then
-        return 0
-    fi
-    
-    return 1
 }
 
 # ============================================================ #
@@ -78,92 +82,103 @@ collect_data() {
     # 1. Данные Ноды
     printf "%b\n" "${C_BOLD}[ 1. НАСТРОЙКИ НОДЫ ]${C_RESET}"
     NODE_DOMAIN=$(safe_read "🌐 Домен ноды (напр. tr1.site.com): " "")
-    if [ -z "$NODE_DOMAIN" ]; then echo "❌ Домен обязателен."; exit 1; fi
+    [[ -z "$NODE_DOMAIN" ]] && { echo "❌ Домен нужен."; exit 1; }
     
     NODE_SECRET=$(safe_read "🔑 SECRET_KEY ноды (из Панели): " "")
-    if [ -z "$NODE_SECRET" ]; then echo "❌ Ключ обязателен."; exit 1; fi
+    [[ -z "$NODE_SECRET" ]] && { echo "❌ Ключ нужен."; exit 1; }
     
     # 2. Выбор стратегии сертификатов
     echo ""
-    printf "%b\n" "${C_BOLD}[ 2. ОТКУДА БЕРЕМ СЕРТИФИКАТЫ? ]${C_RESET}"
-    echo "   [1] ☁️  Cloudflare API (Wildcard, нужен Токен)"
-    echo "   [2] 📥 Скопировать с сервера Панели (SSH/Local)"
-    echo "   [3] 📂 Локальные файлы (уже лежат в $CERT_DIR)"
+    printf "%b\n" "${C_BOLD}[ 2. СЕРТИФИКАТЫ (SSL) ]${C_RESET}"
+    echo "   [1] ☁️  Cloudflare API (Лучший выбор для Wildcard)"
+    echo "   [2] 📥 Скопировать с Панели (SSH/Local)"
+    echo "   [3] 🆕 Выпустить Certbot Standalone (Нужен открытый 80 порт)"
+    echo "   [4] 📂 Локальные файлы (уже есть в $CERT_DIR)"
     
-    CERT_STRATEGY=$(safe_read "Твой выбор (1-3): " "2")
+    CERT_STRATEGY=$(safe_read "Выбор (1-4): " "1")
     
-    # 3. Доп. данные
     case "$CERT_STRATEGY" in
         1) 
             echo ""
-            printf "%b\n" "${C_YELLOW}--- Настройки Cloudflare ---${C_RESET}"
-            CF_TOKEN=$(safe_read "API Token (Edit Zone DNS): " "")
-            CF_EMAIL=$(safe_read "Email аккаунта CF: " "")
-            if [[ -z "$CF_TOKEN" || -z "$CF_EMAIL" ]]; then echo "❌ Данные CF обязательны."; exit 1; fi
+            printf "%b\n" "${C_YELLOW}--- Cloudflare Settings ---${C_RESET}"
+            CF_TOKEN=$(safe_read "API Token: " "")
+            CF_EMAIL=$(safe_read "Email: " "")
+            [[ -z "$CF_TOKEN" ]] && { echo "❌ Token нужен."; exit 1; }
             ;;
-        2) 
+        2)
             echo ""
-            printf "%b\n" "${C_YELLOW}--- Данные сервера с Панелью ---${C_RESET}"
-            PANEL_IP=$(safe_read "IP Панели (или localhost): " "")
-            if [ -z "$PANEL_IP" ]; then echo "❌ IP обязателен."; exit 1; fi
-            
-            if check_if_local "$PANEL_IP"; then
+            printf "%b\n" "${C_YELLOW}--- Panel Settings ---${C_RESET}"
+            PANEL_IP=$(safe_read "IP Панели: " "")
+            # Проверка на локалхост
+            if [[ "$PANEL_IP" == "127.0.0.1" || "$PANEL_IP" == "localhost" || "$PANEL_IP" == "$(hostname -I | awk '{print $1}')" ]]; then
                 IS_LOCAL_PANEL=1
-                printf "%b\n" "${C_GREEN}✅ Обнаружена локальная установка. SSH не нужен.${C_RESET}"
+                echo "✅ Панель на этом же сервере."
             else
                 IS_LOCAL_PANEL=0
-                PANEL_PORT=$(safe_read "SSH Порт Панели: " "22")
-                PANEL_USER=$(safe_read "User (Enter = root): " "root")
-                echo "🔐 Введи пароль root от Панели:"
+                PANEL_PORT=$(safe_read "SSH Порт: " "22")
+                PANEL_USER=$(safe_read "User: " "root")
+                echo "🔐 Пароль root от Панели:"
                 read -s -p "Пароль: " PANEL_PASS
                 echo ""
                 
-                # ПРОВЕРКА СВЯЗИ СРАЗУ
-                echo ""
-                printf "%b" "📡 Проверяю коннект к Панели... "
-                if ! command -v sshpass &>/dev/null; then apt-get update -qq && apt-get install -y -qq sshpass >/dev/null; fi
-                
-                if sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" exit 2>/dev/null; then
-                    printf "%b\n" "${C_GREEN}OK!${C_RESET}"
+                # Test Connection
+                if ! command -v sshpass &>/dev/null; then apt-get update -qq && apt-get install -y -qq sshpass; fi
+                echo "📡 Проверка соединения..."
+                if ! sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" exit 2>/dev/null; then
+                    echo "❌ Ошибка соединения с панелью! Проверь IP/Порт/Пароль."; exit 1
                 else
-                    printf "%b\n" "${C_RED}ОШИБКА!${C_RESET}"
-                    echo "Не могу подключиться к $PANEL_IP:$PANEL_PORT. Проверь пароль и порт."
-                    exit 1
+                    echo "✅ Связь есть."
                 fi
             fi
             ;;
-        3) 
-            echo "ℹ️  Убедись, что файлы fullchain.pem и privkey.pem лежат в $CERT_DIR"
+        3)
+            echo "ℹ️  Внимание: Для этого порт 80 должен быть свободен."
+            ;;
+        4) 
+            echo "ℹ️  Положи файлы fullchain.pem и privkey.pem в $CERT_DIR перед продолжением."
             sleep 2
             ;;
-        *) echo "❌ Неверный выбор."; exit 1 ;;
     esac
-    
-    echo ""
-    printf "%b\n" "${C_GREEN}✅ Данные валидны. Начинаем установку...${C_RESET}"
-    sleep 1
 }
 
 # ============================================================ #
-#                     ИНСТРУМЕНТЫ                              #
+#                     УСТАНОВКА СОФТА                          #
 # ============================================================ #
-install_dependencies() {
+install_pkgs() {
     echo ""
-    printf "%b" "🔧 Проверяю инструменты... "
+    printf "%b" "🔧 Ставлю инструменты... "
     export DEBIAN_FRONTEND=noninteractive
-    local pkgs="curl wget unzip jq socat git cron sshpass"
-    if ! command -v socat &>/dev/null || ! command -v sshpass &>/dev/null; then
-        run_cmd apt-get update -qq >/dev/null 2>&1
-        run_cmd apt-get install -y -qq $pkgs >/dev/null 2>&1
-    fi
-    printf "%b\n" "${C_GREEN}OK.${C_RESET}"
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq curl wget unzip jq socat git cron sshpass ufw >/dev/null
     
     if ! command -v docker &> /dev/null; then
-        printf "%b" "🐳 Ставлю Docker... "
+        printf "🐳 Ставлю Docker... "
         curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
-        printf "%b\n" "${C_GREEN}Готово.${C_RESET}"
+    fi
+    printf "%b\n" "${C_GREEN}OK${C_RESET}"
+}
+
+# ============================================================ #
+#                     FIREWALL (КРИТИЧНО)                      #
+# ============================================================ #
+setup_firewall() {
+    echo ""
+    printf "%b\n" "${C_CYAN}🛡️ Настройка Firewall (Открываем порты)...${C_RESET}"
+    
+    # Открываем порты для Xray, Nginx и API Панели
+    ufw allow 22/tcp >/dev/null 2>&1
+    ufw allow 80/tcp >/dev/null 2>&1
+    ufw allow 443/tcp >/dev/null 2>&1
+    
+    # ВАЖНО: Порт для связи с панелью!
+    ufw allow 2222/tcp >/dev/null 2>&1
+    
+    # Если UFW включен - перезагружаем правила, если нет - не трогаем (чтобы не залочить доступ)
+    if ufw status | grep -q "Status: active"; then
+        ufw reload >/dev/null 2>&1
+        echo "✅ Порты 80, 443, 2222 открыты в UFW."
     else
-        printf "🐳 Docker уже на борту. %bOK.%b\n" "${C_GREEN}" "${C_RESET}"
+        echo "ℹ️  UFW не активен, полагаемся на настройки хостинга."
     fi
 }
 
@@ -173,120 +188,82 @@ install_dependencies() {
 setup_certificates() {
     mkdir -p "$CERT_DIR"
     echo ""
-    printf "%b\n" "${C_CYAN}🔒 Настройка SSL ($NODE_DOMAIN)...${C_RESET}"
+    printf "%b\n" "${C_CYAN}🔒 Настройка SSL...${C_RESET}"
+    
+    local RELOAD_CMD="docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode"
 
     case $CERT_STRATEGY in
-        1) # Cloudflare (Без изменений)
-            echo "🚀 Ставлю acme.sh..."
-            curl -s https://get.acme.sh | sh -s email="$CF_EMAIL" >/dev/null 2>&1
+        1) # Cloudflare (acme.sh)
+            if [ ! -d "/root/.acme.sh" ]; then
+                curl https://get.acme.sh | sh -s email="$CF_EMAIL" >/dev/null 2>&1
+            fi
             export CF_Token="$CF_TOKEN"; export CF_Email="$CF_EMAIL"
-            echo "🔑 Выпускаю сертификат..."
-            ~/.acme.sh/acme.sh --issue --dns dns_cf -d "$NODE_DOMAIN" -d "*.$NODE_DOMAIN" --force >/dev/null 2>&1
-            ~/.acme.sh/acme.sh --install-cert -d "$NODE_DOMAIN" \
-                --key-file "$CERT_DIR/privkey.pem" --fullchain-file "$CERT_DIR/fullchain.pem" \
-                --reloadcmd "docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode" >/dev/null 2>&1
+            
+            echo "🔑 Выпуск сертификата (acme.sh)..."
+            /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$NODE_DOMAIN" -d "*.$NODE_DOMAIN" --force
+            /root/.acme.sh/acme.sh --install-cert -d "$NODE_DOMAIN" \
+                --key-file "$CERT_DIR/privkey.pem" \
+                --fullchain-file "$CERT_DIR/fullchain.pem" \
+                --reloadcmd "$RELOAD_CMD"
             ;;
             
-        2) # Panel (SSH сканирование)
+        2) # Panel Copy
+            echo "📥 Копирование сертификатов..."
+            # Улучшенный поиск путей (как в прошлом фиксе)
             local FOUND_PATH=""
-            echo "🔎 Сканирую сервер Панели на наличие сертификатов..."
-
-            # 1. Сканируем Let's Encrypt
-            local le_paths
-            if [ $IS_LOCAL_PANEL -eq 1 ]; then
-                le_paths=$(ls -d /etc/letsencrypt/live/* 2>/dev/null)
-            else
-                le_paths=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "ls -d /etc/letsencrypt/live/*" 2>/dev/null)
-            fi
-
-            # 2. Сканируем Acme.sh
-            local acme_paths
-            if [ $IS_LOCAL_PANEL -eq 1 ]; then
-                acme_paths=$(ls -d /root/.acme.sh/*_ecc 2>/dev/null)
-            else
-                acme_paths=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "ls -d /root/.acme.sh/*_ecc" 2>/dev/null)
-            fi
-
-            # Собираем всё в кучу
-            local ALL_PATHS="$le_paths $acme_paths"
-            local OPTIONS=()
-            local i=1
+            local PATHS=("/root/.acme.sh/${NODE_DOMAIN}_ecc" "/root/.acme.sh/${NODE_DOMAIN}" "/etc/letsencrypt/live/${NODE_DOMAIN}")
             
-            # Ищем точное совпадение
-            for p in $ALL_PATHS; do
-                [[ -z "$p" ]] && continue
-                OPTIONS+=("$p")
+            if [ $IS_LOCAL_PANEL -eq 1 ]; then
+                for p in "${PATHS[@]}"; do [[ -f "$p/fullchain.pem" ]] && FOUND_PATH="$p" && break; done
+                if [ -z "$FOUND_PATH" ]; then read -e -p "❌ Путь локально не найден. Введи вручную: " FOUND_PATH; fi
                 
-                # Если путь содержит наш домен — запоминаем как приоритет
-                if [[ "$p" == *"$NODE_DOMAIN"* ]]; then
-                    FOUND_PATH="$p"
-                fi
-            done
-
-            if [ ${#OPTIONS[@]} -eq 0 ]; then
-                echo "❌ На Панели вообще нет сертификатов (пусто в /etc/letsencrypt и .acme.sh)."
-                read -e -p "Введи путь вручную: " FOUND_PATH
-            elif [ -n "$FOUND_PATH" ]; then
-                # Нашли точное совпадение
-                echo "✅ Нашел сертификат: $FOUND_PATH"
+                cp -L "$FOUND_PATH/fullchain."* "$CERT_DIR/fullchain.pem"
+                cp -L "$FOUND_PATH/"*key* "$CERT_DIR/privkey.pem"
+                # Cron Local
+                echo "0 3 * * 1 cp -L $FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && cp -L $FOUND_PATH/*key* $CERT_DIR/privkey.pem && $RELOAD_CMD" > "$CRON_FILE"
             else
-                # Не нашли точного, даем выбор
-                echo "⚠️  Точного совпадения для $NODE_DOMAIN не нашел."
-                echo "Выбери из того, что есть:"
-                for opt in "${OPTIONS[@]}"; do
-                    echo "   [$i] $opt"
-                    ((i++))
+                for p in "${PATHS[@]}"; do
+                    if sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "[ -f $p/fullchain.pem ]"; then FOUND_PATH="$p"; break; fi
                 done
-                local choice
-                read -p "Номер: " choice
-                choice=$((choice-1))
-                FOUND_PATH="${OPTIONS[$choice]}"
-            fi
-
-            echo "📥 Качаю из: $FOUND_PATH"
-            
-            if [ $IS_LOCAL_PANEL -eq 1 ]; then
-                # Локальное копирование (с разыменованием симлинков)
-                cp -L "$FOUND_PATH/fullchain.pem" "$CERT_DIR/fullchain.pem" 2>/dev/null || cp -L "$FOUND_PATH/fullchain.cer" "$CERT_DIR/fullchain.pem"
-                cp -L "$FOUND_PATH/privkey.pem" "$CERT_DIR/privkey.pem" 2>/dev/null || cp -L "$FOUND_PATH/"*key* "$CERT_DIR/privkey.pem"
+                if [ -z "$FOUND_PATH" ]; then read -e -p "❌ Путь удаленно не найден. Введи вручную: " FOUND_PATH; fi
                 
-                # Крон
-                (crontab -l 2>/dev/null; echo "0 3 * * 1 cp -L $FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && cp -L $FOUND_PATH/*key* $CERT_DIR/privkey.pem && docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode") | crontab -
-            else
-                # SSH копирование
-                sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.*" "$CERT_DIR/fullchain.pem" >/dev/null 2>&1
-                # Если scp fullchain.* не нашел (например, там .cer), пробуем конкретные имена
-                if [ ! -f "$CERT_DIR/fullchain.pem" ]; then
-                     sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.cer" "$CERT_DIR/fullchain.pem" >/dev/null 2>&1
-                fi
-
-                sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/*key*" "$CERT_DIR/privkey.pem" >/dev/null 2>&1
+                sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.*" "$CERT_DIR/fullchain.pem"
+                sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/*key*" "$CERT_DIR/privkey.pem"
                 
-                # Крон
-                local CRON_CMD="sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/*key* $CERT_DIR/privkey.pem && docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode"
-                (crontab -l 2>/dev/null; echo "0 3 * * 1 $CRON_CMD") | crontab -
+                # Cron SSH
+                echo "0 3 * * 1 sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/*key* $CERT_DIR/privkey.pem && $RELOAD_CMD" > "$CRON_FILE"
             fi
-            
-            echo "✅ Готово."
             ;;
             
-        3) # Local
+        3) # Certbot Standalone
+            echo "🆕 Выпускаю сертификат через Certbot..."
+            # Останавливаем то, что может занимать 80 порт
+            systemctl stop nginx 2>/dev/null
+            docker stop remnawave-nginx 2>/dev/null
+            
+            certbot certonly --standalone -d "$NODE_DOMAIN" --non-interactive --agree-tos -m admin@"$NODE_DOMAIN"
+            
+            if [ -f "/etc/letsencrypt/live/$NODE_DOMAIN/fullchain.pem" ]; then
+                cp -L "/etc/letsencrypt/live/$NODE_DOMAIN/fullchain.pem" "$CERT_DIR/fullchain.pem"
+                cp -L "/etc/letsencrypt/live/$NODE_DOMAIN/privkey.pem" "$CERT_DIR/privkey.pem"
+                # Cron Certbot
+                echo "0 3 * * 1 certbot renew --quiet && cp -L /etc/letsencrypt/live/$NODE_DOMAIN/fullchain.pem $CERT_DIR/fullchain.pem && cp -L /etc/letsencrypt/live/$NODE_DOMAIN/privkey.pem $CERT_DIR/privkey.pem && $RELOAD_CMD" > "$CRON_FILE"
+            else
+                echo "❌ Certbot не смог получить сертификат. Проверь DNS и 80 порт."
+                exit 1
+            fi
             ;;
     esac
-
-    if [[ ! -s "$CERT_DIR/fullchain.pem" || ! -s "$CERT_DIR/privkey.pem" ]]; then
-        echo "❌ Ошибка: Файлы не скачались или пустые."
-        ls -l "$CERT_DIR"
-        exit 1
-    fi
+    
+    if [[ ! -s "$CERT_DIR/fullchain.pem" ]]; then echo "❌ Ошибка сертификатов!"; exit 1; fi
     chmod 644 "$CERT_DIR/"*
 }
 
 # ============================================================ #
 #                     САЙТ-МАСКИРОВКА                          #
 # ============================================================ #
-setup_fake_site_script() {
-    echo "🎭 Настраиваю сайт-хамелеон (Port 8080)..."
+setup_fake_site() {
+    echo "🎭 Установка сайта-заглушки..."
     cat << 'EOF' > "$ROTATE_SCRIPT"
 #!/bin/bash
 SITE_DIR="/var/www/html"
@@ -310,8 +287,9 @@ chown -R www-data:www-data "$SITE_DIR" 2>/dev/null || chmod -R 755 "$SITE_DIR"
 EOF
     chmod +x "$ROTATE_SCRIPT"
     bash "$ROTATE_SCRIPT" >/dev/null 2>&1
-    (crontab -l 2>/dev/null; echo "0 4 */15 * * $ROTATE_SCRIPT") | crontab -
-    echo "✅ Сайт установлен."
+    
+    # Добавляем ротацию в cron
+    echo "0 4 1,15 * * root $ROTATE_SCRIPT >> /var/log/site-rotate.log 2>&1" >> "$CRON_FILE"
 }
 
 # ============================================================ #
@@ -336,7 +314,6 @@ services:
   remnanode:
     image: remnawave/node:latest
     container_name: remnanode
-    hostname: remnanode
     restart: always
     network_mode: host
     environment:
@@ -367,28 +344,32 @@ server {
 EOF
 
     echo ""
-    echo "🔥 Запускаю сервисы..."
-    cd "$INSTALL_DIR" || exit
-    docker compose up -d --remove-orphans --force-recreate >/dev/null 2>&1
+    echo "🔥 Запуск..."
+    cd "$INSTALL_DIR" && docker compose up -d --remove-orphans --force-recreate >/dev/null 2>&1
     
-    sleep 3
+    sleep 5
     if docker ps | grep -q "remnanode"; then
-        printf "%b\n" "${C_GREEN}✅ НОДА УСПЕШНО ЗАПУЩЕНА!${C_RESET}"
+        printf "%b\n" "${C_GREEN}✅ НОДА УСПЕШНО УСТАНОВЛЕНА!${C_RESET}"
         echo "------------------------------------------------"
         echo "   Домен: $NODE_DOMAIN"
-        echo "   Xray:  Порт 443"
-        echo "   Nginx: Порт 8080 (Сайт)"
+        echo "   SSL:   $CERT_DIR (Авто-обновление вкл)"
+        echo "   API:   Порт 2222 (Открыт в UFW)"
+        echo "   Web:   Порт 8080 (Авто-ротация сайта)"
         echo "------------------------------------------------"
-        echo "👉 Настрой в панели профиль с путями:"
-        echo "   /cert/fullchain.pem, /cert/privkey.pem"
+        echo "📝 СТАТУС:"
+        echo "   1. Сертификаты лежат в $CERT_DIR"
+        echo "   2. Cron задача создана: $CRON_FILE"
+        echo "   3. Панель должна видеть ноду (порт 2222 открыт)"
     else
-        printf "%b\n" "${C_RED}❌ Ошибка запуска.${C_RESET}"
+        printf "%b\n" "${C_RED}❌ Ошибка запуска Docker.${C_RESET}"
     fi
 }
 
-# MAIN
+# MAIN FLOW
+check_existing_installation
 collect_data
-install_dependencies
+install_pkgs
+setup_firewall
 setup_certificates
-setup_fake_site_script
+setup_fake_site
 deploy_docker
