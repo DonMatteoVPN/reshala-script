@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21167 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21168 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21167"
+readonly VERSION="v2.21168"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -2262,11 +2262,10 @@ install_node_logic() {
     
     case "$target_choice" in
         1)
-            # Локальная установка - просто качаем модуль
+            # Локальная установка
             run_module "install_node.sh"
             ;;
         2)
-            # Установка через SKYNET
             echo ""
             echo "🔎 Сканирую флот..."
             
@@ -2298,24 +2297,41 @@ install_node_logic() {
                 echo ""
                 printf "%b\n" "${C_CYAN}🚀 Начинаю операцию на: $s_name ($s_ip)...${C_RESET}"
                 
-                # Формируем команду для удаленного запуска
-                # Мы говорим удаленному серверу: "Скачай install_node.sh и запусти его"
-                local remote_cmd="wget -qO /tmp/install_node.sh ${MODULES_URL}/install_node.sh && chmod +x /tmp/install_node.sh && sudo /tmp/install_node.sh"
+                # 1. КОМАНДА ПОДГОТОВКИ (Если нет wget - ставим его)
+                local pre_cmd="if ! command -v wget >/dev/null; then if [ -f /etc/debian_version ]; then apt-get update -qq && apt-get install -y -qq wget; elif [ -f /etc/redhat-release ]; then yum install -y wget; fi; fi"
+                
+                # 2. КОМАНДА ЗАГРУЗКИ
+                local dl_cmd="wget -qO /tmp/install_node.sh ${MODULES_URL}/install_node.sh && chmod +x /tmp/install_node.sh"
+                
+                # 3. КОМАНДА ЗАПУСКА (УМНАЯ)
+                local run_cmd=""
+                if [[ "$s_user" == "root" ]]; then
+                    # Для ROOT запускаем напрямую (без sudo)
+                    run_cmd="/tmp/install_node.sh"
+                else
+                    # Для остальных нужен sudo
+                    run_cmd="sudo /tmp/install_node.sh"
+                fi
+                
+                # Собираем комбо-удар
+                local full_remote_cmd="$pre_cmd && $dl_cmd && $run_cmd"
                 
                 if [[ "$s_user" == "root" ]]; then
-                    ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$remote_cmd"
+                    ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$full_remote_cmd"
                 else
-                    # Если юзер не root, используем sudo с паролем (если есть) или интерактивно
+                    # Если юзер не root, обрабатываем пароль sudo
                     if [ -n "$s_pass" ]; then
-                        local sudo_remote_cmd="echo '$s_pass' | sudo -S -p '' bash -c \"$remote_cmd\""
-                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_remote_cmd"
+                        # Экранируем команду для sudo bash -c
+                        local sudo_wrapper="echo '$s_pass' | sudo -S -p '' bash -c \"$dl_cmd && $run_cmd\""
+                        # pre_cmd запускаем отдельно или надеемся, что wget есть, т.к. sudo install требует прав
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_wrapper"
                     else
-                        echo "⚠️ Нет сохраненного пароля sudo. Придется вводить руками."
-                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$remote_cmd"
+                        echo "⚠️ Нет пароля sudo. Придется вводить руками."
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$full_remote_cmd"
                     fi
                 fi
                 
-                printf "\n%b\n" "${C_GREEN}✅ Операция на удаленном сервере завершена.${C_RESET}"
+                printf "\n%b\n" "${C_GREEN}✅ Операция завершена.${C_RESET}"
                 wait_for_enter
             else
                 echo "❌ Неверный выбор."
