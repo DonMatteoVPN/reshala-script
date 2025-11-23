@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21151 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21152 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21151"
+readonly VERSION="v2.21152"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1503,7 +1503,7 @@ display_header() {
     local users_online; users_online=$(get_active_users)
     local port_speed; port_speed=$(get_port_speed)
     
-    # --- ЛОГИКА ВМЕСТИМОСТИ ---
+    # --- ЛОГИКА ВМЕСТИМОСТИ (FIXED) ---
     local saved_speed; saved_speed=$(load_path "LAST_UPLOAD_SPEED")
     local capacity_display
     
@@ -1512,11 +1512,11 @@ display_header() {
         local real_cap; real_cap=$(calculate_vpn_capacity "$saved_speed")
         capacity_display="${C_GREEN}~${real_cap}${C_RESET}"
     else
-        # Если теста не было
+        # Если теста не было - отправляем в Меню 1
         local theory_cap; theory_cap=$(calculate_vpn_capacity "")
-        capacity_display="${C_WHITE}~${theory_cap}${C_RESET} ${C_YELLOW}[Тест: 9]${C_RESET}"
+        capacity_display="${C_WHITE}~${theory_cap}${C_RESET} ${C_YELLOW}[Меню: 1]${C_RESET}"
     fi
-    # --------------------------
+    # ----------------------------------
     
     local net_status; net_status=$(get_net_status)
     local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
@@ -1578,12 +1578,10 @@ display_header() {
         printf "║ ${C_GRAY}Web-Server     :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$WEB_SERVER" 
     fi
     
-    # Показываем скорость порта только если она определена
     if [ -n "$port_speed" ]; then
         printf "║ ${C_GRAY}Канал (Link)   :${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$port_speed"
     fi
     
-    # Вместимость с учетом сохраненного теста
     printf "║ ${C_GRAY}Вместимость    :${C_RESET} %b юзеров\n" "$capacity_display"
 
     printf "║ ${C_GRAY}Тюнинг         :${C_RESET} %b  |  IPv6: %b\n" "$cc_status" "$ipv6_status"
