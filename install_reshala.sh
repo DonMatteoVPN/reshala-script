@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21161 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21162 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21161"
+readonly VERSION="v2.21162"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1909,12 +1909,12 @@ menu_security() {
 # ============================================================ #
 FLEET_FILE="${HOME}/.reshala_fleet"
 
-# Функция-санитар: чинит файл базы, чтобы строки не слипались
+# Функция-санитар: чинит файл базы
 _sanitize_fleet_database() {
     if [ -f "$FLEET_FILE" ]; then
-        # 1. Удаляем пустые строки
+        # Удаляем пустые строки
         sed -i '/^$/d' "$FLEET_FILE"
-        # 2. Добавляем перенос строки в конец, если его нет
+        # Добавляем перенос строки в конец, если его нет
         [ -s "$FLEET_FILE" ] && [ "$(tail -c1 "$FLEET_FILE" | wc -l)" -eq 0 ] && echo "" >> "$FLEET_FILE"
     fi
 }
@@ -1923,14 +1923,13 @@ manage_fleet() {
     touch "$FLEET_FILE"
 
     while true; do
-        _sanitize_fleet_database # Чиним базу перед каждым показом
+        _sanitize_fleet_database
         
         clear
         printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
         printf "%b\n" "${C_CYAN}║            🌐 SKYNET: ЦЕНТР УПРАВЛЕНИЯ ФЛОТОМ                ║${C_RESET}"
         printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
         
-        # Показываем путь к базе (НОВОЕ)
         printf "   📂 База данных: ${C_GRAY}%s${C_RESET}\n" "$FLEET_FILE"
         echo ""
         echo "Список удаленных серверов:"
@@ -1942,28 +1941,23 @@ manage_fleet() {
         if [ ! -s "$FLEET_FILE" ]; then
             echo "   (Пусто. Добавь сервер [a])"
         else
-            # Читаем файл. || [ -n "$name" ] нужно для чтения последней строки без \n
             while IFS='|' read -r name user ip port key_path || [ -n "$name" ]; do
-                # Игнорируем мусор
                 if [[ -z "$name" ]] || [[ -z "$ip" ]]; then continue; fi
                 
-                # Валидация ключа
                 if [[ ! -f "$key_path" ]]; then key_path="$HOME/.ssh/id_ed25519"; fi
                 
                 servers[$i]="$name|$user|$ip|$port|$key_path"
                 
-                # Тип ключа
                 local kp_display="Master"
                 if [[ "$key_path" == *"id_reshala_"* ]]; then kp_display="Unique"; fi
                 
-                # Пинг SSH (быстрый, 1 сек)
+                # Пинг SSH
                 local status="${C_RED}OFF${C_RESET}"
-                # Используем timeout, чтобы меню не висло, если сервер сдох
-                if timeout 1 ssh -q -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "$user@$ip" exit 2>/dev/null; then 
+                # ВАЖНО: Флаг -n запрещает SSH читать stdin, чтобы он не сожрал следующие строки файла!
+                if timeout 1 ssh -n -q -o BatchMode=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "$user@$ip" exit 2>/dev/null; then 
                     status="${C_GREEN}ON${C_RESET} "
                 fi
                 
-                # Форматирование таблицы
                 printf "   [%d] [%b] %b%-15s%b -> %s@%s:%s [%s]\n" "$i" "$status" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display"
                 ((i++))
             done < "$FLEET_FILE"
@@ -2006,7 +2000,6 @@ manage_fleet() {
                     echo ""; echo "🚀 Пробуем закинуть ключ..."
                     _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$final_key"
                     
-                    # Гарантируем новую строку перед записью
                     echo "" >> "$FLEET_FILE"
                     _sanitize_fleet_database
                     echo "$s_name|$s_user|$s_ip|$s_port|$final_key" >> "$FLEET_FILE"
@@ -2020,7 +2013,6 @@ manage_fleet() {
                 fi
                 ;;
             [mM])
-                # Ручное редактирование (НОВОЕ)
                 _ensure_package_installed "nano"
                 nano "$FLEET_FILE"
                 _sanitize_fleet_database
@@ -2030,9 +2022,7 @@ manage_fleet() {
                 ;;
             [dD])
                 local del_num; del_num=$(safe_read "Номер для удаления: " "")
-                # Используем :- для защиты от unbound variable
                 if [[ "$del_num" =~ ^[0-9]+$ ]] && [ -n "${servers[$del_num]:-}" ]; then 
-                    # Пересборка файла (самый надежный метод)
                     local temp_file="${FLEET_FILE}.tmp"
                     local line_count=1
                     while IFS='|' read -r n u i p k || [ -n "$n" ]; do
@@ -2062,7 +2052,6 @@ manage_fleet() {
                 ;;
             [bB]) break ;;
             *)
-                # ТЕЛЕПОРТАЦИЯ
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$choice]:-}" ]; then
                     local selected="${servers[$choice]}"
                     IFS='|' read -r s_name s_user s_ip s_port s_key <<< "$selected"
@@ -2072,12 +2061,10 @@ manage_fleet() {
                     clear
                     printf "%b\n" "${C_CYAN}🚀 SKYNET UPLINK: ${C_WHITE}$s_name${C_RESET}"
                     
-                    # 1. Доступ
                     if ! ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
                         printf "%b\n" "${C_RED}⛔ Нет доступа!${C_RESET}"
-                        echo "Возможные причины:"
                         echo "1. Сервер выключен."
-                        echo "2. Сменился IP или порт."
+                        echo "2. Сменился IP/Порт."
                         echo "3. Слетёл ключ."
                         echo ""
                         read -p "Попробовать закинуть ключ заново? (y/n): " try_fix
@@ -2087,7 +2074,6 @@ manage_fleet() {
                         continue
                     fi
                     
-                    # 2. Версия
                     echo "🔍 Сверка версий..."
                     local remote_ver_cmd="if [ -f /usr/local/bin/reshala ]; then grep 'readonly VERSION' /usr/local/bin/reshala | cut -d'\"' -f2; else echo 'NONE'; fi"
                     local remote_ver
@@ -2109,7 +2095,6 @@ manage_fleet() {
                         ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "rm -f /usr/local/bin/reshala; wget -qO- ${SCRIPT_URL} | sudo bash -s install"
                     fi
                     
-                    # 3. ЗАПУСК
                     printf "%b\n" "${C_GREEN}✅ Входим...${C_RESET}"
                     sleep 1
                     ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo SKYNET_MODE=1 reshala"
