@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21143 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21144 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21143"
+readonly VERSION="v2.21144"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -212,40 +212,65 @@ run_speedtest_moscow() {
     clear
     printf "%b\n" "${C_CYAN}🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ...${C_RESET}"
     
-    # Тихая установка
-    if ! command -v speedtest-cli &>/dev/null; then
-        echo "   Installing speedtest-cli (тихий режим)..."
+    # 1. Удаляем старое говно (python-версию), если оно есть
+    if command -v speedtest-cli &>/dev/null; then
+        echo "   🗑️ Удаляю старый глючный speedtest-cli..."
         export DEBIAN_FRONTEND=noninteractive
-        run_cmd apt-get update -qq >/dev/null 2>&1
-        run_cmd apt-get install -y -qq speedtest-cli >/dev/null 2>&1
+        run_cmd apt-get remove -y speedtest-cli >/dev/null 2>&1
     fi
     
-    echo "   📡 Ищу лучший сервер в Москве..."
-    local server_id
-    server_id=$(speedtest-cli --list 2>/dev/null | grep -i "Moscow" | head -n 1 | awk -F')' '{print $1}')
+    # 2. Ставим официальный клиент Ookla, если нет
+    if ! command -v speedtest &>/dev/null; then
+        echo "   📥 Устанавливаю официальный Speedtest (Native)..."
+        
+        # Нужен curl
+        if ! command -v curl &>/dev/null; then run_cmd apt-get install -y -qq curl >/dev/null; fi
+        
+        # Добавляем репозиторий Ookla и ставим
+        curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | run_cmd bash >/dev/null 2>&1
+        run_cmd apt-get install -y speedtest >/dev/null 2>&1
+    fi
     
-    # === ПРЕДУПРЕЖДЕНИЕ ДЛЯ ОСОБО ОДАРЕННЫХ ===
+    # === ПРЕДУПРЕЖДЕНИЕ ===
     echo ""
     printf "%b\n" "${C_RED}🛑 РУКИ УБРАЛ ОТ КЛАВИАТУРЫ!${C_RESET}"
     echo "   Ща я буду нагружать канал по полной программе."
     echo "   Не тыкай кнопки, не дыши, не обновляй порнуху в соседней вкладке."
-    printf "%b\n" "${C_YELLOW}⏳ Жди результата молча. Это займёт секунд 30...${C_RESET}"
+    printf "%b\n" "${C_YELLOW}⏳ Жди результата молча. Используем официальный клиент Ookla...${C_RESET}"
     echo ""
-    # ==========================================
+    # ======================
 
     local output
-    if [ -z "$server_id" ]; then
-        printf "%b\n" "${C_YELLOW}⚠️  Серверы в Москве молчат. Авто-выбор...${C_RESET}"
-        output=$(speedtest-cli --simple)
+    # Запускаем официальный клиент
+    # --accept-license --accept-gdpr : принимаем соглашения
+    # --server-id 16976 : Beeline Moscow (обычно живой)
+    
+    # Сначала пробуем конкретный сервер в Москве (Beeline)
+    if output=$(speedtest --accept-license --accept-gdpr --server-id 16976 2>&1); then
+        : # Всё ок
     else
-        printf "%b\n" "${C_GREEN}✅ Тестирую через ID: $server_id (Moscow)...${C_RESET}"
-        output=$(speedtest-cli --server "$server_id" --simple)
+        printf "%b\n" "${C_YELLOW}⚠️  Beeline Moscow занят. Ищу любой сервер в Москве...${C_RESET}"
+        # Ищем ID сервера в Москве через search
+        local search_id
+        search_id=$(speedtest --accept-license --accept-gdpr -L | grep -i "Moscow" | head -n 1 | awk '{print $1}')
+        
+        if [ -n "$search_id" ]; then
+             output=$(speedtest --accept-license --accept-gdpr --server-id "$search_id" 2>&1)
+        else
+             # Если совсем всё плохо - автовыбор
+             output=$(speedtest --accept-license --accept-gdpr 2>&1)
+        fi
     fi
     
-    # Парсим результаты
-    local ping=$(echo "$output" | grep "Ping" | awk '{print $2}')
-    local dl=$(echo "$output" | grep "Download" | awk '{print $2}')
-    local ul=$(echo "$output" | grep "Upload" | awk '{print $2}')
+    # Парсим результаты (формат официального клиента отличается)
+    # Output example:
+    # Latency:     3.45 ms
+    # Download:   100.22 Mbps
+    # Upload:     50.33 Mbps
+    
+    local ping=$(echo "$output" | grep "Latency:" | awk '{print $2}')
+    local dl=$(echo "$output" | grep "Download:" | awk '{print $2}')
+    local ul=$(echo "$output" | grep "Upload:" | awk '{print $2}')
     
     echo ""
     echo "══════════════════════════════════════════════════"
@@ -256,7 +281,7 @@ run_speedtest_moscow() {
     
     # Расчет емкости и СОХРАНЕНИЕ
     if [ -n "$ul" ]; then
-        # Округляем до целого для сохранения (147.48 -> 147)
+        # Округляем до целого
         local clean_ul=$(echo "$ul" | cut -d'.' -f1)
         save_path "LAST_UPLOAD_SPEED" "$clean_ul"
         
@@ -268,6 +293,8 @@ run_speedtest_moscow() {
         echo "   С таким каналом эта нода потянет примерно:"
         printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
         echo "   (Результат сохранён для главного меню)"
+    else
+        printf "\n%b❌ Не удалось получить данные. Попробуй позже.%b\n" "${C_RED}" "${C_RESET}"
     fi
     
     echo ""
