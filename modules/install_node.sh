@@ -176,7 +176,7 @@ setup_certificates() {
     printf "%b\n" "${C_CYAN}🔒 Настройка SSL ($NODE_DOMAIN)...${C_RESET}"
 
     case $CERT_STRATEGY in
-        1) # Cloudflare (Оставляем как было, там всё ок)
+        1) # Cloudflare (Без изменений)
             echo "🚀 Ставлю acme.sh..."
             curl -s https://get.acme.sh | sh -s email="$CF_EMAIL" >/dev/null 2>&1
             export CF_Token="$CF_TOKEN"; export CF_Email="$CF_EMAIL"
@@ -187,69 +187,96 @@ setup_certificates() {
                 --reloadcmd "docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode" >/dev/null 2>&1
             ;;
             
-        2) # Panel (Локал или SSH)
+        2) # Panel (SSH сканирование)
             local FOUND_PATH=""
-            # Возможные пути сертификатов
-            local PATHS=(
-                "/root/.acme.sh/${NODE_DOMAIN}_ecc"
-                "/root/.acme.sh/${NODE_DOMAIN}"
-                "/etc/letsencrypt/live/${NODE_DOMAIN}"
-            )
+            echo "🔎 Сканирую сервер Панели на наличие сертификатов..."
 
-            echo "🔎 Ищу сертификаты для $NODE_DOMAIN..."
-
+            # 1. Сканируем Let's Encrypt
+            local le_paths
             if [ $IS_LOCAL_PANEL -eq 1 ]; then
-                # --- ЛОКАЛЬНЫЙ ПОИСК ---
-                for p in "${PATHS[@]}"; do
-                    if [[ -f "$p/fullchain.pem" || -f "$p/fullchain.cer" ]]; then FOUND_PATH="$p"; break; fi
-                done
-                
-                if [ -z "$FOUND_PATH" ]; then
-                    echo "❌ Не нашел файлы локально. Укажи путь вручную:"
-                    read -e -p "Путь: " FOUND_PATH
-                fi
-                
-                echo "📂 Копирую из $FOUND_PATH..."
-                cp "$FOUND_PATH/fullchain."* "$CERT_DIR/fullchain.pem"
-                cp "$FOUND_PATH/"*key* "$CERT_DIR/privkey.pem"
-                
-                # Крон для локала
-                (crontab -l 2>/dev/null; echo "0 3 * * 1 cp $FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && cp $FOUND_PATH/*key* $CERT_DIR/privkey.pem && docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode") | crontab -
-                
+                le_paths=$(ls -d /etc/letsencrypt/live/* 2>/dev/null)
             else
-                # --- SSH ПОИСК ---
-                for rpath in "${PATHS[@]}"; do
-                    if sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "[ -f $rpath/fullchain.pem ] || [ -f $rpath/fullchain.cer ]" 2>/dev/null; then
-                        FOUND_PATH="$rpath"
-                        break
-                    fi
-                done
+                le_paths=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "ls -d /etc/letsencrypt/live/*" 2>/dev/null)
+            fi
+
+            # 2. Сканируем Acme.sh
+            local acme_paths
+            if [ $IS_LOCAL_PANEL -eq 1 ]; then
+                acme_paths=$(ls -d /root/.acme.sh/*_ecc 2>/dev/null)
+            else
+                acme_paths=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "ls -d /root/.acme.sh/*_ecc" 2>/dev/null)
+            fi
+
+            # Собираем всё в кучу
+            local ALL_PATHS="$le_paths $acme_paths"
+            local OPTIONS=()
+            local i=1
+            
+            # Ищем точное совпадение
+            for p in $ALL_PATHS; do
+                [[ -z "$p" ]] && continue
+                OPTIONS+=("$p")
                 
-                if [ -z "$FOUND_PATH" ]; then
-                    echo "❌ Авто-поиск не дал результатов."
-                    echo "Введи полный путь к папке с сертификатами на Панели:"
-                    read -p "Путь: " FOUND_PATH
+                # Если путь содержит наш домен — запоминаем как приоритет
+                if [[ "$p" == *"$NODE_DOMAIN"* ]]; then
+                    FOUND_PATH="$p"
                 fi
+            done
+
+            if [ ${#OPTIONS[@]} -eq 0 ]; then
+                echo "❌ На Панели вообще нет сертификатов (пусто в /etc/letsencrypt и .acme.sh)."
+                read -e -p "Введи путь вручную: " FOUND_PATH
+            elif [ -n "$FOUND_PATH" ]; then
+                # Нашли точное совпадение
+                echo "✅ Нашел сертификат: $FOUND_PATH"
+            else
+                # Не нашли точного, даем выбор
+                echo "⚠️  Точного совпадения для $NODE_DOMAIN не нашел."
+                echo "Выбери из того, что есть:"
+                for opt in "${OPTIONS[@]}"; do
+                    echo "   [$i] $opt"
+                    ((i++))
+                done
+                local choice
+                read -p "Номер: " choice
+                choice=$((choice-1))
+                FOUND_PATH="${OPTIONS[$choice]}"
+            fi
+
+            echo "📥 Качаю из: $FOUND_PATH"
+            
+            if [ $IS_LOCAL_PANEL -eq 1 ]; then
+                # Локальное копирование (с разыменованием симлинков)
+                cp -L "$FOUND_PATH/fullchain.pem" "$CERT_DIR/fullchain.pem" 2>/dev/null || cp -L "$FOUND_PATH/fullchain.cer" "$CERT_DIR/fullchain.pem"
+                cp -L "$FOUND_PATH/privkey.pem" "$CERT_DIR/privkey.pem" 2>/dev/null || cp -L "$FOUND_PATH/"*key* "$CERT_DIR/privkey.pem"
                 
-                echo "📥 Качаю из $FOUND_PATH..."
+                # Крон
+                (crontab -l 2>/dev/null; echo "0 3 * * 1 cp -L $FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && cp -L $FOUND_PATH/*key* $CERT_DIR/privkey.pem && docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode") | crontab -
+            else
+                # SSH копирование
                 sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.*" "$CERT_DIR/fullchain.pem" >/dev/null 2>&1
+                # Если scp fullchain.* не нашел (например, там .cer), пробуем конкретные имена
+                if [ ! -f "$CERT_DIR/fullchain.pem" ]; then
+                     sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.cer" "$CERT_DIR/fullchain.pem" >/dev/null 2>&1
+                fi
+
                 sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "$PANEL_USER@$PANEL_IP:$FOUND_PATH/*key*" "$CERT_DIR/privkey.pem" >/dev/null 2>&1
                 
-                # Крон для SSH
+                # Крон
                 local CRON_CMD="sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem && sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/*key* $CERT_DIR/privkey.pem && docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode"
                 (crontab -l 2>/dev/null; echo "0 3 * * 1 $CRON_CMD") | crontab -
             fi
             
-            echo "✅ Сертификаты получены и настроено авто-обновление."
+            echo "✅ Готово."
             ;;
             
-        3) # Local files
-            # Check done in main
+        3) # Local
             ;;
     esac
 
-    if [[ ! -f "$CERT_DIR/fullchain.pem" || ! -f "$CERT_DIR/privkey.pem" ]]; then
-        echo "❌ Ошибка: Файлы не появились в $CERT_DIR"
+    if [[ ! -s "$CERT_DIR/fullchain.pem" || ! -s "$CERT_DIR/privkey.pem" ]]; then
+        echo "❌ Ошибка: Файлы не скачались или пустые."
+        ls -l "$CERT_DIR"
         exit 1
     fi
     chmod 644 "$CERT_DIR/"*
