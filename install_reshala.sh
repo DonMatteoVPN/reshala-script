@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21172 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21173 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21172"
+readonly VERSION="v2.21173"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1247,8 +1247,26 @@ menu_docker() {
 
         case $choice in
             1)
-                echo ""; echo "[*] Топ жиробасов:"; echo "----------------------------------------"
-                docker images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh | head -n 10
+                echo ""
+                printf "%b\n" "${C_BOLD}[*] ТОП-15 ЖИРОБАСОВ (Самые тяжелые образы):${C_RESET}"
+                echo "--------------------------------------------------------------"
+                printf "%b%-45s %-15s%b\n" "${C_CYAN}" "ОБРАЗ (IMAGE)" "РАЗМЕР" "${C_RESET}"
+                echo "--------------------------------------------------------------"
+                
+                # Магия форматирования:
+                # 1. Получаем список. 2. Сортируем. 3. Берем топ 15. 4. Рисуем таблицу.
+                docker images --format "{{.Repository}}:{{.Tag}}|{{.Size}}" | sort -rh -t '|' -k2 | head -n 15 | while IFS='|' read -r img size; do
+                    # Обрезаем слишком длинные имена, чтобы таблица не ехала (до 43 символов)
+                    if [ ${#img} -gt 43 ]; then img="${img:0:40}..."; fi
+                    
+                    # Красим размер (GB - красный, MB - желтый/зеленый)
+                    local color="${C_GREEN}"
+                    if [[ "$size" == *"GB"* ]]; then color="${C_RED}"; 
+                    elif [[ "$size" == *"MB"* ]] && [[ "${size%.*}" -gt 500 ]]; then color="${C_YELLOW}"; fi
+                    
+                    printf "%-45s %b%-15s%b\n" "$img" "$color" "$size" "${C_RESET}"
+                done
+                echo "--------------------------------------------------------------"
                 wait_for_enter
                 ;;
             2)
