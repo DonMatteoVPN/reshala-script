@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21148 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21149 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21148"
+readonly VERSION="v2.21149"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1059,75 +1059,63 @@ uninstall_script() {
 }
 
 # ============================================================ #
-#                    МЕНЮ ОЧИСТКИ DOCKER                       #
+#                    ПОДМЕНЮ 3: DOCKER (МУСОРКА)               #
 # ============================================================ #
-docker_cleanup_menu() {
-    local original_trap; original_trap=$(trap -p INT)
-    trap 'printf "\n%b\n" "${C_YELLOW}🔙 Возвращаюсь в главное меню...${C_RESET}"; sleep 1; return' INT
-
+menu_docker() {
     while true; do
         clear
-        echo "--- УПРАВЛЕНИЕ DOCKER: ОЧИСТКА ДИСКА ---"
-        echo "Выбери действие для освобождения места:"
-        echo "----------------------------------------"
-        echo "   1. 📊 Показать самые большие образы"
-        echo "   2. 🧹 Простая очистка (висячие образы, кэш)"
-        echo "   3. 💥 Полная очистка неиспользуемых образов"
-        echo "   4. 🗑️ Очистка неиспользуемых томов (ОСТОРОЖНО!)"
-        echo "   5. 📈 Показать итоговое использование диска"
-        echo "   b. Назад"
-        echo "----------------------------------------"
-        read -r -p "Твой выбор: " choice || continue
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║           🐳 DOCKER: УПРАВЛЕНИЕ И ОЧИСТКА ОТ ГОВНА           ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "   [1] 📊 Показать самые жирные образы"
+        echo "   [2] 🧹 Простая очистка (висячие образы, кэш)"
+        echo "   [3] 💥 Полная очистка (Удалить ВСЕ неиспользуемые образы)"
+        echo "   [4] 🗑️ Очистка томов (Volumes) — ОСТОРОЖНО!"
+        echo "   [5] 📈 Сколько места жрёт Docker"
+        echo ""
+        echo "   [b] 🔙 Назад в главное меню"
+        echo "------------------------------------------------------"
+        
+        local choice
+        read -r -p "Выбирай, босс: " choice || continue
 
         case $choice in
             1)
-                echo ""; echo "[*] Самые большие Docker-образы:"; echo "----------------------------------------"
-                docker images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh
+                echo ""; echo "[*] Топ жиробасов:"; echo "----------------------------------------"
+                docker images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh | head -n 10
                 wait_for_enter
                 ;;
             2)
-                echo ""; echo "🧹 Простая очистка (system prune)"
-                echo "Удаляет: висячие образы, остановленные контейнеры, кэш сборки, сети без контейнеров."
-                read -p "Выполнить? Это безопасно. (y/n): " confirm
-                if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-                    docker system prune -f
-                    printf "\n%b\n" "${C_GREEN}✅ Простая очистка завершена.${C_RESET}"
-                fi
+                echo ""; echo "🧹 Запускаю метлу (system prune)..."
+                docker system prune -f
+                printf "\n%b\n" "${C_GREEN}✅ Легкая уборка закончена.${C_RESET}"
                 wait_for_enter
                 ;;
             3)
-                echo ""; echo "💥 Полная очистка образов (image prune -a)"
-                printf "%b\n" "${C_RED}Внимание:${C_RESET} Если у тебя есть остановленные контейнеры, их образы тоже удалятся!"
-                read -p "Точно продолжить? (y/n): " confirm
+                echo ""; echo "💥 Внимание! Это снесёт ВСЕ образы, которые сейчас не запущены."
+                read -p "Точно хуячим? (y/n): " confirm
                 if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
                     docker image prune -a -f
-                    printf "\n%b\n" "${C_GREEN}✅ Полная очистка образов завершена.${C_RESET}"
+                    printf "\n%b\n" "${C_GREEN}✅ Глобальная чистка завершена.${C_RESET}"
                 fi
                 wait_for_enter
                 ;;
             4)
-                echo ""; echo "🗑️ Очистка томов (volume prune)"
-                printf "%b\n" "${C_RED}ОСТОРОЖНО!${C_RESET} Удаляет все тома, не используемые ни одним контейнером (даже остановленным)."
-                printf "%b\n" "Если у тебя есть важные данные в остановленных контейнерах — НЕ ДЕЛАЙ ЭТОГО!"
-                read -p "Ты уверен, что хочешь это сделать? (y/n): " confirm
+                echo ""; printf "%b\n" "${C_RED}‼️ ОПАСНО! Это удалит данные (Volumes), которые не прицеплены к контейнерам.${C_RESET}"
+                read -p "Ты уверен на 100%? (y/n): " confirm
                 if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
                     docker volume prune -f
-                    printf "\n%b\n" "${C_GREEN}✅ Очистка томов завершена.${C_RESET}"
+                    printf "\n%b\n" "${C_GREEN}✅ Тома зачищены.${C_RESET}"
                 fi
                 wait_for_enter
                 ;;
             5)
-                echo ""; echo "[*] Итоговое использование Docker:"
-                echo "----------------------------------------"
-                docker system df
-                wait_for_enter
-                ;;
+                echo ""; docker system df; wait_for_enter ;;
             [bB]) break ;;
-            *) printf "%b\n" "${C_RED}Не та кнопка. Выбирай 1-5 или 'b'.${C_RESET}"; sleep 2 ;;
+            *) ;;
         esac
     done
-
-    if [ -n "$original_trap" ]; then eval "$original_trap"; else trap - INT; fi
 }
 
 # ============================================================ #
@@ -1594,11 +1582,107 @@ display_header() {
     printf "%b\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
 }
 
+# ============================================================ #
+#                    ПОДМЕНЮ 1: СЕРВИСНОЕ                      #
+# ============================================================ #
+menu_service() {
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║          🔧 СЕРВИСНОЕ ОБСЛУЖИВАНИЕ (КРУТИМ ГАЙКИ)            ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "   [1] 🔄 Обновить систему + Лечение EOL (Ubuntu Fix)"
+        echo "   [2] 🚀 Настройка сети «Форсаж» (BBR + CAKE)"
+        echo "   [3] 🌐 Управление IPv6 (Вкл/Выкл)"
+        echo "   [4] 🛡️ Добавить SSH ключи (Безопасность)"
+        echo "   [5] ⚡ Тест скорости до Москвы (Speedtest)"
+        echo ""
+        echo "   [b] 🔙 Назад в главное меню"
+        echo "------------------------------------------------------"
+        
+        local choice
+        read -r -p "Твой выбор: " choice || continue
+
+        case $choice in
+            1) fix_eol_and_update;;
+            2) apply_bbr; wait_for_enter;;
+            3) ipv6_menu;;
+            4) _ssh_add_keys; wait_for_enter;;
+            5) run_speedtest_moscow;;
+            [bB]) break;;
+            *) ;;
+        esac
+    done
+}
+
+# ============================================================ #
+#                    ПОДМЕНЮ 2: ЛОГИ                           #
+# ============================================================ #
+menu_logs() {
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║              📜 БЫСТРЫЕ ЛОГИ (ЧЕКНУТЬ, ЧЁ ТАМ)               ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "   [1] 📒 Журнал самого «Решалы»"
+        
+        if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
+             echo "   [2] 📊 Логи Панели (Backend)"
+             echo "   [3] 📡 Логи Ноды (Xray)"
+        elif [[ "$SERVER_TYPE" == "Панель" ]]; then
+             echo "   [2] 📊 Логи Панели (Backend)"
+        elif [[ "$SERVER_TYPE" == "Нода" ]]; then
+             echo "   [3] 📡 Логи Ноды (Xray)"
+        fi
+
+        if [ "$BOT_DETECTED" -eq 1 ]; then 
+            echo "   [4] 🤖 Логи Бота (Bedalaga)"
+        fi
+        
+        echo ""
+        echo "   [b] 🔙 Назад в главное меню"
+        echo "------------------------------------------------------"
+        
+        local choice
+        read -r -p "Какой лог курим?: " choice || continue
+
+        case $choice in
+            1) view_logs_realtime "$LOGFILE" "Решалы";;
+            2) 
+                if [[ "$SERVER_TYPE" == *"Панель"* ]]; then 
+                    view_docker_logs "$PANEL_NODE_PATH" "Панели"
+                else 
+                    echo "Панели нет, логов нет."; sleep 1
+                fi
+                ;;
+            3) 
+                if [[ "$SERVER_TYPE" == *"Нода"* ]]; then 
+                    view_docker_logs "$PANEL_NODE_PATH" "Ноды"
+                else 
+                    echo "Ноды нет, логов нет."; sleep 1
+                fi
+                ;;
+            4) 
+                if [ "$BOT_DETECTED" -eq 1 ]; then 
+                    view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"
+                else 
+                    echo "Бота нет, ты ошибся."; sleep 1
+                fi
+                ;;
+            [bB]) break;;
+            *) ;;
+        esac
+    done
+}
+
 show_menu() {
     # === ЗАЩИТА ОТ CTRL+C (ANTI-SPAM EDITION) ===
     trap 'printf "\r\033[K%b" "${C_RED}🛑 Куда собрался? Жми [q], чтобы выйти как нормальный пацан!${C_RESET}"; sleep 0.8' SIGINT
 
     while true; do
+        # Сканируем состояние перед каждой отрисовкой (вдруг что поставили)
         scan_server_state
         check_for_updates
         display_header
@@ -1609,26 +1693,17 @@ show_menu() {
         fi
 
         printf "\n%s\n\n" "Чё делать будем, босс?";
-        printf "   [0] %b\n" "🔄 ОБНОВИТЬ СИСТЕМУ (Умное обновление + Лечение EOL)"
-        echo "   [1] 🚀 Управление «Форсажем» (BBR+CAKE)"
-        echo "   [2] 🌐 Управление IPv6"
-        echo "   [3] 📜 Посмотреть журнал «Решалы»"
-        if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] 🤖 Посмотреть логи Бота"; fi
         
-        if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-             echo "   [5] 📊 Посмотреть логи Панели (Основное)"
-        elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-             echo "   [5] 📊 Посмотреть логи Панели"
-        elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-             echo "   [5] 📊 Посмотреть логи Ноды"
-        fi
-
-        printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
-        echo "   [7] 🐳 Управление Docker"
-        echo "   [8] 💿 Установить Панель Remnawave (High-Load)"
-        printf "   [9] %b\n" "⚡ Тест скорости до Москвы (Speedtest)"
+        # --- КАТЕГОРИИ ---
+        printf "   [1] 🔧 %b\n" "СЕРВИСНОЕ МЕНЮ ${C_GRAY}(Обновы, Сеть, Тесты, Ключи)${C_RESET}"
+        printf "   [2] 📜 %b\n" "БЫСТРЫЕ ЛОГИ ${C_GRAY}(Решала, Панель, Нода, Бот)${C_RESET}"
+        printf "   [3] 🐳 %b\n" "DOCKER МУСОРКА ${C_GRAY}(Очистка места, анализ)${C_RESET}"
+        echo ""
+        printf "   [4] 💿 %b\n" "УСТАНОВИТЬ ПАНЕЛЬ REMNAWAVE ${C_GRAY}(High-Load)${C_RESET}"
+        printf "   [5] 🤖 %b\n" "УСТАНОВИТЬ БОТА BEDALAGA ${C_GRAY}(Coming Soon)${C_RESET}"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
+            echo ""
             printf "   %b[u] ‼️ОБНОВИТЬ РЕШАЛУ‼️%b\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
         elif [[ "$UPDATE_CHECK_STATUS" != "OK" ]]; then
             printf "\n%b\n" "${C_RED}⚠️ Ошибка проверки обновлений (см. лог)${C_RESET}"
@@ -1645,19 +1720,18 @@ show_menu() {
             continue
         fi
 
-        log "Пользователь выбрал пункт меню: $choice"
+        log "Пользователь выбрал категорию: $choice"
 
         case $choice in
-            0) fix_eol_and_update;;
-            1) apply_bbr; wait_for_enter;;
-            2) ipv6_menu;;
-            3) view_logs_realtime "$LOGFILE" "Решалы";;
-            4) if [ "$BOT_DETECTED" -eq 1 ]; then view_docker_logs "$BOT_PATH/docker-compose.yml" "Бота"; else echo "Нет такой кнопки."; sleep 2; fi;;
-            5) if [[ "$SERVER_TYPE" != "Чистый сервак" && "$SERVER_TYPE" != "Сервак не целка" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
-            6) security_menu;;
-            7) docker_cleanup_menu;;
-            8) run_module "install_panel.sh";;
-            9) run_speedtest_moscow;;
+            1) menu_service;;
+            2) menu_logs;;
+            3) menu_docker;;
+            4) run_module "install_panel.sh";;
+            5) 
+                # Пока заглушка или модуль, если он есть
+                # run_module "install_bot.sh"
+                echo "Бот скоро подъедет. Модуль в разработке."; wait_for_enter
+                ;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
             [qQ]) 
@@ -1665,7 +1739,7 @@ show_menu() {
                 echo "Был рад помочь. Не обосрись. 🥃"
                 break
                 ;;
-            *) echo "Ты прикалываешься?"; sleep 2;;
+            *) echo "Ты прикалываешься?"; sleep 1;;
         esac
     done
 }
