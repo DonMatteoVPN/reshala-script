@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21145 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21146 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21145"
+readonly VERSION="v2.21146"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -212,23 +212,25 @@ run_speedtest_moscow() {
     clear
     printf "%b\n" "${C_CYAN}🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ...${C_RESET}"
     
-    # 1. Удаляем старое говно (python-версию), если оно есть
+    # 1. Удаляем старое говно
     if command -v speedtest-cli &>/dev/null; then
-        echo "   🗑️ Удаляю старый глючный speedtest-cli..."
         export DEBIAN_FRONTEND=noninteractive
         run_cmd apt-get remove -y speedtest-cli >/dev/null 2>&1
     fi
     
-    # 2. Ставим официальный клиент Ookla, если нет
+    # 2. Ставим официальный клиент
     if ! command -v speedtest &>/dev/null; then
-        echo "   📥 Устанавливаю официальный Speedtest (Native)..."
-        
-        # Нужен curl
+        echo "   📥 Устанавливаю официальный Speedtest..."
         if ! command -v curl &>/dev/null; then run_cmd apt-get install -y -qq curl >/dev/null; fi
-        
-        # Добавляем репозиторий Ookla и ставим
         curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | run_cmd bash >/dev/null 2>&1
         run_cmd apt-get install -y speedtest >/dev/null 2>&1
+    fi
+
+    # 3. Ставим jq для точного парсинга (ХИРУРГ)
+    if ! command -v jq &>/dev/null; then
+        echo "   🔧 Ставлю парсер JSON (jq)..."
+        run_cmd apt-get update -qq >/dev/null 2>&1
+        run_cmd apt-get install -y -qq jq >/dev/null 2>&1
     fi
     
     # === ПРЕДУПРЕЖДЕНИЕ ===
@@ -236,66 +238,59 @@ run_speedtest_moscow() {
     printf "%b\n" "${C_RED}🛑 РУКИ УБРАЛ ОТ КЛАВИАТУРЫ!${C_RESET}"
     echo "   Ща я буду нагружать канал по полной программе."
     echo "   Не тыкай кнопки, не дыши, не обновляй порнуху в соседней вкладке."
-    printf "%b\n" "${C_YELLOW}⏳ Жди результата молча (CSV режим)...${C_RESET}"
+    printf "%b\n" "${C_YELLOW}⏳ Жди. Работаю с JSON-данными для точности...${C_RESET}"
     echo ""
     # ======================
 
-    # Инициализируем переменные, чтобы скрипт не падал (set -u fix)
-    local ping="0"
-    local dl="0"
-    local ul="0"
-    local csv_output=""
+    local json_output=""
+    local server_id="16976" # Beeline Moscow default
 
-    # Запускаем в режиме CSV: "server_id","sponsor","server_name","timestamp","distance","ping","download","upload","share","ip"
-    # Поля: Ping=6, Download=7 (bytes), Upload=8 (bytes)
-    
-    # Пробуем Beeline (16976)
-    csv_output=$(speedtest --accept-license --accept-gdpr --server-id 16976 -f csv 2>/dev/null)
-    
-    # Если Билайн сдох, пробуем автовыбор
-    if [ -z "$csv_output" ] || [[ "$csv_output" == *"error"* ]]; then
-        printf "%b\n" "${C_YELLOW}⚠️  Билайн занят, ищем любой живой сервер...${C_RESET}"
-        # Ищем ID московского сервера
+    # Пробуем Билайн в JSON
+    if ! json_output=$(speedtest --accept-license --accept-gdpr --server-id "$server_id" -f json 2>/dev/null); then
+        printf "%b\n" "${C_YELLOW}⚠️  Билайн занят. Ищу любой сервер в Москве...${C_RESET}"
         local search_id
         search_id=$(speedtest --accept-license --accept-gdpr -L | grep -i "Moscow" | head -n 1 | awk '{print $1}')
         
         if [ -n "$search_id" ]; then
-            csv_output=$(speedtest --accept-license --accept-gdpr --server-id "$search_id" -f csv 2>/dev/null)
+            json_output=$(speedtest --accept-license --accept-gdpr --server-id "$search_id" -f json 2>/dev/null)
         else
-            csv_output=$(speedtest --accept-license --accept-gdpr -f csv 2>/dev/null)
+            json_output=$(speedtest --accept-license --accept-gdpr -f json 2>/dev/null)
         fi
     fi
 
-    # Проверяем, получили ли мы данные
-    if [ -n "$csv_output" ] && [[ "$csv_output" != *"error"* ]]; then
-        # Удаляем кавычки из CSV
-        local clean_csv=$(echo "$csv_output" | tr -d '"')
-        
-        # Парсим поля
-        local raw_ping=$(echo "$clean_csv" | cut -d',' -f6)
-        local raw_dl=$(echo "$clean_csv" | cut -d',' -f7)
-        local raw_ul=$(echo "$clean_csv" | cut -d',' -f8)
-        
-        # Конвертация:
-        # Ping - оставляем как есть
-        # Download/Upload - приходят в байтах/сек. Переводим в Mбит/с: (X * 8) / 1000000
-        
-        # Используем awk для математики (чтобы не тянуть bc)
-        ping=$(echo "$raw_ping" | awk '{printf "%.1f", $1}')
-        dl=$(echo "$raw_dl" | awk '{printf "%.2f", $1 * 8 / 1000000}')
-        ul=$(echo "$raw_ul" | awk '{printf "%.2f", $1 * 8 / 1000000}')
-        
+    # ПАРСИНГ JSON (БЕЗ ОШИБОК)
+    if [ -n "$json_output" ]; then
+        # Извлекаем сырые данные
+        local raw_ping=$(echo "$json_output" | jq -r '.ping.latency')
+        local raw_dl=$(echo "$json_output" | jq -r '.download.bandwidth')
+        local raw_ul=$(echo "$json_output" | jq -r '.upload.bandwidth')
+        local url=$(echo "$json_output" | jq -r '.result.url')
+
+        # Если Ping 0 или null - это баг сервера speedtest.
+        # Пингуем сами 8.8.8.8 как fallback, чтобы не показывать "0.0"
+        if [[ "$raw_ping" == "null" ]] || [[ $(echo "$raw_ping < 0.1" | bc -l 2>/dev/null) -eq 1 ]]; then
+             local fallback_ping
+             fallback_ping=$(ping -c 1 8.8.8.8 | grep 'time=' | awk -F'time=' '{print $2}' | cut -d' ' -f1)
+             raw_ping="$fallback_ping (Google)"
+        else
+             raw_ping="${raw_ping} ms"
+        fi
+
+        # Конвертация Байты -> Мегабиты
+        # (Bytes * 8) / 1000000
+        local dl=$(echo "$raw_dl" | awk '{printf "%.2f", $1 * 8 / 1000000}')
+        local ul=$(echo "$raw_ul" | awk '{printf "%.2f", $1 * 8 / 1000000}')
+
         echo ""
         echo "══════════════════════════════════════════════════"
-        printf "   %bPING:%b      %s ms\n" "${C_GRAY}" "${C_RESET}" "$ping"
+        printf "   %bPING:%b      %s\n" "${C_GRAY}" "${C_RESET}" "$raw_ping"
         printf "   %bСКАЧКА:%b    %s Mbit/s\n" "${C_GREEN}" "${C_RESET}" "$dl"
         printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul"
         echo "══════════════════════════════════════════════════"
-        
-        # Расчет емкости и СОХРАНЕНИЕ
-        # Проверяем, что ul - это число и оно больше 1
+        echo "   🔗 Линк на результат: $url"
+
+        # СОХРАНЕНИЕ
         if [[ $(echo "$ul > 1" | awk '{print ($1 > 0)}') -eq 1 ]]; then
-            # Округляем до целого для конфига
             local clean_ul=$(echo "$ul" | cut -d'.' -f1)
             save_path "LAST_UPLOAD_SPEED" "$clean_ul"
             
@@ -307,11 +302,9 @@ run_speedtest_moscow() {
             echo "   С таким каналом эта нода потянет примерно:"
             printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
             echo "   (Результат сохранён для главного меню)"
-        else
-            printf "\n%b❌ Ошибка: получены нулевые данные. Попробуй позже.%b\n" "${C_RED}" "${C_RESET}"
         fi
     else
-        printf "\n%b❌ Не удалось подключиться к Speedtest. Попробуй позже или проверь инет.%b\n" "${C_RED}" "${C_RESET}"
+        printf "\n%b❌ Ошибка: Speedtest вернул пустоту. Попробуй позже.%b\n" "${C_RED}" "${C_RESET}"
     fi
     
     echo ""
