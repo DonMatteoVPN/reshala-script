@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21164 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21165 - FIXED & POLISHED   ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21164"
+readonly VERSION="v2.21165"
 # Убедись, что ветка (dev/main) правильная!
 readonly REPO_BRANCH="dev" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
@@ -1909,12 +1909,31 @@ menu_security() {
 # ============================================================ #
 FLEET_FILE="${HOME}/.reshala_fleet"
 
-# Санитар базы
+# Санитар базы (удаляет пустые строки)
 _sanitize_fleet_database() {
     if [ -f "$FLEET_FILE" ]; then
         sed -i '/^$/d' "$FLEET_FILE"
+        # Убедимся, что файл заканчивается новой строкой
         [ -s "$FLEET_FILE" ] && [ "$(tail -c1 "$FLEET_FILE" | wc -l)" -eq 0 ] && echo "" >> "$FLEET_FILE"
     fi
+}
+
+# Функция для обновления строки в файле (чтобы сохранить пароль)
+_update_fleet_record() {
+    local line_num=$1
+    local new_record=$2
+    local temp_file="${FLEET_FILE}.tmp"
+    local i=1
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$i" -eq "$line_num" ]; then
+            echo "$new_record" >> "$temp_file"
+        else
+            echo "$line" >> "$temp_file"
+        fi
+        ((i++))
+    done < "$FLEET_FILE"
+    mv "$temp_file" "$FLEET_FILE"
 }
 
 manage_fleet() {
@@ -1923,19 +1942,17 @@ manage_fleet() {
     while true; do
         _sanitize_fleet_database
         
-        # 1. ПОДГОТОВКА (Асинхронный запуск)
+        # 1. ПОДГОТОВКА (Асинхронный скан)
         clear
         printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
         printf "%b\n" "${C_CYAN}║            🌐 SKYNET: ЦЕНТР УПРАВЛЕНИЯ ФЛОТОМ                ║${C_RESET}"
         printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
         
-        # Создаем временную папку для статусов
         local tmp_dir
         tmp_dir=$(mktemp -d)
         local i=1
         local servers=()
         
-        # Читаем файл в массив, чтобы потом не читать его сто раз
         local raw_lines=()
         if [ -s "$FLEET_FILE" ]; then
             while IFS= read -r line; do
@@ -1950,11 +1967,11 @@ manage_fleet() {
             echo ""
             printf "   %b⏳ Сканирую сеть (Параллельный опрос)...%b" "${C_YELLOW}" "${C_RESET}"
             
-            # ЗАПУСКАЕМ ПРОВЕРКИ В ФОНЕ (Parallel Jobs)
+            # ЗАПУСКАЕМ ПРОВЕРКИ В ФОНЕ
             for line in "${raw_lines[@]}"; do
-                IFS='|' read -r name user ip port key_path <<< "$line"
+                # Читаем теперь 6 полей (добавили sudo_pass)
+                IFS='|' read -r name user ip port key_path sudo_pass <<< "$line"
                 
-                # Пропускаем мусор, но сохраняем индекс для синхронизации
                 if [[ -z "$name" ]] || [[ -z "$ip" ]]; then 
                     echo "SKIP" > "$tmp_dir/$i"
                     ((i++))
@@ -1963,7 +1980,6 @@ manage_fleet() {
                 
                 if [[ ! -f "$key_path" ]]; then key_path="$HOME/.ssh/id_ed25519"; fi
                 
-                # Запускаем subshell в фоне (&)
                 (
                     if timeout 3 ssh -n -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$key_path" -p "$port" "$user@$ip" exit 2>/dev/null; then
                         echo "ON" > "$tmp_dir/$i"
@@ -1971,18 +1987,13 @@ manage_fleet() {
                         echo "OFF" > "$tmp_dir/$i"
                     fi
                 ) &
-                
                 ((i++))
             done
-            
-            # Ждем завершения всех фоновых процессов
             wait
-            
-            # Стираем строку "Сканирую..."
             printf "\r\033[K"
         fi
 
-        # 2. ОТРИСОВКА МЕНЮ (Сбор результатов)
+        # 2. ОТРИСОВКА МЕНЮ
         printf "   📂 База данных: ${C_GRAY}%s${C_RESET}\n" "$FLEET_FILE"
         echo ""
         echo "Список удаленных серверов:"
@@ -1993,44 +2004,43 @@ manage_fleet() {
             echo "   (Список пуст)"
         else
             for line in "${raw_lines[@]}"; do
-                IFS='|' read -r name user ip port key_path <<< "$line"
+                IFS='|' read -r name user ip port key_path sudo_pass <<< "$line"
                 
-                # Если статус был SKIP или пустая строка
                 if [[ -z "$name" ]] || [[ -z "$ip" ]]; then ((i++)); continue; fi
-                
                 if [[ ! -f "$key_path" ]]; then key_path="$HOME/.ssh/id_ed25519"; fi
                 
-                servers[$i]="$name|$user|$ip|$port|$key_path"
+                # Сохраняем в массив (включая пароль)
+                servers[$i]="$name|$user|$ip|$port|$key_path|$sudo_pass"
                 
-                # Читаем статус из временного файла
                 local status_text="UNK"
-                if [ -f "$tmp_dir/$i" ]; then
-                    status_text=$(cat "$tmp_dir/$i")
-                fi
+                [ -f "$tmp_dir/$i" ] && status_text=$(cat "$tmp_dir/$i")
                 
                 local status_color="${C_RED}OFF${C_RESET}"
-                if [[ "$status_text" == "ON" ]]; then
-                    status_color="${C_GREEN}ON${C_RESET} "
-                fi
+                [[ "$status_text" == "ON" ]] && status_color="${C_GREEN}ON${C_RESET} "
                 
                 local kp_display="Master"
-                if [[ "$key_path" == *"id_reshala_"* ]]; then kp_display="Unique"; fi
+                [[ "$key_path" == *"id_reshala_"* ]] && kp_display="Unique"
                 
-                printf "   [%d] [%b] %b%-15s%b -> %s@%s:%s [%s]\n" "$i" "$status_color" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display"
+                # Индикатор наличия сохраненного пароля
+                local pass_icon=""
+                if [[ "$user" != "root" ]]; then
+                    if [[ -n "$sudo_pass" ]]; then pass_icon="🔑"; else pass_icon="⚠️"; fi
+                fi
+
+                printf "   [%d] [%b] %b%-15s%b -> %s@%s:%s [%s] %s\n" "$i" "$status_color" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display" "$pass_icon"
                 ((i++))
             done
         fi
         
-        # Чистим мусор
         rm -rf "$tmp_dir"
         
         echo "----------------------------------------------------------------"
-        echo "   [a] ➕ Добавить сервер (+ Ключ)"
+        echo "   [a] ➕ Добавить сервер"
         echo "   [m] 📝 Ручное редактирование файла (nano)"
-        echo "   [k] 🔑 Посмотреть/Скопировать ключи"
-        echo "   [d] 🗑️ Удалить сервер (через меню)"
-        echo "   [x] ☢️ Сброс настроек (Удалить всю базу)"
-        echo "   [b] 🔙 Назад в главное меню"
+        echo "   [k] 🔑 Ключи SSH"
+        echo "   [d] 🗑️ Удалить сервер"
+        echo "   [x] ☢️ Сброс базы"
+        echo "   [b] 🔙 Назад"
         echo ""
         
         local choice
@@ -2043,8 +2053,18 @@ manage_fleet() {
                 local s_ip; s_ip=$(safe_read "IP: " "")
                 local s_user; s_user=$(safe_read "User (Enter=root): " "root")
                 local s_port; s_port=$(safe_read "Port (Enter=22): " "22")
-                
+                local s_pass=""
+
                 if [[ -n "$s_name" && -n "$s_ip" ]]; then
+                    # Если не root, сразу спросим про пароль
+                    if [[ "$s_user" != "root" ]]; then
+                        echo ""
+                        printf "%b\n" "${C_YELLOW}⚠️  Ты указал юзера '$s_user' (не root).${C_RESET}"
+                        echo "Чтобы Решала мог ставить софт, ему нужен sudo-пароль."
+                        read -p "Введи пароль sudo (или Enter, чтобы пропустить): " -s s_pass
+                        echo ""
+                    fi
+
                     echo ""; echo "Выбери ключ:"
                     echo "1) Общий Мастер-ключ (Рекомендую)"
                     echo "2) Создать УНИКАЛЬНЫЙ ключ"
@@ -2064,13 +2084,11 @@ manage_fleet() {
                     
                     echo "" >> "$FLEET_FILE"
                     _sanitize_fleet_database
-                    echo "$s_name|$s_user|$s_ip|$s_port|$final_key" >> "$FLEET_FILE"
+                    # Сохраняем с паролем (6-е поле)
+                    echo "$s_name|$s_user|$s_ip|$s_port|$final_key|$s_pass" >> "$FLEET_FILE"
                     _sanitize_fleet_database
                     
                     echo "✅ Сохранено."
-                    sleep 1
-                else
-                    echo "❌ Отмена."
                     sleep 1
                 fi
                 ;;
@@ -2082,84 +2100,71 @@ manage_fleet() {
             [kK])
                 menu_keys_management
                 ;;
-            [eE])
-                local edit_num; edit_num=$(safe_read "Номер: " "")
-                if [[ "$edit_num" =~ ^[0-9]+$ ]] && [ -n "${servers[$edit_num]:-}" ]; then
-                    IFS='|' read -r old_name old_user old_ip old_port old_key <<< "${servers[$edit_num]}"
-                    echo "--- РЕДАКТИРОВАНИЕ [$old_name] ---"
-                    local new_name; new_name=$(safe_read "Имя [$old_name]: " "$old_name")
-                    local new_ip; new_ip=$(safe_read "IP [$old_ip]: " "$old_ip")
-                    local new_user; new_user=$(safe_read "User [$old_user]: " "$old_user")
-                    local new_port; new_port=$(safe_read "Port [$old_port]: " "$old_port")
-                    
-                    local temp_file="${FLEET_FILE}.tmp"
-                    local line_count=1
-                    while IFS='|' read -r n u i p k || [ -n "$n" ]; do
-                        [[ -z "$n" ]] && continue
-                        if [ "$line_count" -eq "$edit_num" ]; then
-                            echo "$new_name|$new_user|$new_ip|$new_port|$old_key" >> "$temp_file"
-                        else
-                            echo "$n|$u|$i|$p|$k" >> "$temp_file"
-                        fi
-                        ((line_count++))
-                    done < "$FLEET_FILE"
-                    mv "$temp_file" "$FLEET_FILE"
-                    echo "✅ Обновлено."
-                else
-                    echo "❌ Нет такого сервера."
-                    sleep 1
-                fi
-                ;;
             [dD])
                 local del_num; del_num=$(safe_read "Номер для удаления: " "")
                 if [[ "$del_num" =~ ^[0-9]+$ ]] && [ -n "${servers[$del_num]:-}" ]; then 
                     local temp_file="${FLEET_FILE}.tmp"
                     local line_count=1
-                    while IFS='|' read -r n u i p k || [ -n "$n" ]; do
+                    while IFS='|' read -r n u i p k s || [ -n "$n" ]; do
                         [[ -z "$n" ]] && continue
                         if [ "$line_count" -ne "$del_num" ]; then
-                            echo "$n|$u|$i|$p|$k" >> "$temp_file"
+                            echo "$n|$u|$i|$p|$k|$s" >> "$temp_file"
                         fi
                         ((line_count++))
                     done < "$FLEET_FILE"
                     mv "$temp_file" "$FLEET_FILE"
                     echo "🗑️ Удалено."
-                else
-                    echo "❌ Нет такого номера."
-                    sleep 1
                 fi
                 ;;
             [xX])
-                echo ""
-                printf "%b\n" "${C_RED}☢️  ВНИМАНИЕ! ЭТО УДАЛИТ ВЕСЬ СПИСОК СЕРВЕРОВ!${C_RESET}"
-                read -p "Ты уверен? (yes/no): " confirm
-                if [[ "$confirm" == "yes" ]]; then
-                    rm -f "$FLEET_FILE"
-                    touch "$FLEET_FILE"
-                    echo "🗑️ База уничтожена."
-                    sleep 1
-                fi
+                read -p "Удалить ВСЕ? (yes/no): " confirm
+                if [[ "$confirm" == "yes" ]]; then rm -f "$FLEET_FILE"; touch "$FLEET_FILE"; echo "🗑️ База уничтожена."; sleep 1; fi
                 ;;
             [bB]) break ;;
             *)
-                # ТЕЛЕПОРТАЦИЯ
+                # --- ТЕЛЕПОРТАЦИЯ (ГЛАВНАЯ ЛОГИКА) ---
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$choice]:-}" ]; then
                     local selected="${servers[$choice]}"
-                    IFS='|' read -r s_name s_user s_ip s_port s_key <<< "$selected"
+                    IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "$selected"
                     
                     if [[ ! -f "$s_key" ]]; then s_key="$HOME/.ssh/id_ed25519"; fi
                     
                     clear
                     printf "%b\n" "${C_CYAN}🚀 SKYNET UPLINK: ${C_WHITE}$s_name${C_RESET}"
                     
-                    # 1. Доступ
+                    # 1. ПРОВЕРКА ПАРОЛЯ SUDO
+                    if [[ "$s_user" != "root" ]]; then
+                        if [[ -z "$s_pass" ]]; then
+                            echo ""
+                            printf "%b\n" "${C_YELLOW}🔒 Юзеру '$s_user' нужен пароль для sudo.${C_RESET}"
+                            read -p "Введи пароль: " -s s_pass
+                            echo ""
+                            read -p "Сохранить его в базу? (y/n): " save_pass
+                            if [[ "$save_pass" == "y" || "$save_pass" == "Y" ]]; then
+                                local new_record="$s_name|$s_user|$s_ip|$s_port|$s_key|$s_pass"
+                                _update_fleet_record "$choice" "$new_record"
+                                echo "💾 Пароль сохранён."
+                            fi
+                        fi
+                    fi
+
+                    # Функция-обертка для команд через sudo
+                    # Если есть пароль, используем sudo -S, иначе просто команду (для root)
+                    run_remote() {
+                        local cmd="$1"
+                        if [[ "$s_user" == "root" ]]; then
+                            ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$cmd"
+                        else
+                            # Экранируем пароль и команду для bash -c
+                            # Используем sudo -S -p '' чтобы не выводил prompt
+                            local sudo_cmd="echo '$s_pass' | sudo -S -p '' bash -c \"$cmd\""
+                            ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_cmd"
+                        fi
+                    }
+
+                    # 2. ПРОВЕРКА ДОСТУПА
                     if ! ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
-                        printf "%b\n" "${C_RED}⛔ Нет доступа!${C_RESET}"
-                        echo "Возможные причины:"
-                        echo "1. Сервер выключен."
-                        echo "2. Сменился IP/Порт."
-                        echo "3. Слетёл ключ."
-                        echo ""
+                        printf "%b\n" "${C_RED}⛔ Нет доступа по SSH!${C_RESET}"
                         read -p "Попробовать закинуть ключ заново? (y/n): " try_fix
                         if [[ "$try_fix" == "y" ]]; then
                             _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$s_key"
@@ -2167,15 +2172,21 @@ manage_fleet() {
                         continue
                     fi
                     
-                    # 2. Версия
+                    # 3. СВЕРКА ВЕРСИЙ
                     echo "🔍 Сверка версий..."
-                    local remote_ver_cmd="if [ -f /usr/local/bin/reshala ]; then grep 'readonly VERSION' /usr/local/bin/reshala | cut -d'\"' -f2; else echo 'NONE'; fi"
-                    local remote_ver
-                    remote_ver=$(ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$remote_ver_cmd")
+                    # Тут хитро: grep может не иметь прав на чтение, если файл root:root 700
+                    # Поэтому даже grep пускаем через нашу обертку run_remote
+                    local check_cmd="if [ -f /usr/local/bin/reshala ]; then cat /usr/local/bin/reshala | grep 'readonly VERSION' | cut -d'\"' -f2; else echo 'NONE'; fi"
                     
+                    local remote_ver
+                    remote_ver=$(run_remote "$check_cmd")
+                    
+                    # Очистка вывода от лишнего мусора (иногда sudo плюет ошибки в stdout)
+                    remote_ver=$(echo "$remote_ver" | tail -n 1 | tr -d '\r')
+
                     local need_install=0
-                    if [[ "$remote_ver" == "NONE" ]]; then
-                        echo "⚠️  Решала не установлен."
+                    if [[ "$remote_ver" == *"NONE"* ]] || [[ -z "$remote_ver" ]]; then
+                        echo "⚠️  Решала не установлен (или нет доступа)."
                         need_install=1
                     elif [[ "$remote_ver" != "$VERSION" ]]; then
                         echo "⚠️  Обновление ($remote_ver -> $VERSION)..."
@@ -2186,13 +2197,23 @@ manage_fleet() {
                     
                     if [ $need_install -eq 1 ]; then
                         printf "%b\n" "${C_YELLOW}📦 Загрузка агента на сервер...${C_RESET}"
-                        ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "rm -f /usr/local/bin/reshala; wget -qO- ${SCRIPT_URL} | sudo bash -s install"
+                        # Команда установки. Скачиваем во временный файл, потом sudo install
+                        local install_cmd="wget -q -O /tmp/reshala_inst.sh ${SCRIPT_URL} && bash /tmp/reshala_inst.sh install && rm /tmp/reshala_inst.sh"
+                        run_remote "$install_cmd"
                     fi
                     
-                    # 3. ЗАПУСК
+                    # 4. ЗАПУСК (ИНТЕРАКТИВ)
                     printf "%b\n" "${C_GREEN}✅ Входим...${C_RESET}"
                     sleep 1
-                    ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo SKYNET_MODE=1 reshala"
+                    
+                    if [[ "$s_user" == "root" ]]; then
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo SKYNET_MODE=1 reshala"
+                    else
+                        # МАГИЯ SUDO:
+                        # 1. echo PASS | sudo -S -v -> Обновляет timestamp (вводит пароль скрытно)
+                        # 2. sudo reshala -> Запускается уже без пароля, так как timestamp свежий
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "echo '$s_pass' | sudo -S -p '' -v 2>/dev/null && sudo SKYNET_MODE=1 reshala"
+                    fi
                     
                     printf "\n%b\n" "${C_CYAN}🔙 Связь с $s_name завершена.${C_RESET}"
                     sleep 1
