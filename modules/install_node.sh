@@ -1,10 +1,10 @@
 #!/bin/bash
 # ============================================================ #
-# ==   МОДУЛЬ УСТАНОВКИ REMNAWAVE NODE (API AUTOMATION)     ==
-# ==      FULL CYCLE: AUTH -> PROFILE -> NODE -> DEPLOY     ==
+# ==   МОДУЛЬ УСТАНОВКИ REMNAWAVE NODE (PRODUCTION V3)      ==
+# ==      FIXED FUNCTION ORDER & API LOGIC FROM SOURCE      ==
 # ============================================================ #
 
-# --- Цвета ---
+# --- 1. КОНФИГУРАЦИЯ И ПЕРЕМЕННЫЕ ---
 C_RESET='\033[0m'
 C_RED='\033[0;31m'
 C_GREEN='\033[0;32m'
@@ -12,15 +12,14 @@ C_YELLOW='\033[1;33m'
 C_CYAN='\033[0;36m'
 C_BOLD='\033[1m'
 
-# --- Пути ---
 INSTALL_DIR="/opt/remnawave-node"
 CERT_DIR="/root/certs_node"
 SITE_DIR="/var/www/html"
+CRON_FILE="/etc/cron.d/remnawave-node"
 ROTATE_SCRIPT="/usr/local/bin/reshala-rotate-site"
 SMART_RENEW_SCRIPT="/usr/local/bin/reshala-smart-renew"
-CRON_FILE="/etc/cron.d/remnawave-node"
 
-# --- Переменные ---
+# Переменные, которые будут заполнены
 API_URL=""
 API_TOKEN=""
 NODE_NAME=""
@@ -28,117 +27,91 @@ NODE_DOMAIN=""
 NODE_SECRET=""
 PROFILE_ID=""
 CERT_STRATEGY=""
+PANEL_IP=""
+PANEL_PORT=""
+PANEL_USER=""
+PANEL_PASS=""
 CF_TOKEN=""
 CF_EMAIL=""
-# Переменные для SSH копирования
-PANEL_IP=""
-PANEL_PORT="22"
-PANEL_USER="root"
-PANEL_PASS=""
-IS_LOCAL_PANEL=0
 
-# Утилита для запуска от root
+# --- 2. УТИЛИТЫ ---
 run_cmd() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 safe_read() { read -e -p "$1" -i "$2" result; echo "${result:-$2}"; }
 
-# ============================================================ #
-#                0. ПРОВЕРКА И ПОДГОТОВКА                      #
-# ============================================================ #
-check_existing_installation() {
-    if [ -d "$INSTALL_DIR" ] || docker ps | grep -q "remnanode"; then
-        clear
-        printf "%b\n" "${C_RED}╔══════════════════════════════════════════════════════════╗${C_RESET}"
-        printf "%b\n" "${C_RED}║       ⚠️  ВНИМАНИЕ! НОДА УЖЕ УСТАНОВЛЕНА! ⚠️             ║${C_RESET}"
-        printf "%b\n" "${C_RED}╚══════════════════════════════════════════════════════════╝${C_RESET}"
-        echo "   [1] 🔄 СНЕСТИ И ПЕРЕУСТАНОВИТЬ (Полный сброс)"
-        echo "   [b] 🔙 Отмена"
-        local choice=$(safe_read "Выбор: " "b")
-        case "$choice" in
-            1) 
-                echo "🧨 Сношу старую ноду..."
-                if [ -f "$INSTALL_DIR/docker-compose.yml" ]; then cd "$INSTALL_DIR" && docker compose down -v 2>/dev/null; fi
-                rm -rf "$INSTALL_DIR" "$CRON_FILE" "$ROTATE_SCRIPT" "$SMART_RENEW_SCRIPT"
-                ;;
-            *) exit 0 ;;
-        esac
-    fi
+install_base_tools() {
+    echo "🔧 Установка базовых утилит (curl, jq)..."
+    export DEBIAN_FRONTEND=noninteractive
+    if ! command -v jq &>/dev/null; then apt-get update -qq && apt-get install -y -qq jq curl wget &>/dev/null; fi
 }
 
-install_minimal_tools() {
-    # Нам нужны curl и jq для работы с API прямо сейчас
-    if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
-        export DEBIAN_FRONTEND=noninteractive
-        echo "🔧 Ставлю curl и jq для работы API..."
-        apt-get update -qq >/dev/null
-        apt-get install -y -qq curl jq >/dev/null
+install_full_tools() {
+    echo "🔧 Установка полных зависимостей..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -qq unzip socat git cron sshpass ufw certbot openssl &>/dev/null
+    
+    if ! command -v docker &> /dev/null; then
+        echo "🐳 Установка Docker..."
+        curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
     fi
 }
 
 # ============================================================ #
-#                1. РАБОТА С API ПАНЕЛИ                        #
+#                3. ФУНКЦИИ API (REMNAWAVE)                    #
 # ============================================================ #
-api_auth_flow() {
+
+step_auth() {
     clear
-    printf "%b\n" "${C_CYAN}🚀 АВТО-НАСТРОЙКА ЧЕРЕЗ API ПАНЕЛИ${C_RESET}"
+    printf "%b\n" "${C_CYAN}🚀 НАСТРОЙКА НОДЫ (API MODE)${C_RESET}"
     echo ""
-    printf "%b\n" "${C_BOLD}[ 1. ПОДКЛЮЧЕНИЕ К ПАНЕЛИ ]${C_RESET}"
-    
     API_URL=$(safe_read "🔗 URL Панели (напр. https://panel.domain.com): " "")
-    # Убираем слеш в конце
+    # Убираем слеш на конце и возможный /api (добавим сами где надо)
     API_URL=${API_URL%/}
+    API_URL=${API_URL%/api}
     
-    echo "Как авторизуемся?"
-    echo "   [1] Логин и Пароль (Admin)"
-    echo "   [2] Вставить Token вручную"
-    local auth_method=$(safe_read "Выбор: " "1")
-    
-    if [[ "$auth_method" == "2" ]]; then
-        echo "Вставь Bearer token:"
+    echo ""
+    echo "1. Вход по Логину/Паролю"
+    echo "2. Вход по Токену (Bearer)"
+    local auth_type=$(safe_read "Выбор: " "1")
+
+    if [[ "$auth_type" == "2" ]]; then
+        echo "Вставь токен:"
         read -r API_TOKEN
+        # Проверка токена
+        local CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $API_TOKEN" "${API_URL}/api/users")
+        if [[ "$CODE" != "200" ]]; then echo "❌ Токен невалиден (Код $CODE)."; exit 1; fi
     else
-        local A_USER=$(safe_read "👤 Логин: " "admin")
-        echo "🔑 Пароль:"
-        read -s A_PASS
+        local USER=$(safe_read "Login: " "admin")
+        read -s -p "Password: " PASS; echo ""
         
-        printf "\n🔄 Логинюсь... "
-        # Используем -L для редиректов и -c cookie-jar на всякий случай
-        local RESPONSE
-        RESPONSE=$(curl -s -L -X POST "${API_URL}/api/auth/login" \
+        # Запрос токена
+        local RESPONSE=$(curl -s -L -X POST "${API_URL}/api/auth/login" \
             -H "Content-Type: application/json" \
-            -d "{\"username\": \"$A_USER\", \"password\": \"$A_PASS\"}")
+            -d "{\"username\": \"$USER\", \"password\": \"$PASS\"}")
             
-        # Проверка на HTML (ошибка Nginx/Cloudflare)
         if [[ "$RESPONSE" == *"<html"* ]]; then
-            printf "%b\n" "${C_RED}ОШИБКА!${C_RESET}"
-            echo "Сервер вернул HTML. Проверь URL (возможно нужно https или порт)."
+            echo "❌ Ошибка: Сервер вернул HTML. Проверь URL."
             exit 1
         fi
         
         API_TOKEN=$(echo "$RESPONSE" | jq -r '.accessToken')
-        
         if [[ "$API_TOKEN" == "null" || -z "$API_TOKEN" ]]; then
-            printf "%b\n" "${C_RED}НЕВЕРНО!${C_RESET}"
-            echo "Ответ: $RESPONSE"
+            echo "❌ Ошибка авторизации: $RESPONSE"
             exit 1
-        else
-            printf "%b\n" "${C_GREEN}УСПЕХ!${C_RESET}"
         fi
+        echo "✅ Авторизация успешна."
     fi
 }
 
-api_setup_node() {
+step_create_profile() {
     echo ""
-    printf "%b\n" "${C_BOLD}[ 2. ПАРАМЕТРЫ НОВОЙ НОДЫ ]${C_RESET}"
-    NODE_NAME=$(safe_read "🏷️  Имя Ноды (English): " "Node_$(hostname)")
+    NODE_NAME=$(safe_read "🏷️ Имя Ноды (English): " "Node_$(hostname)")
     NODE_DOMAIN=$(safe_read "🌐 Домен Ноды (tr1.site.com): " "")
-    [[ -z "$NODE_DOMAIN" ]] && { echo "❌ Домен обязателен!"; exit 1; }
+    [[ -z "$NODE_DOMAIN" ]] && { echo "❌ Домен обязателен"; exit 1; }
 
-    # --- 2.1 СОЗДАНИЕ ПРОФИЛЯ (CONFIGURATION) ---
-    printf "📝 Создаю профиль VLESS-WS-TLS... "
-    
+    echo "📝 Создаю профиль..."
     local PROFILE_JSON=$(cat <<EOF
 {
-  "name": "${NODE_NAME}_Profile_$(date +%s)",
+  "name": "${NODE_NAME}_WS_TLS",
   "type": "xray_json",
   "content": {
     "log": { "loglevel": "warning" },
@@ -181,216 +154,131 @@ api_setup_node() {
 }
 EOF
 )
-    local P_RESP
-    P_RESP=$(curl -s -L -X POST "${API_URL}/api/configurations" \
+    local RESPONSE=$(curl -s -X POST "${API_URL}/api/configurations" \
         -H "Authorization: Bearer $API_TOKEN" \
         -H "Content-Type: application/json" \
         -d "$PROFILE_JSON")
-        
-    PROFILE_ID=$(echo "$P_RESP" | jq -r '.id')
     
-    if [[ "$PROFILE_ID" == "null" ]]; then
-        printf "%b\n" "${C_RED}ОШИБКА СОЗДАНИЯ ПРОФИЛЯ!${C_RESET}"
-        echo "Ответ: $P_RESP"
-        exit 1
-    fi
-    printf "%b\n" "${C_GREEN}OK (ID: $PROFILE_ID)${C_RESET}"
-
-    # --- 2.2 СОЗДАНИЕ НОДЫ (HOST) ---
-    printf "KV Создаю Ноду и беру ключ... "
-    
-    # API v2 Remnawave использует /api/hosts (в UI это Nodes)
-    # Поля: name, address, configurationId
-    local NODE_JSON=$(cat <<EOF
-{
-  "name": "${NODE_NAME}",
-  "address": "${NODE_DOMAIN}",
-  "configurationId": "${PROFILE_ID}"
+    PROFILE_ID=$(echo "$RESPONSE" | jq -r '.id')
+    if [[ "$PROFILE_ID" == "null" ]]; then echo "❌ Ошибка создания профиля: $RESPONSE"; exit 1; fi
+    echo "✅ Профиль создан ID: $PROFILE_ID"
 }
-EOF
-)
-    local N_RESP
-    N_RESP=$(curl -s -L -X POST "${API_URL}/api/hosts" \
+
+step_create_node() {
+    echo "📝 Создаю хост..."
+    local NODE_JSON="{\"name\": \"${NODE_NAME}\", \"address\": \"${NODE_DOMAIN}\", \"configurationId\": \"${PROFILE_ID}\"}"
+    
+    # Пробуем /api/hosts (новое API)
+    local RESPONSE=$(curl -s -X POST "${API_URL}/api/hosts" \
         -H "Authorization: Bearer $API_TOKEN" \
         -H "Content-Type: application/json" \
         -d "$NODE_JSON")
         
-    NODE_SECRET=$(echo "$N_RESP" | jq -r '.secretKey')
+    NODE_SECRET=$(echo "$RESPONSE" | jq -r '.secretKey')
     
-    # Fallback на /api/nodes если hosts не сработал (старые версии)
+    # Если не вышло, пробуем /api/nodes (старое API)
     if [[ "$NODE_SECRET" == "null" ]]; then
-        N_RESP=$(curl -s -L -X POST "${API_URL}/api/nodes" \
+        RESPONSE=$(curl -s -X POST "${API_URL}/api/nodes" \
             -H "Authorization: Bearer $API_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$NODE_JSON")
-        NODE_SECRET=$(echo "$N_RESP" | jq -r '.secretKey')
+        NODE_SECRET=$(echo "$RESPONSE" | jq -r '.secretKey')
     fi
 
-    if [[ "$NODE_SECRET" == "null" || -z "$NODE_SECRET" ]]; then
-        printf "%b\n" "${C_RED}НЕ УДАЛОСЬ ПОЛУЧИТЬ КЛЮЧ!${C_RESET}"
-        echo "Ответ API: $N_RESP"
-        exit 1
-    fi
-    
-    printf "%b\n" "${C_GREEN}УСПЕХ!${C_RESET}"
-    echo "   🔑 Secret Key получен."
+    if [[ "$NODE_SECRET" == "null" ]]; then echo "❌ Ошибка создания ноды: $RESPONSE"; exit 1; fi
+    echo "✅ Нода создана. SECRET_KEY получен."
 }
 
 # ============================================================ #
-#                2. ВЫБОР СЕРТИФИКАТОВ                         #
+#                4. НАСТРОЙКА СЕРВЕРА                          #
 # ============================================================ #
-collect_cert_data() {
+
+step_certificates() {
     echo ""
-    printf "%b\n" "${C_BOLD}[ 3. ИСТОЧНИК СЕРТИФИКАТОВ ]${C_RESET}"
-    echo "   [1] ☁️  Cloudflare API (Wildcard)"
-    echo "   [2] 📥 Скопировать с Панели (SSH/Local)"
-    echo "   [3] 🆕 Certbot Standalone (Авто-выпуск)"
-    CERT_STRATEGY=$(safe_read "Выбор (1-3): " "1")
-    
-    case "$CERT_STRATEGY" in
-        1) 
-            printf "%b\n" "${C_YELLOW}--- Cloudflare ---${C_RESET}"
-            CF_TOKEN=$(safe_read "Token: " "")
-            CF_EMAIL=$(safe_read "Email: " "")
-            ;;
-        2)
-            printf "%b\n" "${C_YELLOW}--- SSH Данные Панели ---${C_RESET}"
-            local guess_ip=$(echo "$API_URL" | awk -F/ '{print $3}' | cut -d: -f1)
-            PANEL_IP=$(safe_read "IP Сервера: " "$guess_ip")
-            
-            # Проверка на локальность
-            local my_ips=$(hostname -I)
-            if [[ "$PANEL_IP" == "127.0.0.1" || "$PANEL_IP" == "localhost" || "$my_ips" == *"$PANEL_IP"* ]]; then
-                IS_LOCAL_PANEL=1
-                echo "✅ Локальная установка (копирую cp)."
-            else
-                IS_LOCAL_PANEL=0
-                PANEL_PORT=$(safe_read "SSH Порт: " "22")
-                PANEL_USER=$(safe_read "SSH User: " "root")
-                read -s -p "SSH Пароль: " PANEL_PASS; echo ""
-                
-                # Тест SSH
-                if ! command -v sshpass &>/dev/null; then apt-get update -qq && apt-get install -y -qq sshpass; fi
-                echo "📡 Тест SSH..."
-                if ! sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" exit 2>/dev/null; then
-                    echo "❌ Ошибка SSH подключения!"; exit 1
-                else
-                    echo "✅ SSH ОК."
-                fi
-            fi
-            ;;
-    esac
-}
-
-# ============================================================ #
-#                3. УСТАНОВКА СИСТЕМЫ                          #
-# ============================================================ #
-install_system() {
-    echo ""
-    printf "%b" "🔧 Ставлю системный софт... "
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y -qq wget unzip socat git cron sshpass ufw certbot >/dev/null
-    if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | sh >/dev/null; fi
-    printf "%b\n" "${C_GREEN}OK${C_RESET}"
-    
-    # Firewall
-    echo "🛡️ Настройка Firewall..."
-    if ! command -v ufw &>/dev/null; then apt-get install -y ufw >/dev/null; fi
-    local ssh_p=$(grep "^Port" /etc/ssh/sshd_config | awk '{print $2}' | head -n 1); ssh_p=${ssh_p:-22}
-    
-    ufw allow "$ssh_p"/tcp >/dev/null 2>&1
-    ufw allow 443/tcp >/dev/null 2>&1
-    ufw allow 2222/tcp >/dev/null 2>&1
-    ufw delete allow 80/tcp >/dev/null 2>&1
-    
-    if ! ufw status | grep -q "Status: active"; then echo "y" | ufw enable >/dev/null; else ufw reload >/dev/null; fi
-}
-
-# ============================================================ #
-#                4. НАСТРОЙКА SSL (SMART)                      #
-# ============================================================ #
-setup_ssl() {
+    echo "[ СЕРТИФИКАТЫ ]"
+    echo "1. Cloudflare API"
+    echo "2. Копия с Панели (SSH)"
+    echo "3. Certbot Standalone"
+    CERT_STRATEGY=$(safe_read "Выбор: " "1")
     mkdir -p "$CERT_DIR"
-    local RELOAD_CMD="docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode"
 
-    case $CERT_STRATEGY in
-        1) # Cloudflare
+    case "$CERT_STRATEGY" in
+        1) # CF
+            CF_TOKEN=$(safe_read "CF Token: " "")
+            CF_EMAIL=$(safe_read "CF Email: " "")
             if [ ! -d "/root/.acme.sh" ]; then curl https://get.acme.sh | sh -s email="$CF_EMAIL" >/dev/null 2>&1; fi
             export CF_Token="$CF_TOKEN"; export CF_Email="$CF_EMAIL"
             /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$NODE_DOMAIN" -d "*.$NODE_DOMAIN" --force
-            /root/.acme.sh/acme.sh --install-cert -d "$NODE_DOMAIN" --key-file "$CERT_DIR/privkey.pem" --fullchain-file "$CERT_DIR/fullchain.pem" --reloadcmd "$RELOAD_CMD"
+            /root/.acme.sh/acme.sh --install-cert -d "$NODE_DOMAIN" --key-file "$CERT_DIR/privkey.pem" --fullchain-file "$CERT_DIR/fullchain.pem" --reloadcmd "docker compose -f $INSTALL_DIR/docker-compose.yml restart remnanode"
             ;;
+        
+        2) # Panel Copy
+            # Определяем IP из URL если не задан
+            local DEF_IP=$(echo "$API_URL" | awk -F/ '{print $3}' | cut -d: -f1)
+            PANEL_IP=$(safe_read "IP Панели: " "$DEF_IP")
             
-        2) # Panel Copy (Smart Scan)
-            echo "📥 Сканирую сертификаты на панели..."
-            local FOUND_PATH=""
-            
-            if [ $IS_LOCAL_PANEL -eq 1 ]; then
-                # Local scan
-                local RAW_LIST=$(ls -d /etc/letsencrypt/live/* /root/.acme.sh/*_ecc /root/.acme.sh/* 2>/dev/null)
-                for p in $RAW_LIST; do [[ "$p" == *"$NODE_DOMAIN"* ]] && FOUND_PATH="$p"; done
-                if [ -z "$FOUND_PATH" ]; then echo "❌ Сертификат не найден локально."; exit 1; fi
+            # Проверка локальности
+            if [[ "$PANEL_IP" == "127.0.0.1" || "$PANEL_IP" == "localhost" || "$PANEL_IP" == "$(hostname -I | awk '{print $1}')" ]]; then
+                echo "✅ Локальный сервер. Копирую напрямую."
+                # Ищем
+                local P=$(ls -d /etc/letsencrypt/live/* 2>/dev/null | grep "$NODE_DOMAIN" | head -n 1)
+                if [[ -z "$P" ]]; then P=$(ls -d /root/.acme.sh/${NODE_DOMAIN}* 2>/dev/null | head -n 1); fi
                 
-                # Create renew script
-                cat <<EOF > "$SMART_RENEW_SCRIPT"
-#!/bin/bash
-cp -L $FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem
-cp -L $FOUND_PATH/*key* $CERT_DIR/privkey.pem
-chmod 644 $CERT_DIR/*
-$RELOAD_CMD
-EOF
-            else
-                # SSH scan
-                local RAW_LIST=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" "$PANEL_USER@$PANEL_IP" "ls -d /etc/letsencrypt/live/* /root/.acme.sh/*_ecc /root/.acme.sh/* 2>/dev/null")
-                for p in $RAW_LIST; do [[ "$p" == *"$NODE_DOMAIN"* ]] && FOUND_PATH="$p"; done
-                
-                if [ -z "$FOUND_PATH" ]; then
-                    echo "⚠️ Авто-поиск не нашел точного совпадения. Список:"
-                    echo "$RAW_LIST"
-                    read -e -p "Введи путь к папке сертификата: " FOUND_PATH
+                if [[ -n "$P" ]]; then
+                    cp -L "$P/fullchain.pem" "$CERT_DIR/" || cp -L "$P/fullchain.cer" "$CERT_DIR/fullchain.pem"
+                    cp -L "$P/privkey.pem" "$CERT_DIR/" || cp -L "$P/"*key* "$CERT_DIR/privkey.pem"
+                else
+                    echo "❌ Не нашел сертификат локально. Закинь файлы в $CERT_DIR вручную."
                 fi
+            else
+                PANEL_PORT=$(safe_read "SSH Port: " "22")
+                read -s -p "SSH Pass: " PANEL_PASS; echo ""
                 
-                # Create renew script
-                cat <<EOF > "$SMART_RENEW_SCRIPT"
-#!/bin/bash
-sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/fullchain.* $CERT_DIR/fullchain.pem
-sshpass -p '$PANEL_PASS' scp -P $PANEL_PORT -o StrictHostKeyChecking=no $PANEL_USER@$PANEL_IP:$FOUND_PATH/*key* $CERT_DIR/privkey.pem
-chmod 644 $CERT_DIR/*
-$RELOAD_CMD
-EOF
+                echo "🔍 Ищу сертификаты на $PANEL_IP..."
+                # Умный поиск через SSH
+                local REMOTE_DIR
+                REMOTE_DIR=$(sshpass -p "$PANEL_PASS" ssh -o StrictHostKeyChecking=no -p "$PANEL_PORT" root@"$PANEL_IP" "ls -d /etc/letsencrypt/live/*${NODE_DOMAIN}* /root/.acme.sh/*${NODE_DOMAIN}* 2>/dev/null" | head -n 1)
+                
+                if [[ -n "$REMOTE_DIR" ]]; then
+                    echo "✅ Нашел: $REMOTE_DIR"
+                    sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "root@$PANEL_IP:$REMOTE_DIR/fullchain.*" "$CERT_DIR/fullchain.pem"
+                    sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "root@$PANEL_IP:$REMOTE_DIR/*key*" "$CERT_DIR/privkey.pem"
+                else
+                    echo "❌ Сертификат для $NODE_DOMAIN не найден на панели."
+                    echo "Введи полный путь вручную:"
+                    read -e MAN_PATH
+                    sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "root@$PANEL_IP:$MAN_PATH/fullchain.*" "$CERT_DIR/fullchain.pem"
+                    sshpass -p "$PANEL_PASS" scp -P "$PANEL_PORT" -o StrictHostKeyChecking=no "root@$PANEL_IP:$MAN_PATH/*key*" "$CERT_DIR/privkey.pem"
+                fi
             fi
-            
-            chmod +x "$SMART_RENEW_SCRIPT"
-            bash "$SMART_RENEW_SCRIPT"
-            echo "0 3 * * * root $SMART_RENEW_SCRIPT >> /var/log/cert-renew.log 2>&1" > "$CRON_FILE"
             ;;
             
-        3) # Certbot Standalone
-            echo "🆕 Certbot выпускает..."
+        3) # Certbot
+            echo "🆕 Выпуск Certbot..."
             ufw allow 80/tcp >/dev/null
             certbot certonly --standalone -d "$NODE_DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email
             cp -L "/etc/letsencrypt/live/$NODE_DOMAIN/fullchain.pem" "$CERT_DIR/fullchain.pem"
             cp -L "/etc/letsencrypt/live/$NODE_DOMAIN/privkey.pem" "$CERT_DIR/privkey.pem"
             ufw delete allow 80/tcp >/dev/null
-            
-            cat <<EOF > "$SMART_RENEW_SCRIPT"
-#!/bin/bash
-certbot renew --non-interactive --pre-hook "ufw allow 80/tcp; docker stop remnawave-nginx" --post-hook "ufw delete allow 80/tcp; docker start remnawave-nginx; cp -L /etc/letsencrypt/live/$NODE_DOMAIN/fullchain.pem $CERT_DIR/fullchain.pem; cp -L /etc/letsencrypt/live/$NODE_DOMAIN/privkey.pem $CERT_DIR/privkey.pem; $RELOAD_CMD"
-EOF
-            chmod +x "$SMART_RENEW_SCRIPT"
-            echo "0 3,15 * * * root $SMART_RENEW_SCRIPT >> /var/log/cert-renew.log 2>&1" > "$CRON_FILE"
             ;;
     esac
     
     chmod 644 "$CERT_DIR/"*
-    if [[ ! -s "$CERT_DIR/fullchain.pem" ]]; then echo "❌ Файлы сертификатов пусты!"; exit 1; fi
 }
 
-# ============================================================ #
-#                5. САЙТ И DOCKER DEPLOY                       #
-# ============================================================ #
-deploy_final() {
-    echo "🎭 Сайт-заглушка..."
+step_system_setup() {
+    echo "🛡️ Настройка Firewall..."
+    if ! command -v ufw &>/dev/null; then apt-get install -y ufw >/dev/null; fi
+    ufw allow 22/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 2222/tcp >/dev/null
+    ufw delete allow 80/tcp >/dev/null
+    if ! ufw status | grep -q "active"; then echo "y" | ufw enable >/dev/null; else ufw reload >/dev/null; fi
+}
+
+step_deploy() {
+    echo "🚀 Разворачиваю Docker..."
+    mkdir -p "$INSTALL_DIR"
+    
+    # 1. Сайт-заглушка
     cat << 'EOF' > "$ROTATE_SCRIPT"
 #!/bin/bash
 SITE_DIR="/var/www/html"; TEMP_DIR="/tmp/website_template"
@@ -398,17 +286,25 @@ URLS=("https://www.free-css.com/assets/files/free-css-templates/download/page296
 RANDOM_URL=${URLS[$RANDOM % ${#URLS[@]}]}
 rm -rf "$TEMP_DIR" "$SITE_DIR"/*; mkdir -p "$TEMP_DIR" "$SITE_DIR"
 wget -q -O "$TEMP_DIR/template.zip" "$RANDOM_URL"; unzip -q "$TEMP_DIR/template.zip" -d "$TEMP_DIR"
-CONTENT_DIR=$(find "$TEMP_DIR" -name "index.html" | head -n 1 | xargs dirname)
-if [ -n "$CONTENT_DIR" ]; then cp -r "$CONTENT_DIR"/* "$SITE_DIR/"; fi
+cp -r "$TEMP_DIR"/*/* "$SITE_DIR/" 2>/dev/null || cp -r "$TEMP_DIR"/* "$SITE_DIR/"
 rm -rf "$TEMP_DIR"; chown -R www-data:www-data "$SITE_DIR" 2>/dev/null || chmod -R 755 "$SITE_DIR"
 EOF
     chmod +x "$ROTATE_SCRIPT"
     bash "$ROTATE_SCRIPT" >/dev/null 2>&1
-    echo "0 4 1,15 * * root $ROTATE_SCRIPT >> /var/log/site-rotate.log 2>&1" >> "$CRON_FILE"
+    echo "0 4 1,15 * * root $ROTATE_SCRIPT >/dev/null 2>&1" > "$CRON_FILE"
 
-    mkdir -p "$INSTALL_DIR"
-    
-    # Генерируем docker-compose с АВТОМАТИЧЕСКИМ SECRET_KEY
+    # 2. Nginx Config
+    cat <<EOF > "$INSTALL_DIR/nginx.conf"
+server {
+    listen 8080; listen [::]:8080;
+    server_name 127.0.0.1 localhost ${NODE_DOMAIN};
+    root /var/www/html; index index.html;
+    access_log off; error_page 404 /index.html;
+    location / { try_files \$uri \$uri/ /index.html; }
+}
+EOF
+
+    # 3. Docker Compose
     cat <<EOF > "$INSTALL_DIR/docker-compose.yml"
 services:
   remnawave-nginx:
@@ -419,7 +315,7 @@ services:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - /var/www/html:/var/www/html:ro
     network_mode: host
-    logging: { driver: 'json-file', options: { max-size: '30m', max-file: '5' } }
+    logging: { driver: 'json-file', options: { max-size: '10m', max-file: '3' } }
 
   remnanode:
     image: remnawave/node:latest
@@ -435,43 +331,37 @@ services:
       - ${CERT_DIR}/privkey.pem:/cert/privkey.pem:ro
     depends_on:
       - remnawave-nginx
-    logging: { driver: 'json-file', options: { max-size: '30m', max-file: '5' } }
+    logging: { driver: 'json-file', options: { max-size: '10m', max-file: '3' } }
 EOF
 
-    cat <<EOF > "$INSTALL_DIR/nginx.conf"
-server {
-    listen 8080; listen [::]:8080;
-    server_name 127.0.0.1 localhost ${NODE_DOMAIN};
-    root /var/www/html; index index.html;
-    access_log off; error_page 404 /index.html;
-    location / { try_files \$uri \$uri/ /index.html; }
-}
-EOF
-
-    echo "🔥 Запускаю..."
     cd "$INSTALL_DIR" && docker compose up -d --remove-orphans --force-recreate >/dev/null 2>&1
-    
     sleep 5
+    
     if docker ps | grep -q "remnanode"; then
-        printf "\n%b\n" "${C_GREEN}✅ НОДА УСТАНОВЛЕНА И АКТИВИРОВАНА!${C_RESET}"
-        echo "   Панель: $API_URL"
-        echo "   Нода:   $NODE_NAME ($NODE_DOMAIN)"
-        echo "   Профиль: VLESS-WS-TLS"
-        echo "   Статус: В панели должна гореть зелёным."
+        printf "\n%b\n" "${C_GREEN}✅ ВСЁ ГОТОВО!${C_RESET}"
+        echo "   Нода: $NODE_NAME подключена к Панели."
+        echo "   SSL:  $CERT_DIR"
     else
-        printf "%b\n" "${C_RED}❌ Ошибка старта Docker.${C_RESET}"
+        printf "\n%b\n" "${C_RED}❌ Ошибка старта контейнера.${C_RESET}"
+        docker logs remnanode --tail 20
     fi
 }
 
-# MAIN SEQUENCE
+# ============================================================ #
+#                     MAIN EXECUTION                           #
+# ============================================================ #
+
+# 1. Проверки
+install_base_tools
 check_existing_installation
-install_minimal_tools
-api_auth_flow
-collect_cert_data
-api_create_profile
-api_create_node
-install_pkgs_full
-setup_system
-setup_ssl
-setup_fake_site
-deploy_final
+
+# 2. Сбор данных и API
+step_auth
+step_create_profile
+step_create_node
+
+# 3. Установка на сервер
+install_full_tools
+step_system_setup
+step_certificates
+step_deploy
