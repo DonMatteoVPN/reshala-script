@@ -18,6 +18,9 @@ BOT_VERSION=""
 BOT_PATH=""
 WEB_SERVER="Не определён"
 
+# Флаг, чтобы не пересканировать Remnawave/бота на каждом кадре дашборда
+REMNA_STATE_SCANNED=0
+
 # НИЖЕ — портированная логика из старого install_reshala.sh
 
 # Проверяет, относится ли имя контейнера к экосистеме Remnawave
@@ -149,6 +152,11 @@ _state_get_docker_version() {
 
 # Главная функция сканирования состояния Remnawave / бота / веб-сервера
 scan_remnawave_state() {
+    # Если уже сканировали за текущий запуск, просто возвращаем кэшированные значения
+    if [[ ${REMNA_STATE_SCANNED:-0} -eq 1 ]]; then
+        return
+    fi
+
     SERVER_TYPE="Чистый сервак"
     PANEL_VERSION=""
     NODE_VERSION=""
@@ -218,6 +226,9 @@ scan_remnawave_state() {
     else
         SERVER_TYPE="Чистый сервак"
     fi
+
+    # Помечаем, что картина мира по Remnawave/боту собрана и её можно переиспользовать
+    REMNA_STATE_SCANNED=1
 
     if echo "$container_names" | grep -q "^remnawave_bot$"; then
         BOT_DETECTED=1

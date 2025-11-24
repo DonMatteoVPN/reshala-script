@@ -27,8 +27,26 @@ _get_virt_type() {
     esac
 }
 _get_public_ip() { curl -s --connect-timeout 4 -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'; }
-_get_location() { curl -s --connect-timeout 2 ipinfo.io/country 2>/dev/null || echo "??"; }
-_get_hoster_info() { curl -s --connect-timeout 5 ipinfo.io/org 2>/dev/null || echo "Не определён"; }
+_get_location() {
+    local out
+    out=$(curl -s --connect-timeout 2 ipinfo.io/country 2>/dev/null || true)
+    # ipinfo в случае ошибки может вернуть JSON с Rate limit. Нас это не интересует.
+    if [[ "$out" =~ ^[A-Z]{2}$ ]]; then
+        echo "$out"
+    else
+        echo "??"
+    fi
+}
+_get_hoster_info() {
+    local out
+    out=$(curl -s --connect-timeout 5 ipinfo.io/org 2>/dev/null || true)
+    # Если пришёл JSON/ошибка (Rate limit и т.п.) — не светим мусор, просто "Не определён".
+    if [[ "$out" == "" ]] || [[ "$out" == \{* ]]; then
+        echo "Не определён"
+    else
+        echo "$out"
+    fi
+}
 _get_active_users() { who | cut -d' ' -f1 | sort -u | wc -l; }
 _get_ping_google() {
     local p; p=$(ping -c 1 -W 1 8.8.8.8 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | cut -d' ' -f1)
@@ -118,6 +136,12 @@ _get_port_speed() {
     echo "$speed"
 }
 
+# Кэш для сетевой информации, чтобы не долбить внешние сервисы на каждый кадр
+DASHBOARD_NET_CACHE_INITIALIZED=0
+DASHBOARD_IP_ADDR=""
+DASHBOARD_LOCATION=""
+DASHBOARD_HOSTER_INFO=""
+
 # ============================================================ #
 #                  ГЛАВНАЯ ФУНКЦИЯ ОТРИСОВКИ                   #
 # ============================================================ #
@@ -142,8 +166,16 @@ show() {
     local os_ver=$(_get_os_ver); local kernel=$(_get_kernel)
     local uptime=$(_get_uptime); local users_online=$(_get_active_users)
     local virt=$(_get_virt_type)
-    local ip_addr=$(_get_public_ip); local location=$(_get_location); local ping=$(_get_ping_google)
-    local hoster_info=$(_get_hoster_info)
+
+    # Сетевую инфу и данные от внешних сервисов кэшируем, чтобы не грузить систему и не ловить rate limit
+    if [[ ${DASHBOARD_NET_CACHE_INITIALIZED:-0} -eq 0 ]]; then
+        DASHBOARD_IP_ADDR=$(_get_public_ip)
+        DASHBOARD_LOCATION=$(_get_location)
+        DASHBOARD_HOSTER_INFO=$(_get_hoster_info)
+        DASHBOARD_NET_CACHE_INITIALIZED=1
+    fi
+    local ip_addr="$DASHBOARD_IP_ADDR"; local location="$DASHBOARD_LOCATION"; local ping=$(_get_ping_google)
+    local hoster_info="$DASHBOARD_HOSTER_INFO"
     local cpu_info=$(_get_cpu_info_clean); local cpu_load_viz=$(_get_cpu_load_visual)
     local ram_viz=$(_get_ram_visual)
     local disk_raw=$(_get_disk_visual); local disk_type=$(echo "$disk_raw" | cut -d'|' -f1); local disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
