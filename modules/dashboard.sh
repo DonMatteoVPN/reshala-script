@@ -159,16 +159,20 @@ show() {
 
     # --- Заголовок ---
     if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
-        printf "%b\n" "${C_RED}╔════════════════════════════════════════════════════════════════╗${C_RESET}"
-        printf "%b\n" "${C_RED}║   👁️  ПОДКЛЮЧЕН ЧЕРЕЗ SKYNET (УДАЛЕННОЕ УПРАВЛЕНИЕ) 👁️    ║${C_RESET}"
-        printf "%b\n" "${C_RED}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
+        printf "%b\\n" "${C_RED}╔════════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\\n" "${C_RED}║   👁️  ПОДКЛЮЧЕН ЧЕРЕЗ SKYNET (УДАЛЕННОЕ УПРАВЛЕНИЕ) 👁️    ║${C_RESET}"
+        printf "%b\\n" "${C_RED}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
+        # Показываем версию агента Решалы на удалённом сервере
+        printf "%b\\n" "${C_CYAN}║${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Агент Решалы" "${C_WHITE}" "${VERSION}" "${C_RESET}"
+        printf "%b\\n" "${C_CYAN}║${C_RESET}"
     else
-        printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
-        printf "%b\n" "${C_CYAN}║${C_RESET}"
+        printf "%b\\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
+        printf "%b\\n" "${C_CYAN}║${C_RESET}"
     fi
 
     # --- Секция "Система" ---
-    printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
+    printf "%b\\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %b%s (%s)%b\n" "${C_GRAY}" "$label_width" "ОС / Ядро" "${C_WHITE}" "$os_ver" "$kernel" "${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %b%s (Юзеров: %s)%b\n" "${C_GRAY}" "$label_width" "Аптайм" "${C_WHITE}" "$uptime" "$users_online" "${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Виртуализация" "${C_CYAN}" "$virt" "${C_RESET}"

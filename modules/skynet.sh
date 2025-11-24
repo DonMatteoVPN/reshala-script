@@ -396,7 +396,7 @@ show_fleet_menu() {
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$choice]:-}" ]; then
                     IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "${servers[$choice]}"
                     
-                    clear; printf_info "🚀 SKYNET UPLINK: Подключаюсь к ${C_WHITE}${s_name}${C_RESET}..."
+                    clear; printf_info "🚀 SKYNET UPLINK: Подключаюсь к ${s_name}..."
 
                     # Проверяем/запрашиваем пароль sudo, если нужен
                     if [[ "$s_user" != "root" && -z "$s_pass" ]]; then
