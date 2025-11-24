@@ -170,7 +170,16 @@ _update_fleet_record() {
 # ============================================================ #
 #                ИСПОЛНЕНИЕ КОМАНД НА ФЛОТЕ (ПЛАГИНЫ)          #
 # ============================================================ #
-_run_fleet_command() {
+
+174+_skynet_run_plugin_on_server() {
+175+    local plugin="$1" name="$2" user="$3" ip="$4" port="$5" key_path="$6"
+176+    printf "\\n%b--- Сервер: %s ---%b\\n" "${C_YELLOW}" "$name" "${C_RESET}"
+177+    # Копируем плагин на удалённую машину, выполняем через bash (не требуем +x) и удаляем
+178+    scp -q -P "$port" -i "$key_path" "$plugin" "${user}@${ip}:/tmp/reshala_plugin.sh"
+179+    ssh -t -p "$port" -i "$key_path" "${user}@${ip}" "bash /tmp/reshala_plugin.sh; rm -f /tmp/reshala_plugin.sh"
+180+}
+181+
+182+_run_fleet_command() {
     local PLUGINS_DIR="${SCRIPT_DIR}/plugins/skynet_commands"
     if [ ! -d "$PLUGINS_DIR" ] || [ -z "$(ls -A "$PLUGINS_DIR")" ]; then
         printf_error "Папка с плагинами пуста или не существует (${PLUGINS_DIR})"; return
@@ -180,28 +189,63 @@ _run_fleet_command() {
         clear; printf_info "--- ВЫБОР КОМАНДЫ ДЛЯ ФЛОТА ---"
         local plugins=(); local i=1
         for p in "$PLUGINS_DIR"/*.sh; do
-            if [ -f "$p" ] && [ -x "$p" ]; then
-                plugins[$i]=$p; printf "   [%d] %s\n" "$i" "$(basename "$p" | sed 's/^[0-9]*_//;s/.sh$//')"
+            if [ -f "$p" ]; then
+                plugins[$i]=$p; printf "   [%d] %s\\n" "$i" "$(basename "$p" | sed 's/^[0-9]*_//;s/.sh$//')"
                 ((i++))
             fi
         done
+        if [ ${#plugins[@]} -eq 0 ]; then
+            printf_warning "Нет ни одной команды в ${PLUGINS_DIR}"; wait_for_enter; break
+        fi
         echo "   [b] Назад"
         
-        local choice; choice=$(safe_read "Какую команду выполнить на ВСЕХ серверах?: " "")
+        local choice; choice=$(safe_read "Какую команду выполнить?: " "")
         if [[ "$choice" == "b" ]]; then break; fi
         if [[ -n "${plugins[$choice]}" ]]; then
             local selected_plugin="${plugins[$choice]}"
-            printf_warning "Выполняю '${selected_plugin##*/}' на ВСЁМ флоте. Это может занять время."
-            read -p "Начать? (y/n): " confirm
-            if [[ "$confirm" == "y" ]]; then
-                # Читаем базу и выполняем на каждом
+
+            echo ""
+            echo "Где выполнять команду?"
+            echo "   [1] На ВСЁМ флоте"
+            echo "   [2] На ОДНОМ выбранном сервере"
+            local scope; scope=$(safe_read "Выбор (1/2): " "1")
+
+            if [[ "$scope" == "2" ]]; then
+                if [ ! -s "$FLEET_DATABASE_FILE" ]; then
+                    printf_error "База флота пуста. Сначала добавь серверы."
+                    wait_for_enter
+                    continue
+                fi
+
+                local servers=(); local idx=1
+                echo ""
+                echo "Доступные сервера:"
                 while IFS='|' read -r name user ip port key_path sudo_pass; do
-                    printf "\n%b--- Сервер: %s ---%b\n" "${C_YELLOW}" "$name" "${C_RESET}"
-                    # Копируем плагин на удалённую машину, выполняем и удаляем
-                    scp -q -P "$port" -i "$key_path" "$selected_plugin" "${user}@${ip}:/tmp/reshala_plugin.sh"
-                    ssh -t -p "$port" -i "$key_path" "${user}@${ip}" "sudo bash /tmp/reshala_plugin.sh; rm /tmp/reshala_plugin.sh"
+                    servers[$idx]="$name|$user|$ip|$port|$key_path"
+                    printf "   [%d] %s (%s@%s:%s)\\n" "$idx" "$name" "$user" "$ip" "$port"
+                    ((idx++))
                 done < "$FLEET_DATABASE_FILE"
-                printf_ok "Команда выполнена на всём флоте."; wait_for_enter
+
+                local s_choice; s_choice=$(safe_read "Номер сервера: " "")
+                if [[ "$s_choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$s_choice]:-}" ]; then
+                    IFS='|' read -r name user ip port key_path <<< "${servers[$s_choice]}"
+                    printf_warning "Выполняю '${selected_plugin##*/}' на сервере '$name'."
+                    read -p "Начать? (y/n): " confirm
+                    if [[ "$confirm" == "y" ]]; then
+                        _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path"
+                        printf_ok "Команда выполнена."; wait_for_enter
+                    fi
+                fi
+            else
+                printf_warning "Выполняю '${selected_plugin##*/}' на ВСЁМ флоте. Это может занять время."
+                read -p "Начать? (y/n): " confirm
+                if [[ "$confirm" == "y" ]]; then
+                    # Читаем базу и выполняем на каждом
+                    while IFS='|' read -r name user ip port key_path sudo_pass; do
+                        _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path"
+                    done < "$FLEET_DATABASE_FILE"
+                    printf_ok "Команда выполнена на всём флоте."; wait_for_enter
+                fi
             fi
         fi
     done
@@ -303,6 +347,22 @@ show_fleet_menu() {
                 if _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$final_key"; then
                     echo "$s_name|$s_user|$s_ip|$s_port|$final_key|$s_pass" >> "$FLEET_DATABASE_FILE"
                     printf_ok "Сервер '${s_name}' добавлен в флот."
+
+                    # Тестовое подключение по ключу и предложение вырубить вход по паролю
+                    if ssh -q -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "echo OK" >/dev/null 2>&1; then
+                        printf_ok "Тестовое подключение по ключу прошло успешно — всё заебись."
+                        read -p "Вырубаем вход по паролю и оставляем только ключи? (y/n): " disable_pw
+                        if [[ "$disable_pw" == "y" ]]; then
+                            if [[ "$s_user" == "root" ]]; then
+                                ssh -t -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "sed -i.bak -E 's/^#?PasswordAuthentication\\s+.*/PasswordAuthentication no/' /etc/ssh/sshd_config && (systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null)"
+                            elif [[ -n "$s_pass" ]]; then
+                                ssh -t -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "echo '$s_pass' | sudo -S -p '' bash -c 'sed -i.bak -E "s/^#?PasswordAuthentication\\s+.*/PasswordAuthentication no/" /etc/ssh/sshd_config && (systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null)'"
+                            else
+                                printf_warning "Пароль sudo не указан — не могу безопасно отключить парольный вход."
+                            fi
+                        fi
+                    fi
+
                     sleep 1
                 else
                     printf_error "Не удалось добавить сервер. Проверь данные."
@@ -357,9 +417,9 @@ show_fleet_menu() {
                     local remote_ver; remote_ver=$(run_remote "if [ -f $INSTALL_PATH ]; then grep 'readonly VERSION' $INSTALL_PATH | cut -d'\"' -f2; else echo 'NONE'; fi" | tail -n1 | tr -d '\r')
                     
                     if [[ -z "$remote_ver" || "$remote_ver" == "NONE" || "$remote_ver" != "$VERSION" ]]; then
-                        printf "%b\n" "${C_YELLOW}Требуется установка/обновление агента...${C_RESET}"
-                        # Ставим агента через полноценный install.sh, а не голый reshala.sh
-                        local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} && sudo bash /tmp/reshala_install.sh && rm /tmp/reshala_install.sh"
+                        printf "%b\\n" "${C_YELLOW}Требуется установка/обновление агента...${C_RESET}"
+                        # Ставим агента через полноценный install.sh, но тихо (логи на удалённой стороне)
+                        local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} >/dev/null 2>&1 && sudo bash /tmp/reshala_install.sh >/tmp/reshala_install.log 2>&1 && rm /tmp/reshala_install.sh"
                         if ! run_remote "$install_cmd"; then
                            printf_error "Не удалось установить/обновить агента. Вход невозможен."
                            continue

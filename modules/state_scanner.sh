@@ -46,12 +46,14 @@ _state_get_node_version_from_logs() {
     logs=$(run_cmd docker logs --tail 10000 "$container" 2>&1)
 
     local node_ver
-    node_ver=$(echo "$logs" | grep -oE "Remnawave Node v[0-9.]+" | tail -n 1 | sed 's/Remnawave Node //')
+    # Ищем самую свежую запись о версии ноды, допускаем как "v2.2.3", так и "2.2.3"
+    node_ver=$(echo "$logs" | grep -oE "Remnawave Node v?[0-9.]+" | tail -n 1 | grep -oE "v?[0-9.]+")
 
     local xray_ver
-    xray_ver=$(echo "$logs" | grep -oE "Xray-core v[0-9.]+" | tail -n 1 | sed 's/Xray-core //')
+    # Аналогично — Xray-core может логировать с или без буквы v
+    xray_ver=$(echo "$logs" | grep -oE "Xray-core v?[0-9.]+" | tail -n 1 | grep -oE "v?[0-9.]+")
     if [ -z "$xray_ver" ]; then
-        xray_ver=$(echo "$logs" | grep -oE "XRay Core: v[0-9.]+" | tail -n 1 | sed 's/XRay Core: //')
+        xray_ver=$(echo "$logs" | grep -oE "XRay Core: v?[0-9.]+" | tail -n 1 | grep -oE "v?[0-9.]+")
     fi
 
     if [ -n "$node_ver" ]; then
@@ -61,7 +63,8 @@ _state_get_node_version_from_logs() {
             echo "${node_ver}"
         fi
     else
-        echo "latest (не нашёл в логах)"
+        # Логов с версией не нашли — честно говорим, что знаем только, что образ latest
+        echo "latest"
     fi
 }
 
@@ -86,7 +89,8 @@ _state_get_panel_version_from_logs() {
         local logs
         logs=$(run_cmd docker logs "$name" 2>/dev/null | tail -n 150)
         local panel_ver
-        panel_ver=$(echo "$logs" | grep -oE 'Remnawave Backend v[0-9.]*' | head -n1 | sed 's/Remnawave Backend v//')
+        # Берём САМУЮ ПОСЛЕДНЮЮ запись о версии бэкенда
+        panel_ver=$(echo "$logs" | grep -oE 'Remnawave Backend v[0-9.]*' | tail -n 1 | sed 's/Remnawave Backend v//')
 
         if [ -n "$panel_ver" ]; then
             echo "${panel_ver}"
@@ -96,7 +100,7 @@ _state_get_panel_version_from_logs() {
 
     if run_cmd docker ps --format '{{.Names}}' 2>/dev/null | grep -q "remnawave-subscription-page"; then
         local sub_ver
-        sub_ver=$(run_cmd docker logs remnawave-subscription-page 2>/dev/null | grep -oE 'Remnawave Subscription Page v[0-9.]*' | head -n1 | sed 's/Remnawave Subscription Page v//')
+        sub_ver=$(run_cmd docker logs remnawave-subscription-page 2>/dev/null | grep -oE 'Remnawave Subscription Page v[0-9.]*' | tail -n 1 | sed 's/Remnawave Subscription Page v//')
         if [ -n "$sub_ver" ]; then
             echo "${sub_ver} (sub-page)"
             return

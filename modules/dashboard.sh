@@ -187,40 +187,64 @@ show() {
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- Секция "Статус" ---
-    printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
+    printf "%b\\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
  
+    # Нормализуем отображение версий, чтобы не было "vlatest(... )" и прочего трэша
+    local panel_ver_pretty="" node_ver_pretty="" bot_ver_pretty=""
+    if [[ -n "$PANEL_VERSION" ]]; then
+        if [[ "$PANEL_VERSION" == latest* ]]; then
+            panel_ver_pretty="$PANEL_VERSION"
+        else
+            panel_ver_pretty="v${PANEL_VERSION}"
+        fi
+    fi
+    if [[ -n "$NODE_VERSION" ]]; then
+        if [[ "$NODE_VERSION" == latest* ]]; then
+            node_ver_pretty="$NODE_VERSION"
+        else
+            node_ver_pretty="v${NODE_VERSION}"
+        fi
+    fi
+    if [[ -n "$BOT_VERSION" ]]; then
+        if [[ "$BOT_VERSION" == latest* ]]; then
+            bot_ver_pretty="$BOT_VERSION"
+        else
+            bot_ver_pretty="v${BOT_VERSION}"
+        fi
+    fi
+
     # Remnawave / Нода / Бот (данные даёт state_scanner)
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Версии" "${C_WHITE}" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Версии" "${C_WHITE}" "P: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}" "${C_RESET}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${PANEL_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (%s)\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${panel_ver_pretty:-unknown}"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${NODE_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (%s)\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${node_ver_pretty:-unknown}"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
     else
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
     fi
 
     if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "$label_width" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${BOT_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (%s)\\n" "${C_GRAY}" "$label_width" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${bot_ver_pretty:-unknown}"
     fi
 
     if [[ "$WEB_SERVER" != "Не определён" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Web-Server" "${C_CYAN}" "$WEB_SERVER" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Web-Server" "${C_CYAN}" "$WEB_SERVER" "${C_RESET}"
     fi
 
     if [[ -n "$port_speed" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Канал (Link)" "${C_BOLD}" "$port_speed" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Канал (Link)" "${C_BOLD}" "$port_speed" "${C_RESET}"
     fi
 
     # Если есть сохранённая вместимость — покажем её, чтобы боссу было приятно
     if [[ -n "$capacity_display" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b юзеров\n" "${C_GRAY}" "$label_width" "Вместимость" "${C_GREEN}" "$capacity_display" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b юзеров\\n" "${C_GRAY}" "$label_width" "Вместимость" "${C_GREEN}" "$capacity_display" "${C_RESET}"
     fi
 
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    printf "%b\\n" "${C_CYAN}║${C_RESET}"
 
     # ======================================================= #
     # === НОВЫЙ БЛОК: ДИНАМИЧЕСКИЕ ВИДЖЕТЫ С ПЕРЕКЛЮЧАТЕЛЕМ = #
@@ -232,25 +256,25 @@ show() {
     if [ -d "$WIDGETS_DIR" ] && [ -n "$enabled_widgets" ]; then
         local has_visible_widgets=0
         
-        # Проходим по всем исполняемым файлам в папке виджетов
+        # Проходим по всем файлам в папке виджетов (не требуем +x, запускаем через bash)
         for widget_file in "$WIDGETS_DIR"/*.sh; do
-            if [ -f "$widget_file" ] && [ -x "$widget_file" ]; then
+            if [ -f "$widget_file" ]; then
                 local widget_name; widget_name=$(basename "$widget_file")
                 
                 # Проверяем, есть ли имя этого виджета в списке включенных
                 if [[ ",$enabled_widgets," == *",$widget_name,"* ]]; then
                     # Если это первый видимый виджет, рисуем заголовок
                     if [ $has_visible_widgets -eq 0 ]; then
-                        printf "%b\n" "${C_CYAN}║${C_RESET}"
-                        printf "%b\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
+                        printf "%b\\n" "${C_CYAN}║${C_RESET}"
+                        printf "%b\\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
                         has_visible_widgets=1
                     fi
 
-                    local widget_output; widget_output=$("$widget_file")
+                    local widget_output; widget_output=$(bash "$widget_file")
                     while IFS= read -r line; do
                         local label; label=$(echo "$line" | cut -d':' -f1 | xargs)
                         local value; value=$(echo "$line" | cut -d':' -f2- | xargs)
-                        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "$label" "${C_CYAN}" "$value" "${C_RESET}"
+                        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "$label" "${C_CYAN}" "$value" "${C_RESET}"
                     done <<< "$widget_output"
                 fi
             fi
@@ -260,5 +284,5 @@ show() {
     # === КОНЕЦ БЛОКА ВИДЖЕТОВ ================================ #
     # ======================================================= #
 
-    printf "%b\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
+    printf "%b\\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
 }
