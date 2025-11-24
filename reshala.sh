@@ -8,8 +8,15 @@
 #
 set -uo pipefail
 
-# Определяем, где лежит вся наша кухня
-readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+# Определяем РЕАЛЬНОЕ местоположение скрипта, даже если он запущен через симлинк
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # Раскручиваем все симлинки
+  DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+readonly SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+
 readonly VERSION="v2.0" # Версия фреймворка
 
 # ============================================================ #
