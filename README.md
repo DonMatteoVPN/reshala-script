@@ -91,8 +91,9 @@ sudo reshala
 **На сервере, где произошла ошибка, удали следы неудачной установки:**
 
 ```bash
+rm -f /usr/local/bin/reshala
 rm -rf /opt/reshala
-rm /usr/local/bin/reshala
+rm -f install.sh
 ```
 *Если пишет "command not found" или ты на совсем голом Debian:*
 ```bash
