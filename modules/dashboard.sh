@@ -169,30 +169,30 @@ show() {
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "CPU Модель" "${C_WHITE}" "$cpu_info" "${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Загрузка CPU" "$cpu_load_viz"
-    printf "║ %b%-*s${CRESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Память (RAM)" "$ram_viz"
+    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Память (RAM)" "$ram_viz"
     printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Диск (${disk_type})" "$disk_viz"
-
+ 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- Секция "Статус" ---
     printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
-
+ 
     # Remnawave / Нода / Бот (данные даёт state_scanner)
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
-        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Версии" "${C_WHITE}" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Версии" "${C_WHITE}" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}" "${C_RESET}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ %b%-*s${CRESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${PANEL_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${PANEL_VERSION}"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ %b%-*s${CRESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${NODE_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${NODE_VERSION}"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
     else
-        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
     fi
-
+ 
     if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
-        printf "║ %b%-*s${CRESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${BOT_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${BOT_VERSION}"
     fi
 
     if [[ "$WEB_SERVER" != "Не определён" ]]; then
