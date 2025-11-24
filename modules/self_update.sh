@@ -37,17 +37,36 @@ _perform_install_or_update() {
     return 0
 }
 
+# ... (начало self_update.sh) ...
+
 install_script() {
     printf_info "Запуск процедуры установки Решалы..."
-    if _perform_install_or_update "install"; then
-        if ! grep -q "alias reshala='sudo reshala'" /root/.bashrc 2>/dev/null; then
-            echo "alias reshala='sudo reshala'" | run_cmd tee -a /root/.bashrc >/dev/null
-        fi
-        log "Скрипт установлен/переустановлен."
-        printf_ok "Готово. Решала в системе."
-        printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"
-        printf_warning "ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала."
+    
+    # SCRIPT_DIR в данный момент указывает на временную папку,
+    # куда bootstrapper уже всё распаковал. Нам больше не нужно ничего качать.
+    # Мы просто копируем файлы из текущего места в финальное.
+    
+    local INSTALL_DIR="/opt/reshala"
+    
+    printf_info "Копирую файлы из временной директории в ${INSTALL_DIR}..."
+    run_cmd rm -rf "$INSTALL_DIR" # Чистим старую установку на всякий случай
+    run_cmd mkdir -p "$INSTALL_DIR"
+    # Вот ключевое изменение! Копируем из SCRIPT_DIR, а не качаем заново.
+    run_cmd cp -r "${SCRIPT_DIR}/." "${INSTALL_DIR}/"
+    
+    printf_info "Создаю команду 'reshala' в системе..."
+    run_cmd ln -sf "${INSTALL_DIR}/reshala.sh" "$INSTALL_PATH"
+    run_cmd chmod +x "${INSTALL_DIR}/reshala.sh"
+    
+    # Добавляем алиас для root, если он нужен
+    if ! grep -q "alias reshala='sudo reshala'" /root/.bashrc 2>/dev/null; then
+        echo "alias reshala='sudo reshala'" | run_cmd tee -a /root/.bashrc >/dev/null
     fi
+
+    log "Скрипт успешно установлен."
+    printf_ok "Готово. Решала в системе."
+    printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"
+    printf_warning "ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала."
 }
 
 uninstall_script() {
