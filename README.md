@@ -66,7 +66,7 @@ wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/hea
 
 ### Ветка разработчика (Dev) — тут весь свежак:
 ```bash
-wget -qO- https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/dev/install_reshala.sh | bash -s install
+wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/reshala.sh && chmod +x install.sh && ./install.sh install
 ```
 
 ⚠️ **ВАЖНО:** После установки **ПЕРЕПОДКЛЮЧИСЬ** к серверу (закрой и открой SSH), чтобы команда заработала.
