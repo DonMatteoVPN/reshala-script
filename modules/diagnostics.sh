@@ -31,6 +31,40 @@ _show_docker_cleanup_menu() {
 }
 
 # Дополнительные меню управления Docker
+# Выбор контейнера из списка с номерами
+_docker_select_container() {
+    local list
+    list=$(docker ps -a --format '{{.ID}}|{{.Names}}|{{.Status}}') || return 1
+    if [[ -z "$list" ]]; then
+        printf_warning "Контейнеров не найдено."
+        return 1
+    fi
+
+    echo ""
+    echo "Список контейнеров (ID / NAME / STATUS):"
+    echo "----------------------------------------"
+    local i=1
+    local ids=()
+    local names=()
+    while IFS='|' read -r id name status; do
+        printf "   [%d] %s  %s  (%s)\n" "$i" "$id" "$name" "$status"
+        ids[$i]="$id"
+        names[$i]="$name"
+        ((i++))
+    done <<< "$list"
+    echo "----------------------------------------"
+
+    local choice; choice=$(safe_read "Выбери номер контейнера: " "")
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
+        printf_error "Нет такого номера."
+        return 1
+    fi
+
+    # Возвращаем ИМЯ контейнера (более удобно для docker-команд)
+    echo "${names[$choice]}"
+    return 0
+}
+
 _show_docker_containers_menu() {
     while true; do
         clear
@@ -42,19 +76,22 @@ _show_docker_containers_menu() {
         echo "   4. 🗑️ Удалить контейнер (stop + rm)"
         echo "   b. Назад"
         echo "----------------------------------------"
+
+        # Показываем список контейнеров сразу под меню
+        docker ps -a --format '   -> {{.ID}}  {{.Names}}  ({{.Status}})'
+        echo "----------------------------------------"
+
         local choice; read -r -p "Твой выбор: " choice || continue
         case "$choice" in
-            1) echo; docker ps -a; wait_for_enter ;;
+            1)
+                echo ""; docker ps -a; wait_for_enter ;;
             2)
-                local name; name=$(safe_read "Имя/ID контейнера для логов: " "")
-                if [[ -n "$name" ]]; then
-                    echo "--- ЛОГИ $name (CTRL+C, чтобы выйти) ---"
-                    docker logs -f "$name" || printf_error "Контейнер '$name' не найден."
-                fi
+                local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
+                echo "--- ЛОГИ $name (CTRL+C, чтобы выйти) ---"
+                docker logs -f "$name" || printf_error "Контейнер '$name' не найден."
                 ;;
             3)
-                local name; name=$(safe_read "Имя/ID контейнера: " "")
-                if [[ -z "$name" ]]; then continue; fi
+                local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
                 echo "   1) Старт  2) Стоп  3) Рестарт"
                 local act; act=$(safe_read "Действие: " "1")
                 case "$act" in
@@ -66,8 +103,7 @@ _show_docker_containers_menu() {
                 wait_for_enter
                 ;;
             4)
-                local name; name=$(safe_read "Имя/ID контейнера для удаления: " "")
-                if [[ -z "$name" ]]; then continue; fi
+                local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
                 read -p "Точно снести '$name'? (y/n): " c
                 if [[ "$c" == "y" ]]; then
                     docker stop "$name" 2>/dev/null || true

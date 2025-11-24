@@ -33,10 +33,17 @@ _state_is_remnawave_container() {
     esac
 }
 
-# Очистка версии от лишних символов (v, пробелы)
+# Очистка версии от лишних символов (v, пробелы, мусор для latest)
 _state_clean_version() {
     local v="$1"
-    echo "$v" | sed 's/^[vV]//' | tr -d '[:space:]'
+    # Снимаем префикс v/V и убираем пробелы
+    v=$(echo "$v" | sed 's/^[vV]//' | tr -d '[:space:]')
+    # Специальный случай: "latest(ненашёлвлогах)" и подобный мусор
+    if [[ "$v" == latest* && "$v" != *[0-9]* ]]; then
+        echo "latest"
+    else
+        echo "$v"
+    fi
 }
 
 # Извлекает версию ноды и Xray из логов
