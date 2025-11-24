@@ -171,15 +171,16 @@ _update_fleet_record() {
 #                ИСПОЛНЕНИЕ КОМАНД НА ФЛОТЕ (ПЛАГИНЫ)          #
 # ============================================================ #
 
-174+_skynet_run_plugin_on_server() {
-175+    local plugin="$1" name="$2" user="$3" ip="$4" port="$5" key_path="$6"
-176+    printf "\\n%b--- Сервер: %s ---%b\\n" "${C_YELLOW}" "$name" "${C_RESET}"
-177+    # Копируем плагин на удалённую машину, выполняем через bash (не требуем +x) и удаляем
-178+    scp -q -P "$port" -i "$key_path" "$plugin" "${user}@${ip}:/tmp/reshala_plugin.sh"
-179+    ssh -t -p "$port" -i "$key_path" "${user}@${ip}" "bash /tmp/reshala_plugin.sh; rm -f /tmp/reshala_plugin.sh"
-180+}
-181+
-182+_run_fleet_command() {
+# Выполнить выбранный плагин Skynet на одном сервере
+_skynet_run_plugin_on_server() {
+    local plugin="$1" name="$2" user="$3" ip="$4" port="$5" key_path="$6"
+    printf "\n%b--- Сервер: %s ---%b\n" "${C_YELLOW}" "$name" "${C_RESET}"
+    # Копируем плагин на удалённую машину, выполняем через bash (не требуем +x) и удаляем
+    scp -q -P "$port" -i "$key_path" "$plugin" "${user}@${ip}:/tmp/reshala_plugin.sh"
+    ssh -t -p "$port" -i "$key_path" "${user}@${ip}" "bash /tmp/reshala_plugin.sh; rm -f /tmp/reshala_plugin.sh"
+}
+
+_run_fleet_command() {
     local PLUGINS_DIR="${SCRIPT_DIR}/plugins/skynet_commands"
     if [ ! -d "$PLUGINS_DIR" ] || [ -z "$(ls -A "$PLUGINS_DIR")" ]; then
         printf_error "Папка с плагинами пуста или не существует (${PLUGINS_DIR})"; return
@@ -190,7 +191,7 @@ _update_fleet_record() {
         local plugins=(); local i=1
         for p in "$PLUGINS_DIR"/*.sh; do
             if [ -f "$p" ]; then
-                plugins[$i]=$p; printf "   [%d] %s\\n" "$i" "$(basename "$p" | sed 's/^[0-9]*_//;s/.sh$//')"
+                plugins[$i]=$p; printf "   [%d] %s\n" "$i" "$(basename "$p" | sed 's/^[0-9]*_//;s/.sh$//')"
                 ((i++))
             fi
         done
@@ -222,7 +223,7 @@ _update_fleet_record() {
                 echo "Доступные сервера:"
                 while IFS='|' read -r name user ip port key_path sudo_pass; do
                     servers[$idx]="$name|$user|$ip|$port|$key_path"
-                    printf "   [%d] %s (%s@%s:%s)\\n" "$idx" "$name" "$user" "$ip" "$port"
+                    printf "   [%d] %s (%s@%s:%s)\n" "$idx" "$name" "$user" "$ip" "$port"
                     ((idx++))
                 done < "$FLEET_DATABASE_FILE"
 
