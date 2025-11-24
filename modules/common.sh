@@ -30,9 +30,10 @@ init_logger() {
         chmod 666 "$LOGFILE" &>/dev/null || true
     fi
 }
+
 log() {
-    # Запись в лог с tee, чтобы не мешать sudo/не sudo
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $*" | sudo tee -a "$LOGFILE" > /dev/null
+    # Запись в лог через нашу умную run_cmd, чтобы она сама решала, нужен sudo или нет
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] - $*" | run_cmd tee -a "$LOGFILE" > /dev/null
 }
 
 # --- Запуск команд от имени root, если нужно ---
