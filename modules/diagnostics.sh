@@ -117,6 +117,36 @@ _show_docker_containers_menu() {
     done
 }
 
+_docker_select_network() {
+    local list
+    list=$(docker network ls --format '{{.Name}}|{{.Driver}}|{{.Scope}}') || return 1
+    if [[ -z "$list" ]]; then
+        printf_warning "Сетей не найдено."
+        return 1
+    fi
+
+    echo ""
+    echo "Список сетей:"
+    echo "----------------------------------------"
+    local i=1
+    local names=()
+    while IFS='|' read -r name driver scope; do
+        printf "   [%d] %s (%s, %s)\\n" "$i" "$name" "$driver" "$scope"
+        names[$i]="$name"
+        ((i++))
+    done <<< "$list"
+    echo "----------------------------------------"
+
+    local choice; choice=$(safe_read "Выбери номер сети: " "")
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
+        printf_error "Нет такого номера."
+        return 1
+    fi
+
+    echo "${names[$choice]}"
+    return 0
+}
+
 _show_docker_networks_menu() {
     while true; do
         clear
@@ -130,14 +160,44 @@ _show_docker_networks_menu() {
         case "$choice" in
             1) echo; docker network ls; wait_for_enter ;;
             2)
-                local net; net=$(safe_read "Имя/ID сети: " "")
-                [[ -n "$net" ]] && docker network inspect "$net" || printf_error "Сеть '$net' не найдена."
+                local net; net=$(_docker_select_network) || { wait_for_enter; continue; }
+                docker network inspect "$net" || printf_error "Сеть '$net' не найдена."
                 wait_for_enter
                 ;;
             [bB]) break ;;
             *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;
         esac
     done
+}
+
+_docker_select_volume() {
+    local list
+    list=$(docker volume ls --format '{{.Name}}|{{.Driver}}') || return 1
+    if [[ -з "$list" ]]; then
+        printf_warning "Томов не найдено."
+        return 1
+    fi
+
+    echo ""
+    echo "Список томов:"
+    echo "----------------------------------------"
+    local i=1
+    local names=()
+    while IFS='|' read -r name driver; do
+        printf "   [%d] %s (%s)\\n" "$i" "$name" "$driver"
+        names[$i]="$name"
+        ((i++))
+    done <<< "$list"
+    echo "----------------------------------------"
+
+    local choice; choice=$(safe_read "Выбери номер тома: " "")
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -з "${names[$choice]:-}" ]; then
+        printf_error "Нет такого номера."
+        return 1
+    fi
+
+    echo "${names[$choice]}"
+    return 0
 }
 
 _show_docker_volumes_menu() {
@@ -154,13 +214,12 @@ _show_docker_volumes_menu() {
         case "$choice" in
             1) echo; docker volume ls; wait_for_enter ;;
             2)
-                local vol; vol=$(safe_read "Имя тома: " "")
-                [[ -n "$vol" ]] && docker volume inspect "$vol" || printf_error "Том '$vol' не найден."
+                local vol; vol=$(_docker_select_volume) || { wait_for_enter; continue; }
+                docker volume inspect "$vol" || printf_error "Том '$vol' не найден."
                 wait_for_enter
                 ;;
             3)
-                local vol; vol=$(safe_read "Имя тома для удаления: " "")
-                if [[ -z "$vol" ]]; then continue; fi
+                local vol; vol=$(_docker_select_volume) || { wait_for_enter; continue; }
                 read -p "Точно снести том '$vol'? (y/n): " c
                 if [[ "$c" == "y" ]]; then
                     docker volume rm "$vol" || printf_error "Не удалось удалить том '$vol'"

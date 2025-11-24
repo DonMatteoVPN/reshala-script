@@ -1,5 +1,5 @@
 #!/bin/bash
-#
+# TITLE: Курс биткоина (BTC)
 # Виджет для дашборда "Решалы": показывает цену BTC.
 #
 
@@ -17,7 +17,7 @@ if command -v curl &>/dev/null && command -v jq &>/dev/null; then
         # Форматируем с разделителями тысяч для красоты
         FORMATTED_PRICE=$(printf "%'.0f" "$PRICE")
         # Выводим результат в формате "Заголовок : Значение"
-        echo "BTC Price : \$${FORMATTED_PRICE}"
+        echo "Курс BTC : \\$${FORMATTED_PRICE}"
     else
         # Если API не ответил или вернул ошибку
         echo "BTC Price : API Error"

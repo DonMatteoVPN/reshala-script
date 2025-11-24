@@ -191,7 +191,13 @@ _run_fleet_command() {
         local plugins=(); local i=1
         for p in "$PLUGINS_DIR"/*.sh; do
             if [ -f "$p" ]; then
-                plugins[$i]=$p; printf "   [%d] %s\n" "$i" "$(basename "$p" | sed 's/^[0-9]*_//;s/.sh$//')"
+                local title
+                title=$(grep -m1 '^# TITLE:' "$p" 2>/dev/null | sed 's/^# TITLE:[[:space:]]*//')
+                if [[ -z "$title" ]]; then
+                    title="$(basename "$p" | sed 's/^[0-9]*_//;s/.sh$//')"
+                fi
+                plugins[$i]=$p
+                printf "   [%d] %s\\n" "$i" "$title"
                 ((i++))
             fi
         done

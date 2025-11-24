@@ -1,5 +1,5 @@
 #!/bin/bash
-#
+# TITLE: Обновить систему (apt update && upgrade)
 # Плагин для Скайнета: запускает apt update && apt upgrade.
 #
 

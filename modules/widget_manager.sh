@@ -20,14 +20,24 @@ show_widgets_menu() {
         # Получаем список включенных виджетов из конфига
         local enabled_widgets; enabled_widgets=$(get_config_var "ENABLED_WIDGETS")
         
+        # Убираем пробелы/переводы строк из списка включённых виджетов
+        enabled_widgets=$(echo "$enabled_widgets" | tr -d ' \t\r')
+
         # Сканируем папку с плагинами
         local available_widgets=()
         local i=1
         if [ -d "$WIDGETS_DIR" ]; then
             for widget_file in "$WIDGETS_DIR"/*.sh; do
                 if [ -f "$widget_file" ]; then
-                    local widget_name; widget_name=$(basename "$widget_file")
+                    local widget_name; widget_name=$(basename "$widget_file" | tr -d ' \t\r')
                     available_widgets[$i]=$widget_name
+
+                    # Читаем человекочитаемое имя из комментария # TITLE:
+                    local widget_title
+                    widget_title=$(grep -m1 '^# TITLE:' "$widget_file" 2>/dev/null | sed 's/^# TITLE:[[:space:]]*//')
+                    if [[ -z "$widget_title" ]]; then
+                        widget_title="$widget_name"
+                    fi
                     
                     # Проверяем, включен ли виджет
                     local status; local status_color
@@ -39,7 +49,7 @@ show_widgets_menu() {
                         status_color="${C_RED}"
                     fi
                     
-                    printf "   [%d] %b%-10s%b - %s\n" "$i" "$status_color" "[$status]" "${C_RESET}" "$widget_name"
+                    printf "   [%d] %b%-10s%b - %s\\n" "$i" "$status_color" "[$status]" "${C_RESET}" "$widget_title"
                     ((i++))
                 fi
             done
@@ -61,6 +71,7 @@ show_widgets_menu() {
 
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${available_widgets[$choice]:-}" ]; then
             local selected_widget="${available_widgets[$choice]}"
+            selected_widget=$(echo "$selected_widget" | tr -d ' \t\r')
             
             # Логика переключения
             if [[ ",$enabled_widgets," == *",$selected_widget,"* ]]; then
