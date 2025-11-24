@@ -18,10 +18,19 @@ C_GRAY='\033[0;90m'; C_WHITE='\033[1;37m';
 # ============================================================ #
 
 # --- Функции для красивого и стандартизированного вывода ---
-printf_info() { printf "%b\n" "${C_CYAN}[i] %s${C_RESET}" "$*"; }
-printf_ok() { printf "%b\n" "${C_GREEN}[✓] %s${C_RESET}" "$*"; }
-printf_warning() { printf "%b\n" "${C_YELLOW}[!] %s${C_RESET}" "$*"; }
-printf_error() { printf "%b\n" "${C_RED}[✗] %s${C_RESET}" "$*"; sleep 2; }
+printf_info() {
+    printf "%b%s%b\n" "${C_CYAN}[i] " "$*" "${C_RESET}"
+}
+printf_ok() {
+    printf "%b%s%b\n" "${C_GREEN}[✓] " "$*" "${C_RESET}"
+}
+printf_warning() {
+    printf "%b%s%b\n" "${C_YELLOW}[!] " "$*" "${C_RESET}"
+}
+printf_error() {
+    printf "%b%s%b\n" "${C_RED}[✗] " "$*" "${C_RESET}"
+    sleep 2
+}
 
 # --- Логирование ---
 init_logger() {

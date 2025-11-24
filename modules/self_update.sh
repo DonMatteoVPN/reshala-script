@@ -67,6 +67,12 @@ install_script() {
     printf_ok "Готово. Решала в системе."
     printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"
     printf_warning "ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала."
+
+    # Автозапуск Решалы сразу после установки
+    echo ""
+    printf_info "Стартую Решалу прямо сейчас..."
+    sleep 1
+    exec "$INSTALL_PATH"
 }
 
 uninstall_script() {

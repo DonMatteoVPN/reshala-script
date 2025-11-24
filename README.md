@@ -61,21 +61,29 @@
 
 ### Стабильная ветка (Main):
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install.sh && sudo bash install.sh
+wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install.sh \
+  && bash install.sh \
+  && reshala
 ```
 *Или, если ты уже под `root`'ом:*
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install.sh && bash install.sh
+wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install.sh \
+  && sudo bash install.sh \
+  && sudo reshala
 ```
 
 ### Ветка разработчика (Dev) — тут тестовая версия 
 ⚠️ **ОПАСНО ДЛЯ ПРОДАКШЕНА**:
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/install.sh && sudo bash install.sh
+wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/install.sh \
+  && bash install.sh \
+  && reshala
 ```
 *Или, если ты уже под `root`'ом:*
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/install.sh && bash install.sh
+wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/install.sh \
+  && sudo bash install.sh \
+  && sudo reshala
 ```
 
 
