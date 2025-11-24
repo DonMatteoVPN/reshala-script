@@ -1,0 +1,134 @@
+#!/bin/bash
+# ============================================================ #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.0 - Skynet Framework       == #
+# ============================================================ #
+#
+# Точка входа. Этот скрипт — прораб. Он только отдаёт команды
+# модулям и отрисовывает главное меню.
+#
+set -uo pipefail
+
+# Определяем, где лежит вся наша кухня
+readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+readonly VERSION="v2.0" # Версия фреймворка
+
+# ============================================================ #
+#              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
+# ============================================================ #
+
+# Загружаем конфигурацию. Если её нет - всё, пиздец, приехали.
+if [ -f "${SCRIPT_DIR}/config/reshala.conf" ]; then
+    source "${SCRIPT_DIR}/config/reshala.conf"
+else
+    echo "[FATAL ERROR] Configuration file config/reshala.conf not found."
+    exit 1
+fi
+
+# Загружаем общие инструменты. Без них как без рук.
+if [ -f "${SCRIPT_DIR}/modules/common.sh" ]; then
+    source "${SCRIPT_DIR}/modules/common.sh"
+else
+    echo "[FATAL ERROR] Common tools module modules/common.sh not found."
+    exit 1
+fi
+
+# ============================================================ #
+#                     ГЛАВНАЯ ЛОГИКА                           #
+# ============================================================ #
+
+# Универсальный загрузчик и запускатор модулей
+run_module() {
+    local module_name="$1"
+    shift # Убираем имя модуля, оставляем только имя функции и её аргументы
+    local module_path="${SCRIPT_DIR}/modules/${module_name}.sh"
+
+    if [ -f "$module_path" ]; then
+        # Подключаем модуль и вызываем нужную функцию с её аргументами
+        source "$module_path"
+        "$@" # "$@" теперь содержит имя функции и её параметры
+    else
+        log "Критическая ошибка: модуль '${module_name}' не найден."
+        printf_error "Модуль '${module_name}' отсутствует. Установка повреждена."
+    fi
+}
+
+# Главное меню, которое видит пользователь
+show_main_menu() {
+    trap 'printf "\r\033[K%b" "${C_RED}🛑 Куда собрался? Жми [q], чтобы выйти!${C_RESET}"; sleep 1' SIGINT
+
+    while true; do
+        run_module dashboard show
+        
+        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
+            printf "\n%b‼️ ДОСТУПНО ОБНОВЛЕНИЕ! %s -> %s ‼️%b\n" \
+                   "${C_BOLD}${C_RED}" "${VERSION}" "${LATEST_VERSION}" "${C_RESET}"
+        fi
+
+        printf "\n%s\n\n" "Чё делать будем, босс?"
+
+        if [ "${SKYNET_MODE:-0}" -ne 1 ]; then
+            printf "   [0] 🌐 %b\n" "УПРАВЛЕНИЕ ФЛОТОМ ${C_WHITE}(Skynet Mode)${C_RESET}"
+            echo "   ---------------------------------------------------"
+        fi
+
+        printf "   [1] 🔧 %b\n" "ОБСЛУЖИВАНИЕ СЕРВЕРА ${C_GRAY}(Apt, Сеть, Тесты)${C_RESET}"
+        printf "   [2] 📜 %b\n" "ДИАГНОСТИКА И ЛОГИ ${C_GRAY}(Docker, Журналы)${C_RESET}"
+        printf "   [3] 💿 %b\n" "УСТАНОВИТЬ REMNAWAVE ${C_GRAY}(скоро...)${C_RESET}"
+
+        if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
+            echo ""
+            printf "   %b[u] ‼️ ОБНОВИТЬ РЕШАЛУ ‼️%b\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
+        fi
+        echo ""
+
+        if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
+            printf "   [w] 🔧 %b\n" "УПРАВЛЕНИЕ ВИДЖЕТАМИ" 
+            printf "   [d] 🗑️  Снести Решалу (Удаление)\n"
+            printf "   [q] 🔙 %b\n" "${C_CYAN}ВЕРНУТЬСЯ В ЦУП${C_RESET}"
+        else
+            printf "   [d] 🗑️  Снести Решалу (Удаление)\n"
+            printf "   [q] 🚪 Свалить (Выход)\n"
+        fi
+        echo "------------------------------------------------------"
+
+        local choice; read -r -p "Твой выбор, босс: " choice || continue
+
+        case "$choice" in
+            0) if [ "${SKYNET_MODE:-0}" -ne 1 ]; then run_module skynet show_fleet_menu; else printf_error "Ты уже в матрице."; fi ;;
+            1) run_module local_care show_maintenance_menu ;;
+            2) run_module diagnostics show_diagnostics_menu ;;
+            3) printf_warning "Модуль установки в разработке." && sleep 2 ;;
+            u|U) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_module self_update run_update; else printf_error "Обновлений нет."; fi ;;
+            w|W) run_module widget_manager show_widgets_menu ;;
+            d|D) run_module self_update uninstall_script ;;
+            q|Q)
+                trap - SIGINT
+                if [ "${SKYNET_MODE:-0}" -eq 1 ]; then exit 0; else echo "Был рад помочь. Не обосрись. 🥃"; break; fi
+                ;;
+            *) printf_error "Нет такого пункта." ;;
+        esac
+    done
+}
+
+# ============================================================ #
+#                       ТОЧКА ВХОДА                            #
+# ============================================================ #
+main() {
+    init_logger
+
+    if [[ "${1:-}" == "install" ]]; then
+        source "${SCRIPT_DIR}/modules/self_update.sh"; install_script
+        exit 0
+    fi
+
+    if [[ $EUID -ne 0 ]]; then
+        printf_error "Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"
+        exit 1
+    fi
+
+    log "Запуск фреймворка Решала ${VERSION}"
+    run_module self_update check_for_updates &
+    show_main_menu
+}
+
+main "$@"
