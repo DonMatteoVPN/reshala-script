@@ -114,21 +114,42 @@ show_main_menu() {
 #                       ТОЧКА ВХОДА                            #
 # ============================================================ #
 main() {
+    # Инициализируем логгер
     init_logger
 
-    if [[ "${1:-}" == "install" ]]; then
-        source "${SCRIPT_DIR}/modules/self_update.sh"; install_script
-        exit 0
-    fi
-
+    # Если мы не root, дальнейший разговор бессмысленен
     if [[ $EUID -ne 0 ]]; then
-        printf_error "Только для рута. Используй: ${C_YELLOW}sudo reshala${C_RESET}"
+        printf_error "Этот скрипт должен быть запущен от имени root или через sudo."
         exit 1
     fi
 
+    # Обработка команды `install` - это особый случай
+    if [[ "${1:-}" == "install" ]]; then
+        # Логика установки будет в self_update.sh, но вызывается так
+        # Мы уже под root, так что можем просто вызывать
+        source "${SCRIPT_DIR}/modules/self_update.sh" && install_script
+        
+        # После установки, ПРОВЕРЯЕМ и СТАВИМ sudo, если его нет.
+        # Это одна из первых вещей, которую Решала делает для сервера.
+        if ! command -v sudo &>/dev/null; then
+            if command -v apt-get &>/dev/null; then
+                printf_info "Команда 'sudo' не найдена. Устанавливаю..."
+                apt-get update -qq >/dev/null
+                apt-get install -y -qq sudo
+                printf_ok "'sudo' установлен. Это правильно."
+            fi
+        fi
+        exit 0
+    fi
+
     log "Запуск фреймворка Решала ${VERSION}"
+
+    # Первичная проверка обновлений в фоне
     run_module self_update check_for_updates &
+
+    # Показываем главное меню
     show_main_menu
 }
 
+# Запускаем всю эту шарманку
 main "$@"
