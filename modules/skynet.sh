@@ -154,6 +154,31 @@ _show_keys_menu() {
 #                    УПРАВЛЕНИЕ БАЗОЙ ФЛОТА                    #
 # ============================================================ #
 
+# --- ВЕРСИОННЫЕ ХЕЛПЕРЫ ДЛЯ SKYNET ---
+# Нормализация версии: убираем префикс v/V
+_skynet_normalize_version() {
+    echo "$1" | sed 's/^[vV]//' 2>/dev/null
+}
+
+# Возвращает 0 (успех), если локальный ЦУП новее удалённого агента
+_skynet_is_local_newer() {
+    local local_v remote_v
+    local_v=$(_skynet_normalize_version "$1")
+    remote_v=$(_skynet_normalize_version "$2")
+
+    # Если одинаковые — обновлять не нужно
+    if [[ "$local_v" == "$remote_v" ]]; then
+        return 1
+    fi
+
+    local top
+    top=$(printf '%s\n%s\n' "$local_v" "$remote_v" | sort -V | tail -n1)
+    if [[ "$top" == "$local_v" ]]; then
+        return 0
+    fi
+    return 1
+}
+
 _sanitize_fleet_database() {
     if [ -f "$FLEET_DATABASE_FILE" ]; then
         sed -i '/^$/d' "$FLEET_DATABASE_FILE" # Удаляем пустые строки
@@ -423,10 +448,12 @@ show_fleet_menu() {
                     printf "   📡 Проверка связи и версии агента... "
                     local remote_ver; remote_ver=$(run_remote "if [ -f $INSTALL_PATH ]; then grep 'readonly VERSION' $INSTALL_PATH | cut -d'\"' -f2; else echo 'NONE'; fi" | tail -n1 | tr -d '\r')
                     
-                    if [[ -z "$remote_ver" || "$remote_ver" == "NONE" || "$remote_ver" != "$VERSION" ]]; then
-                        printf "%b\\n" "${C_YELLOW}Требуется установка/обновление агента...${C_RESET}"
-                        # Ставим агента через полноценный install.sh, но тихо (логи на удалённой стороне)
-                        local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} >/dev/null 2>&1 && sudo bash /tmp/reshala_install.sh >/tmp/reshala_install.log 2>&1 && rm /tmp/reshala_install.sh"
+                    # Если агента нет ИЛИ локальная версия ЦУПа новее — ставим/обновляем
+                    if [[ -z "$remote_ver" || "$remote_ver" == "NONE" ]] || _skynet_is_local_newer "$VERSION" "$remote_ver"; then
+                        printf "%b\n" "${C_YELLOW}Требуется установка/обновление агента...${C_RESET}"
+                        # Ставим агента через полноценный install.sh, но тихо (логи на удалённой стороне).
+                        # ВАЖНО: без sudo здесь, run_remote сам поднимет привилегии при необходимости.
+                        local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} >/dev/null 2>&1 && bash /tmp/reshala_install.sh >/tmp/reshala_install.log 2>&1 && rm /tmp/reshala_install.sh"
                         if ! run_remote "$install_cmd"; then
                            printf_error "Не удалось установить/обновить агента. Вход невозможен."
                            continue
