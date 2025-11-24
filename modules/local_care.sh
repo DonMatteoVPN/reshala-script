@@ -146,6 +146,41 @@ _run_system_update() {
 #                           SPEEDTEST                          #
 # ============================================================ #
 
+# Калькулятор вместимости ноды (портирован из старого монолита)
+_calculate_vpn_capacity() {
+    local upload_speed="$1"  # В Мбит/с
+
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local ram_used;  ram_used=$(free -m | grep Mem | awk '{print $3}')
+    local cpu_cores; cpu_cores=$(nproc)
+
+    local available_ram=$((ram_total - ram_used - 250))
+    if [ "$available_ram" -lt 0 ]; then available_ram=0; fi
+
+    local max_users_ram=$((available_ram / 4))
+    local max_users_cpu=$((cpu_cores * 600))
+
+    local hw_limit=$max_users_ram
+    local hw_reason="RAM"
+    if [ "$max_users_cpu" -lt "$max_users_ram" ]; then
+        hw_limit=$max_users_cpu
+        hw_reason="CPU"
+    fi
+
+    if [ -n "$upload_speed" ]; then
+        local clean_speed=${upload_speed%.*}
+        local net_limit
+        net_limit=$(awk "BEGIN {printf \"%.0f\", $clean_speed * 0.8}")
+        if [ "$net_limit" -lt "$hw_limit" ]; then
+            echo "$net_limit (Упор в Канал)"
+        else
+            echo "$hw_limit (Упор в $hw_reason)"
+        fi
+    else
+        echo "$hw_limit (Лимит $hw_reason)"
+    fi
+}
+
 _run_speedtest() {
     clear
     printf_info "🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ..."
@@ -167,10 +202,10 @@ _run_speedtest() {
     fi
 
     if [[ -n "$json_output" ]]; then
-        local ping; ping=$(echo "$json_output" | jq -r '.ping.latency')
+        local ping;     ping=$(echo "$json_output" | jq -r '.ping.latency')
         local dl_bytes; dl_bytes=$(echo "$json_output" | jq -r '.download.bandwidth')
         local ul_bytes; ul_bytes=$(echo "$json_output" | jq -r '.upload.bandwidth')
-        local url; url=$(echo "$json_output" | jq -r '.result.url')
+        local url;      url=$(echo "$json_output" | jq -r '.result.url')
 
         local dl_mbps; dl_mbps=$(awk "BEGIN {printf \"%.2f\", $dl_bytes * 8 / 1000000}")
         local ul_mbps; ul_mbps=$(awk "BEGIN {printf \"%.2f\", $ul_bytes * 8 / 1000000}")
@@ -181,7 +216,22 @@ _run_speedtest() {
         printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul_mbps"
         echo "══════════════════════════════════════════════════"
         echo "   🔗 Линк на результат: $url"
+
         log "Speedtest: DL=${dl_mbps}, UL=${ul_mbps}, Ping=${ping}"
+
+        # Сохраняем аплоад и расчётную вместимость в конфиг, чтобы дашборд знал, на что способен сервер
+        local clean_ul_int
+        clean_ul_int=$(echo "$ul_mbps" | cut -d'.' -f1)
+        if [[ "$clean_ul_int" =~ ^[0-9]+$ ]] && [ "$clean_ul_int" -gt 0 ]; then
+            local capacity
+            capacity=$(_calculate_vpn_capacity "$ul_mbps")
+            set_config_var "LAST_UPLOAD_SPEED" "$clean_ul_int"
+            set_config_var "LAST_VPN_CAPACITY" "$capacity"
+
+            printf "\n%b💎 ВЕРДИКТ РЕШАЛЫ:%b\n" "${C_BOLD}" "${C_RESET}"
+            printf "   С таким каналом эта нода потянет примерно: %b%s юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
+            echo "   (Результат сохранён для главного меню/дашборда)"
+        fi
     else
         printf_error "Ошибка: Speedtest вернул пустоту. Попробуй позже."
     fi

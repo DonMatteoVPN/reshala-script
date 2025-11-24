@@ -91,7 +91,7 @@ set_config_var() {
     local config_file="${SCRIPT_DIR}/config/reshala.conf"
     
     # Если ключ уже есть - заменяем. Если нет - добавляем.
-    if grep -q "^${key}=" "$config_file"; then
+    if grep -q "^${key}=" "$config_file" 2>/dev/null; then
         sed -i "s|^${key}=.*|${key}=\"${value}\"|" "$config_file"
     else
         echo "${key}=\"${value}\"" >> "$config_file"
@@ -105,6 +105,68 @@ get_config_var() {
     
     if [ -f "$config_file" ]; then
         # Ищем значение, убираем кавычки и возвращаем
-        grep "^${key}=" "$config_file" | cut -d'=' -f2- | sed 's/"//g'
+        grep "^${key}=" "$config_file" 2>/dev/null | cut -d'=' -f2- | sed 's/"//g'
     fi
+}
+
+# ============================================================ #
+#                   УТИЛИТЫ ДЛЯ ЛОГОВ                          #
+# ============================================================ #
+# Вынесены из старого монолита install_reshala.sh
+
+# Реалтайм-просмотр логов (tail -f) с аккуратным trap'ом
+view_logs_realtime() {
+    local log_path="$1"
+    local log_name="$2"
+
+    # Если файла нет, создаём, чтобы tail не ругался
+    if [ ! -f "$log_path" ]; then
+        run_cmd touch "$log_path"
+        run_cmd chmod 666 "$log_path"
+    fi
+
+    echo "[*] Смотрю журнал '$log_name'... (CTRL+C, чтобы свалить)"
+    printf "%b[+] Лог-файл: %s${C_RESET}\n" "${C_CYAN}" "$log_path"
+
+    local original_int_handler
+    original_int_handler=$(trap -p INT)
+    trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
+
+    # Просто tail -f, как в старые добрые времена — без лишней магии
+    run_cmd tail -f -n 50 "$log_path"
+
+    if [ -n "$original_int_handler" ]; then
+        eval "$original_int_handler"
+    else
+        trap - INT
+    fi
+    return 0
+}
+
+# Просмотр логов docker-compose сервиса по пути к compose-файлу
+view_docker_logs() {
+    local service_path="$1"
+    local service_name="$2"
+
+    if [ -z "$service_path" ] || [ ! -f "$service_path" ]; then
+        printf "%b\n" "❌ ${C_RED}Путь к Docker-compose не найден. Возможно, ты что-то удалил руками?${C_RESET}"
+        sleep 2
+        return
+    fi
+
+    echo "[*] Смотрю потроха '$service_name'... (CTRL+C, чтобы свалить)"
+    local original_int_handler
+    original_int_handler=$(trap -p INT)
+    trap "printf '\n%b\n' '${C_GREEN}✅ Возвращаю в меню...${C_RESET}'; sleep 1;" INT
+
+    (
+        cd "$(dirname "$service_path")" && run_cmd docker compose logs -f
+    ) || true
+
+    if [ -n "$original_int_handler" ]; then
+        eval "$original_int_handler"
+    else
+        trap - INT
+    fi
+    return 0
 }

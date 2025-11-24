@@ -60,10 +60,79 @@ _deploy_key_to_host() {
     fi
 }
 
-# Меню для просмотра ключей
+# Меню для просмотра ключей (портировано из старого монолита)
 _show_keys_menu() {
-    # Реализация меню просмотра ключей из твоего скрипта...
-    printf_warning "Меню управления ключами в разработке. Заходи позже." && sleep 2
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║               🔑 УПРАВЛЕНИЕ SSH КЛЮЧАМИ                      ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "Доступные ключи:"
+        echo "--------------------------------------------------"
+
+        local keys=()
+        local i=1
+
+        # 1. Мастер-ключ
+        local master_path="${HOME}/.ssh/${SKYNET_MASTER_KEY_NAME}"
+        if [ -f "$master_path" ]; then
+            keys[$i]="${master_path}|MASTER KEY (Основной)"
+            printf "   [%d] %b%-30s%b (Дефолтный)\n" "$i" "${C_GREEN}" "MASTER KEY" "${C_RESET}"
+            ((i++))
+        fi
+
+        # 2. Уникальные ключи
+        for k in "${HOME}/.ssh/${SKYNET_UNIQUE_KEY_PREFIX}"*; do
+            if [[ -f "$k" ]] && [[ "$k" != *.pub ]]; then
+                local k_name
+                k_name=$(basename "$k" | sed "s/${SKYNET_UNIQUE_KEY_PREFIX}//")
+                keys[$i]="$k|$k_name"
+                printf "   [%d] %b%-30s%b (Для сервера: %s)\n" "$i" "${C_YELLOW}" "UNIQUE KEY" "${C_RESET}" "$k_name"
+                ((i++))
+            fi
+        done
+
+        echo "--------------------------------------------------"
+        echo "   [b] 🔙 Назад"
+        echo ""
+
+        local choice
+        read -r -p "Выбери ключ для просмотра: " choice || continue
+
+        if [[ "$choice" == "b" || "$choice" == "B" ]]; then
+            break
+        fi
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${keys[$choice]}" ]; then
+            IFS='|' read -r k_path k_desc <<< "${keys[$choice]}"
+
+            echo ""
+            echo "Что показать?"
+            echo "   1) 🔓 ПУБЛИЧНЫЙ (Public)  -> Чтобы закинуть на сервер"
+            echo "   2) 🔐 ПРИВАТНЫЙ (Private) -> Чтобы скопировать себе на ПК/Телефон"
+            local type_choice; type_choice=$(safe_read "Выбор: " "1")
+
+            if [[ "$type_choice" == "1" ]]; then
+                echo ""
+                echo "👇 Скопируй эту строку и вставь в /root/.ssh/authorized_keys на сервере:"
+                printf "%b\n" "${C_GREEN}$(cat "${k_path}.pub" 2>/dev/null)${C_RESET}"
+                echo ""
+                wait_for_enter
+            elif [[ "$type_choice" == "2" ]]; then
+                echo ""
+                printf "%b\n" "${C_RED}☢️  ВНИМАНИЕ! ЭТО СЕКРЕТНЫЙ КЛЮЧ! ☢️${C_RESET}"
+                echo "Никому не показывай. Скопируй и сразу очисти экран."
+                read -p "Нажми Enter, чтобы показать..."
+                echo ""
+                cat "$k_path"
+                echo ""
+                echo "--------------------------------------------------"
+                read -p "Нажми Enter, чтобы СКРЫТЬ и очистить экран..."
+                clear
+            fi
+        fi
+    done
 }
 
 # ============================================================ #
@@ -184,7 +253,7 @@ show_fleet_menu() {
         echo "   [a] ➕ Добавить     [d] 🗑️ Удалить     [k] 🔑 Ключи"
         echo "   [c] ☢️  Выполнить команду на флоте"
         echo "   [x] 🗑️  Удалить сервер    [m] 📝 Редактор"
-        echo "   [b] 🔙  Назад
+        echo "   [b] 🔙  Назад"
         echo ""
 
         local choice; choice=$(safe_read "Выбор (или номер сервера для подключения): " "")

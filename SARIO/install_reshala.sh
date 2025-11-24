@@ -1,15 +1,15 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.21175 - FIXED & POLISHED   ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.9993 - Фикс Скайнета и востановление доступа ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v2.21175"
+readonly VERSION="v1.9993"
 # Убедись, что ветка (dev/main) правильная!
-readonly REPO_BRANCH="dev" 
+readonly REPO_BRANCH="main" 
 readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
 readonly MODULES_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/modules"
 CONFIG_FILE="${HOME}/.reshala_config"
@@ -1247,26 +1247,8 @@ menu_docker() {
 
         case $choice in
             1)
-                echo ""
-                printf "%b\n" "${C_BOLD}[*] ТОП-15 ЖИРОБАСОВ (Самые тяжелые образы):${C_RESET}"
-                echo "--------------------------------------------------------------"
-                printf "%b%-45s %-15s%b\n" "${C_CYAN}" "ОБРАЗ (IMAGE)" "РАЗМЕР" "${C_RESET}"
-                echo "--------------------------------------------------------------"
-                
-                # Магия форматирования:
-                # 1. Получаем список. 2. Сортируем. 3. Берем топ 15. 4. Рисуем таблицу.
-                docker images --format "{{.Repository}}:{{.Tag}}|{{.Size}}" | sort -rh -t '|' -k2 | head -n 15 | while IFS='|' read -r img size; do
-                    # Обрезаем слишком длинные имена, чтобы таблица не ехала (до 43 символов)
-                    if [ ${#img} -gt 43 ]; then img="${img:0:40}..."; fi
-                    
-                    # Красим размер (GB - красный, MB - желтый/зеленый)
-                    local color="${C_GREEN}"
-                    if [[ "$size" == *"GB"* ]]; then color="${C_RED}"; 
-                    elif [[ "$size" == *"MB"* ]] && [[ "${size%.*}" -gt 500 ]]; then color="${C_YELLOW}"; fi
-                    
-                    printf "%-45s %b%-15s%b\n" "$img" "$color" "$size" "${C_RESET}"
-                done
-                echo "--------------------------------------------------------------"
+                echo ""; echo "[*] Топ жиробасов:"; echo "----------------------------------------"
+                docker images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh | head -n 10
                 wait_for_enter
                 ;;
             2)
@@ -1704,7 +1686,7 @@ display_header() {
         printf "%b\n" "${C_RED}║   👁️  ПОДКЛЮЧЕН ЧЕРЕЗ SKYNET (УДАЛЕННОЕ УПРАВЛЕНИЕ) 👁️    ║${C_RESET}"
         printf "%b\n" "${C_RED}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
     else
-        printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION}  от бати DonMatteo  ]══════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
         printf "%b\n" "${C_CYAN}║${C_RESET}"
     fi
     
@@ -1997,10 +1979,15 @@ manage_fleet() {
             
             # ЗАПУСКАЕМ ПРОВЕРКИ В ФОНЕ
             for line in "${raw_lines[@]}"; do
+                # Читаем теперь 6 полей (добавили sudo_pass)
                 IFS='|' read -r name user ip port key_path sudo_pass <<< "$line"
+                
                 if [[ -z "$name" ]] || [[ -z "$ip" ]]; then 
-                    echo "SKIP" > "$tmp_dir/$i"; ((i++)); continue 
+                    echo "SKIP" > "$tmp_dir/$i"
+                    ((i++))
+                    continue 
                 fi
+                
                 if [[ ! -f "$key_path" ]]; then key_path="$HOME/.ssh/id_ed25519"; fi
                 
                 (
@@ -2028,29 +2015,41 @@ manage_fleet() {
         else
             for line in "${raw_lines[@]}"; do
                 IFS='|' read -r name user ip port key_path sudo_pass <<< "$line"
-                [[ -z "$name" ]] && { ((i++)); continue; }
-                [[ ! -f "$key_path" ]] && key_path="$HOME/.ssh/id_ed25519"
                 
+                if [[ -z "$name" ]] || [[ -z "$ip" ]]; then ((i++)); continue; fi
+                if [[ ! -f "$key_path" ]]; then key_path="$HOME/.ssh/id_ed25519"; fi
+                
+                # Сохраняем в массив (включая пароль)
                 servers[$i]="$name|$user|$ip|$port|$key_path|$sudo_pass"
                 
                 local status_text="UNK"
                 [ -f "$tmp_dir/$i" ] && status_text=$(cat "$tmp_dir/$i")
+                
                 local status_color="${C_RED}OFF${C_RESET}"
                 [[ "$status_text" == "ON" ]] && status_color="${C_GREEN}ON${C_RESET} "
                 
-                local pass_icon=""; [[ "$user" != "root" ]] && { if [[ -n "$sudo_pass" ]]; then pass_icon="🔑"; else pass_icon="⚠️"; fi; }
+                local kp_display="Master"
+                [[ "$key_path" == *"id_reshala_"* ]] && kp_display="Unique"
+                
+                # Индикатор наличия сохраненного пароля
+                local pass_icon=""
+                if [[ "$user" != "root" ]]; then
+                    if [[ -n "$sudo_pass" ]]; then pass_icon="🔑"; else pass_icon="⚠️"; fi
+                fi
 
-                printf "   [%d] [%b] %b%-15s%b -> %s@%s:%s %s\n" "$i" "$status_color" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$pass_icon"
+                printf "   [%d] [%b] %b%-15s%b -> %s@%s:%s [%s] %s\n" "$i" "$status_color" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display" "$pass_icon"
                 ((i++))
             done
         fi
+        
         rm -rf "$tmp_dir"
         
         echo "----------------------------------------------------------------"
         echo "   [a] ➕ Добавить сервер"
-        echo "   [m] 📝 Ручное редактирование"
+        echo "   [m] 📝 Ручное редактирование файла (nano)"
         echo "   [k] 🔑 Ключи SSH"
         echo "   [d] 🗑️ Удалить сервер"
+        echo "   [x] ☢️ Сброс базы"
         echo "   [b] 🔙 Назад"
         echo ""
         
@@ -2103,69 +2102,134 @@ manage_fleet() {
                     sleep 1
                 fi
                 ;;
-            [mM]) _ensure_package_installed "nano"; nano "$FLEET_FILE"; _sanitize_fleet_database ;;
-            [kK]) menu_keys_management ;;
-            [dD]) 
-                 # ... (тут код удаления без изменений) ...
-                 ;;
+            [mM])
+                _ensure_package_installed "nano"
+                nano "$FLEET_FILE"
+                _sanitize_fleet_database
+                ;;
+            [kK])
+                menu_keys_management
+                ;;
+            [dD])
+                local del_num; del_num=$(safe_read "Номер для удаления: " "")
+                if [[ "$del_num" =~ ^[0-9]+$ ]] && [ -n "${servers[$del_num]:-}" ]; then 
+                    local temp_file="${FLEET_FILE}.tmp"
+                    local line_count=1
+                    while IFS='|' read -r n u i p k s || [ -n "$n" ]; do
+                        [[ -z "$n" ]] && continue
+                        if [ "$line_count" -ne "$del_num" ]; then
+                            echo "$n|$u|$i|$p|$k|$s" >> "$temp_file"
+                        fi
+                        ((line_count++))
+                    done < "$FLEET_FILE"
+                    mv "$temp_file" "$FLEET_FILE"
+                    echo "🗑️ Удалено."
+                fi
+                ;;
+            [xX])
+                read -p "Удалить ВСЕ? (yes/no): " confirm
+                if [[ "$confirm" == "yes" ]]; then rm -f "$FLEET_FILE"; touch "$FLEET_FILE"; echo "🗑️ База уничтожена."; sleep 1; fi
+                ;;
             [bB]) break ;;
             *)
+                # --- ТЕЛЕПОРТАЦИЯ (ГЛАВНАЯ ЛОГИКА) ---
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$choice]:-}" ]; then
                     local selected="${servers[$choice]}"
                     IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "$selected"
-                    [[ ! -f "$s_key" ]] && s_key="$HOME/.ssh/id_ed25519"
+                    
+                    if [[ ! -f "$s_key" ]]; then s_key="$HOME/.ssh/id_ed25519"; fi
                     
                     clear
                     printf "%b\n" "${C_CYAN}🚀 SKYNET UPLINK: ${C_WHITE}$s_name${C_RESET}"
                     
-                    # ПРОВЕРКА ПАРОЛЯ (если не root и нет пароля)
-                    if [[ "$s_user" != "root" && -z "$s_pass" ]]; then
-                        printf "%b\n" "${C_YELLOW}🔒 Юзеру '$s_user' нужен пароль sudo.${C_RESET}"
-                        read -p "Введи пароль: " -s s_pass; echo ""
-                        read -p "Сохранить? (y/n): " save_pass
-                        [[ "$save_pass" == "y" ]] && _update_fleet_record "$choice" "$s_name|$s_user|$s_ip|$s_port|$s_key|$s_pass"
+                    # 1. ПРОВЕРКА ПАРОЛЯ SUDO (Если юзер не root и пароля нет)
+                    if [[ "$s_user" != "root" ]]; then
+                        if [[ -z "$s_pass" ]]; then
+                            echo ""
+                            printf "%b\n" "${C_YELLOW}🔒 Юзеру '$s_user' нужен пароль для sudo.${C_RESET}"
+                            read -p "Введи пароль: " -s s_pass
+                            echo ""
+                            read -p "Сохранить его в базу? (y/n): " save_pass
+                            if [[ "$save_pass" == "y" || "$save_pass" == "Y" ]]; then
+                                local new_record="$s_name|$s_user|$s_ip|$s_port|$s_key|$s_pass"
+                                _update_fleet_record "$choice" "$new_record"
+                                echo "💾 Пароль сохранён."
+                            fi
+                        fi
                     fi
 
-                    # Простая функция для выполнения команд (используем локально)
-                    run_remote_check() {
-                        ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$1"
+                    # Функция-обертка
+                    run_remote() {
+                        local cmd="$1"
+                        if [[ "$s_user" == "root" ]]; then
+                            ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$cmd"
+                        else
+                            local sudo_cmd="echo '$s_pass' | sudo -S -p '' bash -c \"$cmd\""
+                            ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_cmd"
+                        fi
                     }
 
+                    # 2. ПРОВЕРКА ДОСТУПА
                     printf "📡 Проверка связи... "
                     if ! ssh -q -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" exit; then
-                        printf "%b\n" "${C_RED}СБОЙ!${C_RESET}"; wait_for_enter; continue
+                        printf "%b\n" "${C_RED}СБОЙ!${C_RESET}"
+                        echo ""
+                        printf "%b\n" "${C_YELLOW}⚠️  Сервер не отвечает или ключ отклонён.${C_RESET}"
+                        echo "Возможные причины:"
+                        echo "1. Сервер был ПЕРЕУСТАНОВЛЕН (сменился отпечаток)."
+                        echo "2. Слетёл SSH-ключ."
+                        echo "3. Сервер просто лежит."
+                        echo ""
+                        read -p "🚑 Попробовать восстановить доступ (сброс ключей)? (y/n): " try_fix
+                        if [[ "$try_fix" == "y" || "$try_fix" == "Y" ]]; then
+                            echo "🔧 Запускаю протокол восстановления..."
+                            if _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$s_key"; then
+                                echo "✅ Доступ восстановлен. Пробуем войти..."
+                                sleep 1
+                            else
+                                echo "❌ Не вышло. Проверь пароль или IP."
+                                wait_for_enter
+                                continue
+                            fi
+                        else
+                            continue
+                        fi
                     else
                         printf "%b\n" "${C_GREEN}OK${C_RESET}"
                     fi
                     
-                    # СВЕРКА ВЕРСИЙ
+                    # 3. СВЕРКА ВЕРСИЙ
                     echo "🔍 Сверка версий..."
-                    local remote_ver
-                    remote_ver=$(run_remote_check "if [ -f /usr/local/bin/reshala ]; then cat /usr/local/bin/reshala | grep 'readonly VERSION' | cut -d'\"' -f2; else echo 'NONE'; fi")
+                    local check_cmd="if [ -f /usr/local/bin/reshala ]; then cat /usr/local/bin/reshala | grep 'readonly VERSION' | cut -d'\"' -f2; else echo 'NONE'; fi"
                     
-                    if [[ "$remote_ver" != "$VERSION" ]]; then
-                        printf "%b\n" "${C_YELLOW}⚠️  Обновление агента...${C_RESET}"
-                        # Установка БЕЗ SUDO если root
-                        local inst_cmd=""
-                        if [[ "$s_user" == "root" ]]; then
-                            inst_cmd="wget -q -O /tmp/ri.sh ${SCRIPT_URL} && bash /tmp/ri.sh install && rm /tmp/ri.sh"
-                        else
-                            inst_cmd="echo '$s_pass' | sudo -S bash -c 'wget -q -O /tmp/ri.sh ${SCRIPT_URL} && bash /tmp/ri.sh install && rm /tmp/ri.sh'"
-                        fi
-                        ssh -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$inst_cmd"
+                    local remote_ver
+                    remote_ver=$(run_remote "$check_cmd")
+                    remote_ver=$(echo "$remote_ver" | tail -n 1 | tr -d '\r')
+
+                    local need_install=0
+                    if [[ "$remote_ver" == *"NONE"* ]] || [[ -z "$remote_ver" ]]; then
+                        echo "⚠️  Решала не установлен."
+                        need_install=1
+                    elif [[ "$remote_ver" != "$VERSION" ]]; then
+                        echo "⚠️  Обновление ($remote_ver -> $VERSION)..."
+                        need_install=1
+                    else
+                        echo "✅ Версии совпадают."
                     fi
                     
-                    # ВХОД
+                    if [ $need_install -eq 1 ]; then
+                        printf "%b\n" "${C_YELLOW}📦 Загрузка агента на сервер...${C_RESET}"
+                        local install_cmd="wget -q -O /tmp/reshala_inst.sh ${SCRIPT_URL} && bash /tmp/reshala_inst.sh install && rm /tmp/reshala_inst.sh"
+                        run_remote "$install_cmd"
+                    fi
+                    
+                    # 4. ЗАПУСК
                     printf "%b\n" "${C_GREEN}✅ Входим...${C_RESET}"
                     sleep 1
                     
-                    # ВОТ ТУТ БЫЛА ОШИБКА С SUDO
-                    # Формируем команду в зависимости от юзера
                     if [[ "$s_user" == "root" ]]; then
-                        # ROOT не нужен sudo
-                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "SKYNET_MODE=1 reshala"
+                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo SKYNET_MODE=1 reshala"
                     else
-                        # ОБЫЧНЫЙ юзер нужен sudo
                         ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "echo '$s_pass' | sudo -S -p '' -v 2>/dev/null && sudo SKYNET_MODE=1 reshala"
                     fi
                     
@@ -2173,138 +2237,6 @@ manage_fleet() {
                     sleep 1
                 fi
                 ;;
-        esac
-    done
-}
-
-# ============================================================ #
-#                МОДУЛЬ УСТАНОВКИ REMNAWAVE (MENU)             #
-# ============================================================ #
-
-install_node_logic() {
-    clear
-    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║             📡 УСТАНОВКА БОЕВОЙ НОДЫ (XRAY)                  ║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    echo "Куда будем ставить ноду?"
-    echo "   [1] 🏠 На ЭТОТ сервер (Localhost)"
-    echo "   [2] 🌐 На удаленный сервер из Флота (Skynet)"
-    echo ""
-    echo "   [b] 🔙 Отмена"
-    
-    local target_choice
-    read -r -p "Твой выбор: " target_choice
-    
-    case "$target_choice" in
-        1)
-            # Локальная установка
-            run_module "install_node.sh"
-            ;;
-        2)
-            echo ""
-            echo "🔎 Сканирую флот..."
-            
-            if [ ! -s "$FLEET_FILE" ]; then
-                printf "%b\n" "${C_RED}❌ Твой флот пуст! Сначала добавь сервера в меню [0].${C_RESET}"
-                wait_for_enter
-                return
-            fi
-            
-            # Выводим список серверов
-            local i=1
-            local servers_list=()
-            echo "----------------------------------------------------------------"
-            while IFS='|' read -r name user ip port key_path pass; do
-                [[ -z "$name" ]] && continue
-                servers_list[$i]="$name|$user|$ip|$port|$key_path|$pass"
-                printf "   [%d] %b%-15s%b (%s)\n" "$i" "${C_WHITE}" "$name" "${C_RESET}" "$ip"
-                ((i++))
-            done < "$FLEET_FILE"
-            echo "----------------------------------------------------------------"
-            
-            local s_id
-            read -p "Выбери сервер (номер): " s_id
-            
-            if [[ "$s_id" =~ ^[0-9]+$ ]] && [ -n "${servers_list[$s_id]:-}" ]; then
-                IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "${servers_list[$s_id]}"
-                if [[ ! -f "$s_key" ]]; then s_key="$HOME/.ssh/id_ed25519"; fi
-                
-                echo ""
-                printf "%b\n" "${C_CYAN}🚀 Начинаю операцию на: $s_name ($s_ip)...${C_RESET}"
-                
-                # 1. КОМАНДА ПОДГОТОВКИ (Если нет wget - ставим его)
-                local pre_cmd="if ! command -v wget >/dev/null; then if [ -f /etc/debian_version ]; then apt-get update -qq && apt-get install -y -qq wget; elif [ -f /etc/redhat-release ]; then yum install -y wget; fi; fi"
-                
-                # 2. КОМАНДА ЗАГРУЗКИ
-                local dl_cmd="wget -qO /tmp/install_node.sh ${MODULES_URL}/install_node.sh && chmod +x /tmp/install_node.sh"
-                
-                # 3. КОМАНДА ЗАПУСКА (УМНАЯ)
-                local run_cmd=""
-                if [[ "$s_user" == "root" ]]; then
-                    # Для ROOT запускаем напрямую (без sudo)
-                    run_cmd="/tmp/install_node.sh"
-                else
-                    # Для остальных нужен sudo
-                    run_cmd="sudo /tmp/install_node.sh"
-                fi
-                
-                # Собираем комбо-удар
-                local full_remote_cmd="$pre_cmd && $dl_cmd && $run_cmd"
-                
-                if [[ "$s_user" == "root" ]]; then
-                    ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$full_remote_cmd"
-                else
-                    # Если юзер не root, обрабатываем пароль sudo
-                    if [ -n "$s_pass" ]; then
-                        # Экранируем команду для sudo bash -c
-                        local sudo_wrapper="echo '$s_pass' | sudo -S -p '' bash -c \"$dl_cmd && $run_cmd\""
-                        # pre_cmd запускаем отдельно или надеемся, что wget есть, т.к. sudo install требует прав
-                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$sudo_wrapper"
-                    else
-                        echo "⚠️ Нет пароля sudo. Придется вводить руками."
-                        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$full_remote_cmd"
-                    fi
-                fi
-                
-                printf "\n%b\n" "${C_GREEN}✅ Операция завершена.${C_RESET}"
-                wait_for_enter
-            else
-                echo "❌ Неверный выбор."
-                sleep 1
-            fi
-            ;;
-        [bB]) return ;;
-        *) echo "Не тупи."; sleep 1 ;;
-    esac
-}
-
-menu_remnawave_setup() {
-    while true; do
-        clear
-        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-        printf "%b\n" "${C_CYAN}║           💿 УСТАНОВКА REMNAWAVE (ВЫБОР КОМПОНЕНТА)          ║${C_RESET}"
-        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-        echo ""
-        echo "Что ставим, босс?"
-        echo ""
-        echo "   [1] 🎛️  ПАНЕЛЬ УПРАВЛЕНИЯ (Backend + Frontend)"
-        echo "       -> Ставить на мощный/основной сервер."
-        echo ""
-        echo "   [2] 📡 БОЕВАЯ НОДА (Xray + Nginx)"
-        echo "       -> Ставить на чистый сервер для раздачи VPN."
-        echo ""
-        echo "   [b] 🔙 Назад"
-        echo "------------------------------------------------------"
-        
-        local choice
-        read -r -p "Выбор: " choice
-        
-        case $choice in
-            1) run_module "install_panel.sh"; return ;; # Возврат после установки
-            2) install_node_logic; return ;;            # Возврат после установки
-            [bB]) break ;;
-            *) ;;
         esac
     done
 }
@@ -2374,7 +2306,7 @@ show_menu() {
             1) menu_service;;
             2) menu_logs;;
             3) menu_docker;;
-            4) menu_remnawave_setup;;
+            4) run_module "install_panel.sh";;
             5) echo "Бот скоро подъедет."; wait_for_enter ;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;

@@ -87,13 +87,44 @@ _get_disk_visual() {
     echo "$disk_type|$bar ($usage_stats)"
 }
 
+# Скорость линка (если удаётся вытащить аккуратно)
+_get_port_speed() {
+    local iface; iface=$(ip route | grep default | head -n1 | awk '{print $5}')
+    local speed=""
+
+    if [ -n "$iface" ] && [ -f "/sys/class/net/$iface/speed" ]; then
+        local raw; raw=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
+        if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -gt 0 ]; then
+            speed="${raw}Mbps"
+        fi
+    fi
+
+    if [ -z "$speed" ] && command -v ethtool &>/dev/null && [ -n "$iface" ]; then
+        speed=$(ethtool "$iface" 2>/dev/null | grep "Speed:" | awk '{print $2}')
+    fi
+
+    if [[ -z "$speed" ]] || [[ "$speed" == "Unknown!" ]]; then
+        return
+    fi
+
+    if [ "$speed" == "1000Mbps" ];  then speed="1 Gbps";  fi
+    if [ "$speed" == "10000Mbps" ]; then speed="10 Gbps"; fi
+    if [ "$speed" == "2500Mbps" ];  then speed="2.5 Gbps"; fi
+
+    echo "$speed"
+}
+
 # ============================================================ #
 #                  ГЛАВНАЯ ФУНКЦИЯ ОТРИСОВКИ                   #
 # ============================================================ #
 show() {
     clear
-    # ... (весь блок сбора данных и отрисовки секций "Система", "Железо", "Статус")
-    # ЭТА ЧАСТЬ ТОЖЕ НЕ МЕНЯЕТСЯ, КОПИРУЙ КАК БЫЛА
+
+    # Обновляем картину мира Remnawave/бота перед отрисовкой панели
+    # (модуль state_scanner портирован из старого монолита)
+    if command -v run_module &>/dev/null; then
+        run_module state_scanner scan_remnawave_state
+    fi
 
     # --- Сбор данных ---
     local os_ver=$(_get_os_ver); local kernel=$(_get_kernel)
@@ -104,6 +135,15 @@ show() {
     local cpu_info=$(_get_cpu_info_clean); local cpu_load_viz=$(_get_cpu_load_visual)
     local ram_viz=$(_get_ram_visual)
     local disk_raw=$(_get_disk_visual); local disk_type=$(echo "$disk_raw" | cut -d'|' -f1); local disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
+    local port_speed; port_speed=$(_get_port_speed)
+
+    # Вместимость / канал (если когда-то гоняли speedtest)
+    local saved_speed; saved_speed=$(get_config_var "LAST_UPLOAD_SPEED")
+    local capacity_display=""
+    if [[ -n "$saved_speed" ]]; then
+        # Сохраняем уже готовую строку, чтобы не дёргать железо лишний раз
+        capacity_display=$(get_config_var "LAST_VPN_CAPACITY")
+    fi
 
     # --- Заголовок ---
     if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
@@ -129,15 +169,46 @@ show() {
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "CPU Модель" "${C_WHITE}" "$cpu_info" "${C_RESET}"
     printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Загрузка CPU" "$cpu_load_viz"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Память (RAM)" "$ram_viz"
+    printf "║ %b%-*s${CRESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Память (RAM)" "$ram_viz"
     printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Диск (${disk_type})" "$disk_viz"
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- Секция "Статус" ---
     printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_YELLOW}" "сканирование..." "${C_RESET}"
-    
+
+    # Remnawave / Нода / Бот (данные даёт state_scanner)
+    if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
+        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
+        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Версии" "${C_WHITE}" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}" "${C_RESET}"
+    elif [[ "$SERVER_TYPE" == "Панель" ]]; then
+        printf "║ %b%-*s${CRESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${PANEL_VERSION}"
+    elif [[ "$SERVER_TYPE" == "Нода" ]]; then
+        printf "║ %b%-*s${CRESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${NODE_VERSION}"
+    elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
+        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
+    else
+        printf "║ %b%-*s${CRESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
+    fi
+
+    if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
+        printf "║ %b%-*s${CRESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${BOT_VERSION}"
+    fi
+
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Web-Server" "${C_CYAN}" "$WEB_SERVER" "${C_RESET}"
+    fi
+
+    if [[ -n "$port_speed" ]]; then
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Канал (Link)" "${C_BOLD}" "$port_speed" "${C_RESET}"
+    fi
+
+    # Если есть сохранённая вместимость — покажем её, чтобы боссу было приятно
+    if [[ -n "$capacity_display" ]]; then
+        printf "║ %b%-*s${C_RESET} : %b%s%b юзеров\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Вместимость" "${C_GREEN}" "$capacity_display" "${C_RESET}"
+    fi
+
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
 
     # ======================================================= #
     # === НОВЫЙ БЛОК: ДИНАМИЧЕСКИЕ ВИДЖЕТЫ С ПЕРЕКЛЮЧАТЕЛЕМ = #

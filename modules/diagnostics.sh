@@ -33,6 +33,11 @@ _show_docker_cleanup_menu() {
 # Главное меню модуля диагностики
 show_diagnostics_menu() {
     while true; do
+        # Перед показом логов обновляем картину мира по Remnawave/боту
+        if command -v run_module &>/dev/null; then
+            run_module state_scanner scan_remnawave_state
+        fi
+
         clear
         printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
         printf "%b\n" "${C_CYAN}║              📜 БЫСТРЫЕ ЛОГИ (ЧЕКНУТЬ, ЧЁ ТАМ)               ║${C_RESET}"
@@ -57,11 +62,33 @@ show_diagnostics_menu() {
         
         local choice; choice=$(safe_read "Какой лог курим?: " "")
         case "$choice" in
-            1) view_logs_realtime "$LOGFILE" "Решалы";;
-            2) if [[ "$SERVER_TYPE" == *"Панель"* ]]; then echo "Функция в разработке"; sleep 1; else printf_error "Нет такого пункта."; fi ;;
-            3) if [[ "$SERVER_TYPE" == *"Нода"* ]]; then echo "Функция в разработке"; sleep 1; else printf_error "Нет такого пункта."; fi ;;
-            4) if [ "${BOT_DETECTED:-0}" -eq 1 ]; then echo "Функция в разработке"; sleep 1; else printf_error "Нет такого пункта."; fi ;;
-            [bB]) break;;
+            1)
+                view_logs_realtime "$LOGFILE" "Решалы"
+                ;;
+            2)
+                if [[ "$SERVER_TYPE" == *"Панель"* ]]; then
+                    view_docker_logs "$PANEL_NODE_PATH" "Панели"
+                else
+                    printf_error "Панели нет, логов нет."
+                fi
+                ;;
+            3)
+                if [[ "$SERVER_TYPE" == *"Нода"* ]]; then
+                    view_docker_logs "$PANEL_NODE_PATH" "Ноды"
+                else
+                    printf_error "Ноды нет, логов нет."
+                fi
+                ;;
+            4)
+                if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
+                    view_docker_logs "${BOT_PATH}/docker-compose.yml" "Бота"
+                else
+                    printf_error "Бота нет, ты ошибся."
+                fi
+                ;;
+            [bB])
+                break
+                ;;
             *) ;;
         esac
     done
