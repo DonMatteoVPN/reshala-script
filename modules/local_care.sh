@@ -30,12 +30,14 @@ _apply_bbr() {
     echo "Алгоритм: $current_cc"; echo "Планировщик: $current_qdisc"
     echo "------------------------------------"
     if [[ ("$current_cc" == "bbr" || "$current_cc" == "bbr2") && "$current_qdisc" == "cake" ]]; then
-        printf_ok "Ты уже на максимальном форсаже. Не мешай машине работать."; wait_for_enter; return
+        printf_ok "Ты уже на максимальном форсаже. Не мешай машине работать."
+        wait_for_enter
+        return
     fi
     read -p "Хочешь включить максимальный форсаж (BBR + CAKE)? (y/n): " confirm
     if [[ "$confirm" != "y" ]]; then echo "Как скажешь."; return; fi
 
-    local preferred_cc="bbr"; [[ $(sysctl net.ipv4.tcp_available_congestion_control) == *"bbr2"* ]] && preferred_cc="bbr2"
+    local preferred_cc="bbr"; [[ $(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null) == *"bbr2"* ]] && preferred_cc="bbr2"
     local preferred_qdisc="fq"; [[ "$cake_available" == "true" ]] && preferred_qdisc="cake"
     
     local CONFIG_SYSCTL="/etc/sysctl.d/99-reshala-boost.conf"
@@ -52,17 +54,20 @@ net.ipv4.tcp_wmem=4096 65536 16777216
 EOF
     printf_info "🔥 Применяю настройки..."
     run_cmd sysctl -p "$CONFIG_SYSCTL" >/dev/null
-    printf_ok "Твоя тачка теперь — ракета. (CC: ${preferred_cc}, QDisc: ${preferred_qdisc})"; wait_for_enter
+    printf_ok "Твоя тачка теперь — ракета. (CC: ${preferred_cc}, QDisc: ${preferred_qdisc})"
+    wait_for_enter
+}
+
+# Отдельная функция, которая ТОЛЬКО возвращает статус для дашборда
+_get_ipv6_status_string() {
+    if [[ ! -d "/proc/sys/net/ipv6" ]]; then echo "${C_RED}ВЫРЕЗАН${C_RESET}"
+    elif [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" -eq 1 ]]; then echo "${C_RED}КАСТРИРОВАН${C_RESET}"
+    else echo "${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi
 }
 
 _toggle_ipv6() {
-    _check_ipv6_status() {
-        if [[ ! -d "/proc/sys/net/ipv6" ]]; then printf "%b" "${C_RED}ВЫРЕЗАН ПРОВАЙДЕРОМ${C_RESET}"
-        elif [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" -eq 1 ]]; then printf "%b" "${C_RED}КАСТРИРОВАН${C_RESET}"
-        else printf "%b" "${C_GREEN}ВКЛЮЧЁН${C_RESET}"; fi
-    }
     while true; do
-        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; printf "Статус IPv6: %b\n" "$(_check_ipv6_status)"
+        clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; printf "Статус IPv6: %b\n" "$(_get_ipv6_status_string)"
         echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад"
         local choice; read -r -p "Твой выбор: " choice
         case "$choice" in

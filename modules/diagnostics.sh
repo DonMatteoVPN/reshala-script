@@ -30,23 +30,39 @@ _show_docker_cleanup_menu() {
     done
 }
 
+# Главное меню модуля диагностики
 show_diagnostics_menu() {
     while true; do
         clear
         printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-        printf "%b\n" "${C_CYAN}║              📜 ДИАГНОСТИКА И ЛОГИ (ЧЕК-АП)                 ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}║              📜 БЫСТРЫЕ ЛОГИ (ЧЕКНУТЬ, ЧЁ ТАМ)               ║${C_RESET}"
         printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-        echo ""; 
-        echo "   [1] 📜 Посмотреть журнал «Решалы»"; 
-        echo "   [2] 🐳 Управление Docker (Очистка)"; 
-        echo ""; 
-        echo "   [b] 🔙 Назад в главное меню"; 
+        echo ""
+        echo "   [1] 📒 Журнал самого «Решалы»"
+        
+        # Динамически добавляем кнопки в зависимости от того, что найдено сканером
+        if [[ "$SERVER_TYPE" == *"Панель"* ]]; then
+             echo "   [2] 📊 Логи Панели (Backend)"
+        fi
+        if [[ "$SERVER_TYPE" == *"Нода"* ]]; then
+             echo "   [3] 📡 Логи Ноды (Xray)"
+        fi
+        if [ "${BOT_DETECTED:-0}" -eq 1 ]; then 
+            echo "   [4] 🤖 Логи Бота (Bedalaga)"
+        fi
+        
+        echo ""
+        echo "   [b] 🔙 Назад в главное меню"
         echo "------------------------------------------------------"
-        local choice; choice=$(safe_read "Твой выбор: " "")
+        
+        local choice; choice=$(safe_read "Какой лог курим?: " "")
         case "$choice" in
-            1) view_logs_realtime "$LOGFILE" "Решалы" ;;
-            2) _show_docker_cleanup_menu ;;
-            [bB]) break ;;
+            1) view_logs_realtime "$LOGFILE" "Решалы";;
+            2) if [[ "$SERVER_TYPE" == *"Панель"* ]]; then echo "Функция в разработке"; sleep 1; else printf_error "Нет такого пункта."; fi ;;
+            3) if [[ "$SERVER_TYPE" == *"Нода"* ]]; then echo "Функция в разработке"; sleep 1; else printf_error "Нет такого пункта."; fi ;;
+            4) if [ "${BOT_DETECTED:-0}" -eq 1 ]; then echo "Функция в разработке"; sleep 1; else printf_error "Нет такого пункта."; fi ;;
+            [bB]) break;;
+            *) ;;
         esac
     done
 }
