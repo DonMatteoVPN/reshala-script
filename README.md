@@ -63,21 +63,21 @@
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install.sh && sudo bash install.sh
 ```
-*Или, если ты уже под `root`'ом, как в твоём примере:*
+*Или, если ты уже под `root`'ом:*
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/install.sh && bash install.sh
 ```
 
-### Ветка разработчика (Dev) — тут тестовая версия ⚠️ **ОПАСНО ДЛЯ ПРОДАКШЕНА**:
+### Ветка разработчика (Dev) — тут тестовая версия 
+⚠️ **ОПАСНО ДЛЯ ПРОДАКШЕНА**:
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/install.sh && sudo bash install.sh
 ```
-*Или, если ты уже под `root`'ом, как в твоём примере:*
+*Или, если ты уже под `root`'ом:*
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/dev/install.sh && bash install.sh
 ```
 
-⚠️ **ВАЖНО:** После установки **ПЕРЕПОДКЛЮЧИСЬ** к серверу (закрой и открой SSH), чтобы команда заработала.
 
 ---
 
