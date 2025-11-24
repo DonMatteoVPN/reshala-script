@@ -76,11 +76,17 @@ install_script() {
 }
 
 uninstall_script() {
-    printf_warning "Точно хочешь выгнать Решалу?"; read -p "(y/n): " confirm
+    printf_warning "Точно хочешь выгнать Решалу НАХУЙ? УДАЛЮТСЯ ВСЕ УЕГО ФАЙЛЫ!"; read -p "(y/n): " confirm
     if [[ "$confirm" != "y" ]]; then echo "Правильное решение."; return; fi
-    printf_info "Начинаю самоликвидацию..."; run_cmd rm -f "$INSTALL_PATH"; run_cmd rm -rf "/opt/reshala"
+    printf_info "Начинаю самоликвидацию..."
+    run_cmd rm -f "$INSTALL_PATH"
+    run_cmd rm -rf "/opt/reshala"
+    # Сносим лог и базу флота, если есть
+    if [ -n "${LOGFILE:-}" ]; then run_cmd rm -f "$LOGFILE" 2>/dev/null || true; fi
+    if [ -n "${FLEET_DATABASE_FILE:-}" ]; then run_cmd rm -f "$FLEET_DATABASE_FILE" 2>/dev/null || true; fi
     if [ -f "/root/.bashrc" ]; then run_cmd sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; fi
-    printf_ok "Самоликвидация завершена. Переподключись к серверу."; exit 0
+    printf_ok "Самоликвидация завершена. Переподключись к серверу."
+    exit 0
 }
 
 check_for_updates() {

@@ -62,6 +62,11 @@ _deploy_key_to_host() {
 
 # Меню для просмотра ключей (портировано из старого монолита)
 _show_keys_menu() {
+    # Мягкий trap: CTRL+C возвращает в предыдущее меню, а не убивает всё
+    local old_trap
+    old_trap=$(trap -p INT)
+    trap 'echo; printf_error "Отмена. Возвращаюсь назад."; return' INT
+
     while true; do
         clear
         printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
@@ -104,7 +109,7 @@ _show_keys_menu() {
             break
         fi
 
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${keys[$choice]}" ]; then
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${keys[$choice]:-}" ]; then
             IFS='|' read -r k_path k_desc <<< "${keys[$choice]}"
 
             echo ""
@@ -131,8 +136,18 @@ _show_keys_menu() {
                 read -p "Нажми Enter, чтобы СКРЫТЬ и очистить экран..."
                 clear
             fi
+        else
+            printf_error "Такого варианта нет. Смотри, что вводишь, босс."
+            sleep 1
         fi
     done
+
+    # Восстанавливаем старый trap на CTRL+C
+    if [ -n "$old_trap" ]; then
+        eval "$old_trap"
+    else
+        trap - INT
+    fi
 }
 
 # ============================================================ #
@@ -197,6 +212,11 @@ _run_fleet_command() {
 # ============================================================ #
 show_fleet_menu() {
     touch "$FLEET_DATABASE_FILE"
+
+    # CTRL+C в этом меню = "отмена" и возврат в главное
+    local old_trap
+    old_trap=$(trap -p INT)
+    trap 'echo; printf_error "Отмена. Возвращаюсь в главное меню."; break' INT
 
     while true; do
         _sanitize_fleet_database
@@ -338,7 +358,8 @@ show_fleet_menu() {
                     
                     if [[ -z "$remote_ver" || "$remote_ver" == "NONE" || "$remote_ver" != "$VERSION" ]]; then
                         printf "%b\n" "${C_YELLOW}Требуется установка/обновление агента...${C_RESET}"
-                        local install_cmd="wget -q -O /tmp/r_inst.sh ${SCRIPT_URL_RAW} && sudo bash /tmp/r_inst.sh install && rm /tmp/r_inst.sh"
+                        # Ставим агента через полноценный install.sh, а не голый reshala.sh
+                        local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} && sudo bash /tmp/reshala_install.sh && rm /tmp/reshala_install.sh"
                         if ! run_remote "$install_cmd"; then
                            printf_error "Не удалось установить/обновить агента. Вход невозможен."
                            continue
@@ -368,4 +389,11 @@ show_fleet_menu() {
                 ;;
         esac
     done
+
+    # Восстанавливаем trap
+    if [ -n "$old_trap" ]; then
+        eval "$old_trap"
+    else
+        trap - INT
+    fi
 }

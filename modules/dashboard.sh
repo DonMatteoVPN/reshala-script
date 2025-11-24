@@ -55,6 +55,10 @@ _get_cpu_load_visual() {
     local cores; cores=$(nproc)
     local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | xargs)
     local perc; perc=$(awk "BEGIN {printf \"%.0f\", ($load / $cores) * 100}")
+    # Не даём процентажу улетать за 100, чтобы не пугать босса
+    if [[ "$perc" -gt 100 ]]; then
+        perc=100
+    fi
     local bar; bar=$(_draw_bar "$perc")
     echo "$bar ($load / $cores vCore)"
 }
@@ -120,6 +124,14 @@ _get_port_speed() {
 show() {
     clear
 
+    # Чтобы конфиг, даже если он поехал, не ломал всю отрисовку
+    local label_width="${DASHBOARD_LABEL_WIDTH:-16}"
+    # Оставляем только цифры в начале, остальное отбрасываем
+    label_width="${label_width%%[^0-9]*}"
+    if [[ -z "$label_width" ]]; then
+        label_width=16
+    fi
+
     # Обновляем картину мира Remnawave/бота перед отрисовкой панели
     # (модуль state_scanner портирован из старого монолита)
     if command -v run_module &>/dev/null; then
@@ -157,20 +169,20 @@ show() {
 
     # --- Секция "Система" ---
     printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s (%s)%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "ОС / Ядро" "${C_WHITE}" "$os_ver" "$kernel" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s (Юзеров: %s)%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Аптайм" "${C_WHITE}" "$uptime" "$users_online" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Виртуализация" "${C_CYAN}" "$virt" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b (%s) [%b%s%b]\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "IP Адрес" "${C_YELLOW}" "$ip_addr" "${C_RESET}" "$ping" "${C_CYAN}" "$location" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Хостер" "${C_CYAN}" "$hoster_info" "${C_RESET}"
+    printf "║ %b%-*s${C_RESET} : %b%s (%s)%b\n" "${C_GRAY}" "$label_width" "ОС / Ядро" "${C_WHITE}" "$os_ver" "$kernel" "${C_RESET}"
+    printf "║ %b%-*s${C_RESET} : %b%s (Юзеров: %s)%b\n" "${C_GRAY}" "$label_width" "Аптайм" "${C_WHITE}" "$uptime" "$users_online" "${C_RESET}"
+    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Виртуализация" "${C_CYAN}" "$virt" "${C_RESET}"
+    printf "║ %b%-*s${C_RESET} : %b%s%b (%s) [%b%s%b]\n" "${C_GRAY}" "$label_width" "IP Адрес" "${C_YELLOW}" "$ip_addr" "${C_RESET}" "$ping" "${C_CYAN}" "$location" "${C_RESET}"
+    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Хостер" "${C_CYAN}" "$hoster_info" "${C_RESET}"
     
     printf "%b\n" "${C_CYAN}║${C_RESET}"
 
     # --- Секция "Железо" ---
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "CPU Модель" "${C_WHITE}" "$cpu_info" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Загрузка CPU" "$cpu_load_viz"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Память (RAM)" "$ram_viz"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Диск (${disk_type})" "$disk_viz"
+    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "CPU Модель" "${C_WHITE}" "$cpu_info" "${C_RESET}"
+    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "$label_width" "Загрузка CPU" "$cpu_load_viz"
+    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "$label_width" "Память (RAM)" "$ram_viz"
+    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "$label_width" "Диск (${disk_type})" "$disk_viz"
  
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
@@ -179,33 +191,33 @@ show() {
  
     # Remnawave / Нода / Бот (данные даёт state_scanner)
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Версии" "${C_WHITE}" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Версии" "${C_WHITE}" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}" "${C_RESET}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${PANEL_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${PANEL_VERSION}"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${NODE_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${NODE_VERSION}"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
     else
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
     fi
- 
+
     if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${BOT_VERSION}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b (v%s)\n" "${C_GRAY}" "$label_width" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${BOT_VERSION}"
     fi
 
     if [[ "$WEB_SERVER" != "Не определён" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Web-Server" "${C_CYAN}" "$WEB_SERVER" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Web-Server" "${C_CYAN}" "$WEB_SERVER" "${C_RESET}"
     fi
 
     if [[ -n "$port_speed" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Канал (Link)" "${C_BOLD}" "$port_speed" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Канал (Link)" "${C_BOLD}" "$port_speed" "${C_RESET}"
     fi
 
     # Если есть сохранённая вместимость — покажем её, чтобы боссу было приятно
     if [[ -n "$capacity_display" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b юзеров\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "Вместимость" "${C_GREEN}" "$capacity_display" "${C_RESET}"
+        printf "║ %b%-*s${C_RESET} : %b%s%b юзеров\n" "${C_GRAY}" "$label_width" "Вместимость" "${C_GREEN}" "$capacity_display" "${C_RESET}"
     fi
 
     printf "%b\n" "${C_CYAN}║${C_RESET}"
@@ -238,7 +250,7 @@ show() {
                     while IFS= read -r line; do
                         local label; label=$(echo "$line" | cut -d':' -f1 | xargs)
                         local value; value=$(echo "$line" | cut -d':' -f2- | xargs)
-                        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "${DASHBOARD_LABEL_WIDTH}" "$label" "${C_CYAN}" "$value" "${C_RESET}"
+                        printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "$label" "${C_CYAN}" "$value" "${C_RESET}"
                     done <<< "$widget_output"
                 fi
             fi

@@ -30,6 +30,139 @@ _show_docker_cleanup_menu() {
     done
 }
 
+# Дополнительные меню управления Docker
+_show_docker_containers_menu() {
+    while true; do
+        clear
+        echo "--- DOCKER: КОНТЕЙНЕРЫ ---"
+        echo "----------------------------------------"
+        echo "   1. 📦 Список контейнеров (docker ps -a)"
+        echo "   2. 📜 Логи контейнера (docker logs)"
+        echo "   3. ▶️ Старт / ⏹ Стоп / 🔁 Рестарт контейнера"
+        echo "   4. 🗑️ Удалить контейнер (stop + rm)"
+        echo "   b. Назад"
+        echo "----------------------------------------"
+        local choice; read -r -p "Твой выбор: " choice || continue
+        case "$choice" in
+            1) echo; docker ps -a; wait_for_enter ;;
+            2)
+                local name; name=$(safe_read "Имя/ID контейнера для логов: " "")
+                if [[ -n "$name" ]]; then
+                    echo "--- ЛОГИ $name (CTRL+C, чтобы выйти) ---"
+                    docker logs -f "$name" || printf_error "Контейнер '$name' не найден."
+                fi
+                ;;
+            3)
+                local name; name=$(safe_read "Имя/ID контейнера: " "")
+                if [[ -z "$name" ]]; then continue; fi
+                echo "   1) Старт  2) Стоп  3) Рестарт"
+                local act; act=$(safe_read "Действие: " "1")
+                case "$act" in
+                    1) docker start "$name" || printf_error "Не удалось стартануть '$name'" ;;
+                    2) docker stop "$name" || printf_error "Не удалось остановить '$name'" ;;
+                    3) docker restart "$name" || printf_error "Не удалось перезапустить '$name'" ;;
+                    *) printf_error "Нет такого действия. Смори, что жмёшь." ;;
+                esac
+                wait_for_enter
+                ;;
+            4)
+                local name; name=$(safe_read "Имя/ID контейнера для удаления: " "")
+                if [[ -z "$name" ]]; then continue; fi
+                read -p "Точно снести '$name'? (y/n): " c
+                if [[ "$c" == "y" ]]; then
+                    docker stop "$name" 2>/dev/null || true
+                    docker rm "$name" || printf_error "Не удалось удалить '$name'"
+                fi
+                wait_for_enter
+                ;;
+            [bB]) break ;;
+            *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;
+        esac
+    done
+}
+
+_show_docker_networks_menu() {
+    while true; do
+        clear
+        echo "--- DOCKER: СЕТИ ---"
+        echo "----------------------------------------"
+        echo "   1. 🌐 Список сетей (docker network ls)"
+        echo "   2. 🔍 Информация по сети (docker network inspect)"
+        echo "   b. Назад"
+        echo "----------------------------------------"
+        local choice; read -r -p "Твой выбор: " choice || continue
+        case "$choice" in
+            1) echo; docker network ls; wait_for_enter ;;
+            2)
+                local net; net=$(safe_read "Имя/ID сети: " "")
+                [[ -n "$net" ]] && docker network inspect "$net" || printf_error "Сеть '$net' не найдена."
+                wait_for_enter
+                ;;
+            [bB]) break ;;
+            *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;
+        esac
+    done
+}
+
+_show_docker_volumes_menu() {
+    while true; do
+        clear
+        echo "--- DOCKER: ТОМA ---"
+        echo "----------------------------------------"
+        echo "   1. 📦 Список томов (docker volume ls)"
+        echo "   2. 🔍 Информация по тому (docker volume inspect)"
+        echo "   3. 🗑️ Удалить том"
+        echo "   b. Назад"
+        echo "----------------------------------------"
+        local choice; read -r -p "Твой выбор: " choice || continue
+        case "$choice" in
+            1) echo; docker volume ls; wait_for_enter ;;
+            2)
+                local vol; vol=$(safe_read "Имя тома: " "")
+                [[ -n "$vol" ]] && docker volume inspect "$vol" || printf_error "Том '$vol' не найден."
+                wait_for_enter
+                ;;
+            3)
+                local vol; vol=$(safe_read "Имя тома для удаления: " "")
+                if [[ -z "$vol" ]]; then continue; fi
+                read -p "Точно снести том '$vol'? (y/n): " c
+                if [[ "$c" == "y" ]]; then
+                    docker volume rm "$vol" || printf_error "Не удалось удалить том '$vol'"
+                fi
+                wait_for_enter
+                ;;
+            [bB]) break ;;
+            *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;
+        esac
+    done
+}
+
+show_docker_menu() {
+    while true; do
+        clear
+        printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║                 🐳 УПРАВЛЕНИЕ DOCKER                        ║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo ""
+        echo "   [1] 🧹 Очистка мусора (образы, кэш, тома)"
+        echo "   [2] 📦 Контейнеры (список, логи, управление)"
+        echo "   [3] 🌐 Сети Docker"
+        echo "   [4] 💽 Томa Docker"
+        echo ""
+        echo "   [b] 🔙 Назад"
+        echo "------------------------------------------------------"
+        local choice; choice=$(safe_read "Твой выбор: " "")
+        case "$choice" in
+            1) _show_docker_cleanup_menu ;;
+            2) _show_docker_containers_menu ;;
+            3) _show_docker_networks_menu ;;
+            4) _show_docker_volumes_menu ;;
+            [bB]) break ;;
+            *) printf_error "Нет такого пункта. Смотри в меню, босс."; sleep 1 ;;
+        esac
+    done
+}
+
 # Главное меню модуля диагностики
 show_diagnostics_menu() {
     while true; do

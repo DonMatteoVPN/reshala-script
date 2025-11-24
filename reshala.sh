@@ -122,7 +122,7 @@ show_main_menu() {
             0) if [ "${SKYNET_MODE:-0}" -ne 1 ]; then run_module skynet show_fleet_menu; else printf_error "Ты уже в матрице."; fi ;;
             1) run_module local_care show_maintenance_menu ;;
             2) run_module diagnostics show_diagnostics_menu ;;
-            3) run_module diagnostics _show_docker_cleanup_menu ;; # Правильный вызов
+            3) run_module diagnostics show_docker_menu ;; # Теперь отдельное докер-меню
             4) printf_warning "Модуль установки панели в разработке." && sleep 2 ;;
             5) printf_warning "Модуль установки бота в разработке." && sleep 2 ;;
             w|W) run_module widget_manager show_widgets_menu ;; # НАША НОВАЯ ФИЧА
