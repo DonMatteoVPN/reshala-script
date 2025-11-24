@@ -89,10 +89,36 @@ uninstall_script() {
     exit 0
 }
 
+# Нормализация версии: убираем префикс v/V
+_self_update_normalize_version() {
+    echo "$1" | sed 's/^[vV]//' 2>/dev/null
+}
+
+# Возвращает 0 (успех), если remote > local в терминах sort -V
+_self_update_is_remote_newer() {
+    local local_v remote_v
+    local_v=$(_self_update_normalize_version "$1")
+    remote_v=$(_self_update_normalize_version "$2")
+
+    # Если одинаковые после нормализации — обновления нет
+    if [[ "$local_v" == "$remote_v" ]]; then
+        return 1
+    fi
+
+    # sort -V отсортирует версии по возрастанию; берём последнюю
+    local top
+    top=$(printf '%s\n%s\n' "$local_v" "$remote_v" | sort -V | tail -n1)
+    if [[ "$top" == "$remote_v" ]]; then
+        return 0
+    fi
+    return 1
+}
+
 check_for_updates() {
     local remote_version_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/reshala.sh?cachebuster=$(date +%s)"
     local remote_ver; remote_ver=$(curl -s -L --connect-timeout 5 "$remote_version_url" | grep 'readonly VERSION=' | cut -d'"' -f2)
-    if [[ -n "$remote_ver" && "$remote_ver" != "$VERSION" ]]; then
+
+    if [[ -n "$remote_ver" ]] && _self_update_is_remote_newer "$VERSION" "$remote_ver"; then
         UPDATE_AVAILABLE=1; LATEST_VERSION="$remote_ver"
     else
         UPDATE_AVAILABLE=0; LATEST_VERSION=""
