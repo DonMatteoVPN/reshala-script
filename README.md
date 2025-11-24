@@ -80,7 +80,11 @@ wget -O install.sh https://raw.githubusercontent.com/DonMatteoVPN/reshala-script
 ```bash
 sudo reshala
 ```
-
+**На сервере, где произошла ошибка, удали следы неудачной установки:**
+    ```bash
+    rm -rf /opt/reshala
+    rm /usr/local/bin/reshala
+    ```
 *Если пишет "command not found" или ты на совсем голом Debian:*
 ```bash
 apt update && apt install -y sudo && sudo reshala
