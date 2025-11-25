@@ -1,6 +1,6 @@
 <p align="right"><a href="README.md">🇷🇺 RU</a> | 🇺🇸 EN</p>
 
-# Reshala Tool 🚀 v2.44x (Skynet + Widgets)
+# Reshala Tool 🚀 v2.0x (Skynet + Widgets)
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
 
