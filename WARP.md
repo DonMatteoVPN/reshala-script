@@ -338,6 +338,7 @@ If you are an AI agent picking up work on this repo, start by reading:
 - `modules/common.sh` (colors, helpers, menu_header, logging).
 - `modules/dashboard.sh` + `plugins/dashboard_widgets/*` (current widget implementation).
 - `modules/diagnostics.sh` (especially Docker sections) and `modules/local_care.sh` (maintenance flows).
+- `GUIDE_MODULES.md` (this repo) for a step-by-step guide on creating and integrating new modules.
 
 Then consult this Agent journal to understand the latest UX and behavior decisions before making changes.
 
