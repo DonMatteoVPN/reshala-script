@@ -199,3 +199,130 @@ This repo is designed to be extended primarily through plugins rather than modif
     - `02_update_system.sh` – runs `apt-get update && apt-get upgrade -y` on Debian‑based servers.
 
 When adding new behavior, prefer creating a new module under `modules/` (invoked via `run_module`) or a new plugin script under the appropriate `plugins/` subdirectory, and wire any persistent config through `config/reshala.conf` using the existing helpers.
+
+## Agent journal (recent changes & context)
+
+This section is a running log for AI agents (e.g., WARP assistants) so they immediately understand the current shape of the project and where work last stopped.
+
+### High-level purpose of the project
+
+- "Решала" is a Bash-based TUI framework for managing single Linux servers and fleets of servers (Skynet):
+  - Entry point: `reshala.sh`.
+  - Targets Debian/Ubuntu servers, assumes root privileges.
+  - Combines: system dashboard, maintenance tasks, Docker management, Remnawave panel/node detection, and Skynet remote control.
+
+### Recent work on dashboard & widgets (late 2025)
+
+**Goal:** make the main dashboard fast, informative, and extensible via widgets, without hanging the UI.
+
+- Dashboard core (`modules/dashboard.sh`):
+  - Uses a small TTL-based cache for heavy system metrics (`DASHBOARD_CACHE_TTL`, default 3s) to avoid recomputing on every menu refresh.
+  - Introduced a dedicated widget cache directory `WIDGET_CACHE_DIR=/tmp/reshala_widgets_cache` with its own TTL (`DASHBOARD_WIDGET_CACHE_TTL`, configured in `config/reshala.conf`, currently 60s).
+  - Widget cache behaviour:
+    - On render, dashboard **always** uses the latest cache file for each widget if it exists (so the UI never shows an empty line due to slow APIs).
+    - If a cache file is older than `DASHBOARD_WIDGET_CACHE_TTL`, a background job is spawned to rebuild it without blocking the UI.
+    - If a widget has no cache yet, the dashboard displays a placeholder like `"<TITLE> : загрузка..."` and kicks off background generation.
+  - Widget output rendering:
+    - Every line passes through normalization: strip `\r`, skip empty lines, split on the first `:`, trim whitespace.
+    - Labels are aligned using the same `label_width` logic as core dashboard rows, so `WIDGETS` visually matches `СИСТЕМА` / `ЖЕЛЕЗО` / `STATUS`.
+
+- Widget scripts (all under `plugins/dashboard_widgets/`):
+  - **01_crypto_price.sh** – BTC price widget:
+    - Uses CoinGecko `simple/price` API with `curl` + `jq` and prints: `Курс BTC       : $<price>`.
+    - Robust to missing `curl`/`jq` or API failures (prints human-friendly error label instead of crashing).
+  - **02_load_short.sh** – repurposed as *Docker mini-overview*:
+    - Counts total/running/restarting/exited containers and prints: `Docker        : всего N, живых M, рестартится R, мёртвых E`.
+    - Old "Пульс сервера" output has been removed from this script.
+  - **03_online_users.sh** – "Сетевой движ (TCP)":
+    - Counts active TCP connections in ESTABLISHED state using `ss` or `netstat`.
+    - Prints: `TCP-сессии    : <N> активных`.
+  - **04_root_disk.sh** – "Настроение сервера":
+    - Mixes uptime and relative CPU load per core to produce a human description ("новенький", "пинает балду", "пыхтит изо всех сил", etc.).
+    - Prints a single line: `Настроение     : <text> (аптайм: ..., load: .../cores)`.
+
+- Widget manager (`modules/widget_manager.sh`):
+  - Now also documents its purpose at the top of the file.
+  - Uses the shared `menu_header` helper (see below) to render a consistent header.
+  - Adds explanations at the top of the menu about what the widget manager does.
+  - New helper `_clear_widget_cache`:
+    - Implements safe cache cleanup: `rm -rf /tmp/reshala_widgets_cache/*` wrapped with messaging.
+  - New key `[c]` in the widget menu:
+    - "🧹 Очистить кеш виджетов (обновить данные дашборда)".
+    - Clears widget cache and informs the user that the dashboard will rebuild data on the next draw.
+
+**Status:**
+- Widget rendering, caching, and toggling are stable and non-blocking.
+- If you see stale/malformed widget data, first check `/tmp/reshala_widgets_cache` and the corresponding `.sh` in `plugins/dashboard_widgets`.
+
+### Recent work on Docker diagnostics module
+
+**Goal:** make Docker management menus predictable, safe, and non-blocking.
+
+- Container selection helpers in `modules/diagnostics.sh`:
+  - `_docker_select_container`, `_docker_select_network`, `_docker_select_volume`, `_docker_select_image`:
+    - All use a consistent pattern:
+      - Query `docker` (`ps -a`, `network ls`, `volume ls`, `images`) and build an indexed list.
+      - **Print the list to STDERR**, not STDOUT, so capturing via `$(...)` returns **only the selected name**, not the menu.
+      - Prompt the user to "Выбери номер ..." and validate the selection.
+      - Echo the chosen name to STDOUT for use in subsequent commands.
+    - This fixed bugs where the variable contained both the menu and the name, leading to broken docker commands and weird prompts.
+
+- Containers menu (`_show_docker_containers_menu`):
+  - Options:
+    - 1: Full `docker ps -a` listing.
+    - 2: Stream logs of a selected container (`docker logs -f`).
+    - 3: Start/stop/restart a selected container.
+    - 4: Stop+remove a selected container (with confirmation).
+    - 5: `docker inspect` for a selected container.
+    - 6: `docker stats --no-stream` snapshot for a selected container.
+    - 7: `docker exec -it` into a selected container (tries `bash`, falls back to `sh`).
+  - Selection flows now **always** show a numbered list first and only then prompt for the container number.
+
+- Docker images / networks / volumes menus:
+  - Networks: `_show_docker_networks_menu` with list + inspect for a chosen network.
+  - Volumes: `_show_docker_volumes_menu` with list + inspect + delete (with confirmation).
+  - Images: `_show_docker_images_menu` with list, inspect, delete, and "run ad-hoc container" from an image.
+
+- Non-blocking docker wrapper `_docker_safe`:
+  - Implemented in `modules/diagnostics.sh`:
+    - Wraps `docker` calls with `timeout 10 docker ...` when `timeout` is available, otherwise falls back to raw `docker`.
+  - All **non-interactive** docker calls in menus (ps, ls, inspect, prune, rmi, etc.) now go through `_docker_safe`.
+  - Interactive streams (`docker logs -f`, `docker exec -it`, `docker compose logs -f`) remain unwrapped so the user can stay attached until pressing Ctrl+C/`exit`.
+
+**Status:**
+- Menu flows no longer smear list output into variable values and are robust to slow or partially broken docker daemons.
+- If a menu seems frozen, first verify whether the user is inside a long-running interactive command (logs, exec, speedtest, etc.) rather than the menu loop itself.
+
+### Recent UX/structural helpers
+
+- Shared header helper `menu_header` (in `modules/common.sh`):
+  - Provides a single function to render a framed title block used in multiple menus.
+  - Has been wired into:
+    - `show_maintenance_menu` (local_care).
+    - `show_docker_menu` (diagnostics).
+    - `show_widgets_menu` (widget_manager).
+  - Over time, other menus should migrate to this helper to keep the style uniform.
+
+- Short log/print aliases:
+  - `info`, `ok`, `warn`, `err` are thin wrappers over `printf_info`, `printf_ok`, etc.
+  - Use these for new messaging instead of inventing new printing styles.
+
+### Known rough edges / future work
+
+- Some menus still use inline `printf` blocks for headers instead of `menu_header`.
+  - When touching any menu code, prefer switching to `menu_header "..."` and adding 1–2 explanatory lines under it (what this menu does, any dangers).
+
+- Input handling:
+  - The main menu and most submenus rely on `read -r -p` or `safe_read`.
+  - If users report "нужно много раз нажимать q/цифры", confirm that they are in the intended menu loop (not inside an interactive child process) and that `read` calls are not being shadowed by background jobs or traps.
+
+- Widgets:
+  - All current widgets are intentionally lightweight, but adding more (e.g., top processes, firewall status, SSH bruteforce detector) should continue to respect the widget cache pattern and avoid heavy synchronous work.
+
+If you are an AI agent picking up work on this repo, start by reading:
+- `reshala.sh` (entrypoint + main menu routing).
+- `modules/common.sh` (colors, helpers, menu_header, logging).
+- `modules/dashboard.sh` + `plugins/dashboard_widgets/*` (current widget implementation).
+- `modules/diagnostics.sh` (especially Docker sections) and `modules/local_care.sh` (maintenance flows).
+
+Then consult this Agent journal to understand the latest UX and behavior decisions before making changes.
