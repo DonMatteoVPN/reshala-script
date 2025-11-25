@@ -328,34 +328,79 @@ show() {
     if [ -d "$WIDGETS_DIR" ] && [ -n "$enabled_widgets" ]; then
         local has_visible_widgets=0
         
-    # Проходим по всем файлам в папке виджетов (не требуем +x, запускаем через bash)
-    for widget_file in "$WIDGETS_DIR"/*.sh; do
-        if [ -f "$widget_file" ]; then
-            local widget_name; widget_name=$(basename "$widget_file")
-            
-            # Проверяем, есть ли имя этого виджета в списке включенных
-            if [[ ",$enabled_widgets," == *",$widget_name,"* ]]; then
-                # Если это первый видимый виджет, рисуем заголовок
-                if [ $has_visible_widgets -eq 0 ]; then
-                    printf "%b\n" "${C_CYAN}║${C_RESET}"
-                    printf "%b\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
-                    has_visible_widgets=1
-                fi
+        # Проходим по всем файлам в папке виджетов (не требуем +x, запускаем через bash)
+        for widget_file in "$WIDGETS_DIR"/*.sh; do
+            if [ -f "$widget_file" ]; then
+                local widget_name; widget_name=$(basename "$widget_file")
+                
+                # Проверяем, есть ли имя этого виджета в списке включенных
+                if [[ ",$enabled_widgets," == *",$widget_name,"* ]]; then
+                    # Человеко-читаемый заголовок виджета из # TITLE
+                    local widget_title
+                    widget_title=$(grep -m1 '^# TITLE:' "$widget_file" 2>/dev/null | sed 's/^# TITLE:[[:space:]]*//')
+                    if [[ -z "$widget_title" ]]; then
+                        widget_title="$widget_name"
+                    fi
 
-                local widget_output
-                # Используем уже посчитанный now_ts из начала функции show(),
-                # чтобы не дёргать date каждый раз и немного разгрузить систему.
-                local cache_file="$WIDGET_CACHE_DIR/${widget_name}.cache"
+                    # Если это первый видимый виджет, рисуем заголовок блока
+                    if [ $has_visible_widgets -eq 0 ]; then
+                        printf "%b\n" "${C_CYAN}║${C_RESET}"
+                        printf "%b\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
+                        has_visible_widgets=1
+                    fi
 
-                if [ -f "$cache_file" ] && (( now_ts - $(stat -c %Y "$cache_file" 2>/dev/null || echo 0) < DASHBOARD_WIDGET_CACHE_TTL )); then
-                    widget_output=$(cat "$cache_file" 2>/dev/null || true)
-                else
-                    widget_output=$(bash "$widget_file" 2>/dev/null || true)
-                    printf "%s" "$widget_output" >"$cache_file" 2>/dev/null || true
-                fi
+                    local widget_output=""
+                    local cache_file="$WIDGET_CACHE_DIR/${widget_name}.cache"
+                    local building_flag="$WIDGET_CACHE_DIR/${widget_name}.building"
+
+                    if [ -f "$cache_file" ]; then
+                        # Всегда читаем хоть что-то из кеша, чтобы не было пустоты
+                        widget_output=$(cat "$cache_file" 2>/dev/null || true)
+
+                        # Если кеш протух и в фоне ещё не идёт пересборка — запустим её асинхронно
+                        local mtime; mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+                        if (( now_ts - mtime >= DASHBOARD_WIDGET_CACHE_TTL )) && [ ! -f "$building_flag" ]; then
+                            (
+                                touch "$building_flag" 2>/dev/null || true
+                                bash "$widget_file" >"${cache_file}.tmp" 2>/dev/null || true
+                                mv -f "${cache_file}.tmp" "$cache_file" 2>/dev/null || true
+                                rm -f "$building_flag" 2>/dev/null || true
+                            ) &
+                        fi
+                    else
+                        # Кеша ещё нет: запускаем сборку в фоне и выводим аккуратную заглушку
+                        widget_output="$widget_title : загрузка..."
+                        if [ ! -f "$building_flag" ]; then
+                            (
+                                touch "$building_flag" 2>/dev/null || true
+                                bash "$widget_file" >"${cache_file}.tmp" 2>/dev/null || true
+                                mv -f "${cache_file}.tmp" "$cache_file" 2>/dev/null || true
+                                rm -f "$building_flag" 2>/dev/null || true
+                            ) &
+                        fi
+                    fi
+
+                    # Отрисовываем вывод виджета, пропуская пустые строки
                     while IFS= read -r line; do
-                        local label; label=$(echo "$line" | cut -d':' -f1 | xargs)
-                        local value; value=$(echo "$line" | cut -d':' -f2- | xargs)
+                        # Пропускаем полностью пустые строки, чтобы не плодить "║                    :"
+                        if [[ -z "$line" ]]; then
+                            continue
+                        fi
+
+                        local label value
+                        if [[ "$line" == *:* ]]; then
+                            label=$(echo "$line" | cut -d':' -f1 | xargs)
+                            value=$(echo "$line" | cut -d':' -f2- | xargs)
+                        else
+                            # Если двоеточий нет — считаем, что label = заголовок, value = вся строка
+                            label="$widget_title"
+                            value="$line"
+                        fi
+
+                        if [[ -z "$label" && -z "$value" ]]; then
+                            continue
+                        fi
+
                         printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "$label" "${C_CYAN}" "$value" "${C_RESET}"
                     done <<< "$widget_output"
                 fi

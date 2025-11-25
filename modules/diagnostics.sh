@@ -40,19 +40,21 @@ _docker_select_container() {
         return 1
     fi
 
-    echo ""
-    echo "Список контейнеров (ID / NAME / STATUS):"
-    echo "----------------------------------------"
+    # ВАЖНО: всё, что связано с отображением списка, печатаем в STDERR,
+    # чтобы в переменную через $(...) попало ТОЛЬКО имя контейнера.
+    >&2 echo ""
+    >&2 echo "Список контейнеров (ID / NAME / STATUS):"
+    >&2 echo "----------------------------------------"
     local i=1
     local ids=()
     local names=()
     while IFS='|' read -r id name status; do
-        printf "   [%d] %s  %s  (%s)\n" "$i" "$id" "$name" "$status"
+        >&2 printf "   [%d] %s  %s  (%s)\n" "$i" "$id" "$name" "$status"
         ids[$i]="$id"
         names[$i]="$name"
         ((i++))
     done <<< "$list"
-    echo "----------------------------------------"
+    >&2 echo "----------------------------------------"
 
     local choice
     read -r -p "Выбери номер контейнера: " choice
@@ -144,17 +146,17 @@ _docker_select_network() {
         return 1
     fi
 
-    echo ""
-    echo "Список сетей:"
-    echo "----------------------------------------"
+    >&2 echo ""
+    >&2 echo "Список сетей:"
+    >&2 echo "----------------------------------------"
     local i=1
     local names=()
     while IFS='|' read -r name driver scope; do
-        printf "   [%d] %s (%s, %s)\\n" "$i" "$name" "$driver" "$scope"
+        >&2 printf "   [%d] %s (%s, %s)\\n" "$i" "$name" "$driver" "$scope"
         names[$i]="$name"
         ((i++))
     done <<< "$list"
-    echo "----------------------------------------"
+    >&2 echo "----------------------------------------"
 
     local choice
     read -r -p "Выбери номер сети: " choice
@@ -198,17 +200,17 @@ _docker_select_volume() {
         return 1
     fi
 
-    echo ""
-    echo "Список томов:"
-    echo "----------------------------------------"
+    >&2 echo ""
+    >&2 echo "Список томов:"
+    >&2 echo "----------------------------------------"
     local i=1
     local names=()
     while IFS='|' read -r name driver; do
-        printf "   [%d] %s (%s)\\n" "$i" "$name" "$driver"
+        >&2 printf "   [%d] %s (%s)\\n" "$i" "$name" "$driver"
         names[$i]="$name"
         ((i++))
     done <<< "$list"
-    echo "----------------------------------------"
+    >&2 echo "----------------------------------------"
 
     local choice
     read -r -p "Выбери номер тома: " choice
@@ -262,21 +264,21 @@ _docker_select_image() {
         return 1
     fi
 
-    echo ""
-    echo "Список образов (REPO:TAG / ID / SIZE):"
-    echo "----------------------------------------"
+    >&2 echo ""
+    >&2 echo "Список образов (REPO:TAG / ID / SIZE):"
+    >&2 echo "----------------------------------------"
     local i=1
     local names=()
     while IFS='|' read -r name id size; do
-        printf "   [%d] %s  (%s, %s)\\n" "$i" "$name" "$id" "$size"
+        >&2 printf "   [%d] %s  (%s, %s)\\n" "$i" "$name" "$id" "$size"
         names[$i]="$name"
         ((i++))
     done <<< "$list"
-    echo "----------------------------------------"
+    >&2 echo "----------------------------------------"
 
     local choice
     read -r -p "Выбери номер образа: " choice
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -з "${names[$choice]:-}" ]; then
         printf_error "Нет такого номера."
         return 1
     fi
