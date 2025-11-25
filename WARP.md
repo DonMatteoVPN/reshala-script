@@ -227,16 +227,16 @@ This section is a running log for AI agents (e.g., WARP assistants) so they imme
     - Labels are aligned using the same `label_width` logic as core dashboard rows, so `WIDGETS` visually matches `СИСТЕМА` / `ЖЕЛЕЗО` / `STATUS`.
 
 - Widget scripts (all under `plugins/dashboard_widgets/`):
-  - **01_crypto_price.sh** – BTC price widget:
-    - Uses CoinGecko `simple/price` API with `curl` + `jq` and prints: `Курс BTC       : $<price>`.
-    - Robust to missing `curl`/`jq` or API failures (prints human-friendly error label instead of crashing).
-  - **02_load_short.sh** – repurposed as *Docker mini-overview*:
+  - **01_crypto_price.sh** – «Курс биткоина (BTC)»:
+    - Uses CoinGecko `simple/price` API with `curl` + `jq` and prints: `Курс BTC       : $<цена>`.
+    - Robust to missing `curl`/`jq` or API failures (печатает человеко-понятную ошибку вместо падения).
+  - **02_load_short.sh** – «Docker: мини-обзор»:
     - Counts total/running/restarting/exited containers and prints: `Docker        : всего N, живых M, рестартится R, мёртвых E`.
-    - Old "Пульс сервера" output has been removed from this script.
-  - **03_online_users.sh** – "Сетевой движ (TCP)":
+    - Старый вывод «Пульс сервера» полностью удалён из скрипта.
+  - **03_online_users.sh** – «Сетевой движ (TCP)»:
     - Counts active TCP connections in ESTABLISHED state using `ss` or `netstat`.
     - Prints: `TCP-сессии    : <N> активных`.
-  - **04_root_disk.sh** – "Настроение сервера":
+  - **04_root_disk.sh** – «Настроение сервера»:
     - Mixes uptime and relative CPU load per core to produce a human description ("новенький", "пинает балду", "пыхтит изо всех сил", etc.).
     - Prints a single line: `Настроение     : <text> (аптайм: ..., load: .../cores)`.
 
@@ -309,6 +309,20 @@ This section is a running log for AI agents (e.g., WARP assistants) so they imme
 
 ### Known rough edges / future work
 
+#### Menu/header standardization checklist
+
+- DONE:
+  - `modules/local_care.sh::show_maintenance_menu` — uses `menu_header` + explanatory text.
+  - `modules/diagnostics.sh::show_docker_menu` — uses `menu_header` + safety hints for destructive actions.
+  - `modules/diagnostics.sh::show_diagnostics_menu` — uses `menu_header` + instructions for exiting log viewers.
+  - `modules/widget_manager.sh::show_widgets_menu` — uses `menu_header`, explains purpose, adds `[c]` cache clear.
+  - `modules/skynet.sh::show_fleet_menu` — uses `menu_header` + explanation of fleet DB actions.
+  - `modules/skynet.sh::_show_keys_menu` — uses `menu_header` + warning about private keys.
+- PARTIAL / SPECIAL CASES:
+  - `modules/dashboard.sh::show` — рисует основную панель статуса (дашборд), а не простое меню; использует свой особый заголовок в стиле "ИНСТРУМЕНТ «РЕШАЛА»" и отдельный вариант для `SKYNET_MODE`. Пока оставлен как есть, чтобы не ломать визуальный бренд.
+- TODO (when touching these areas):
+  - Любые новые или ещё не тронутые меню в других модулях (например, будущие подменю в `self_update.sh` или дополнительных диагностических модулях) сразу делать через `menu_header` + 1–2 строки пояснения.
+
 - Some menus still use inline `printf` blocks for headers instead of `menu_header`.
   - When touching any menu code, prefer switching to `menu_header "..."` and adding 1–2 explanatory lines under it (what this menu does, any dangers).
 
@@ -326,3 +340,121 @@ If you are an AI agent picking up work on this repo, start by reading:
 - `modules/diagnostics.sh` (especially Docker sections) and `modules/local_care.sh` (maintenance flows).
 
 Then consult this Agent journal to understand the latest UX and behavior decisions before making changes.
+
+## Project standards (do not break)
+
+These are core conventions and contracts for «Решала». When you change or extend the code, treat these as **constraints** – breaking them может поломать обновления, плагины или мышечную память пользователей.
+
+### 1. Entry point, layout and config
+
+- **Entry point:**
+  - `reshala.sh` is the only supported entrypoint.
+  - It must continue to support:
+    - `sudo reshala` – normal interactive run.
+    - `bash reshala.sh install` – local install mode used by `install.sh`.
+- **Script layout:**
+  - `SCRIPT_DIR` is the root for all relative paths; do not hardcode absolute paths to repo files.
+  - Config lives in `config/reshala.conf`. New persistent knobs must go there and be accessed via `get_config_var` / `set_config_var`.
+  - Shared logic lives in `modules/common.sh`. New cross-cutting helpers go here, not ad‑hoc in random modules.
+- **Install location and symlink:**
+  - `INSTALL_PATH` is defined in `config/reshala.conf` (default `/usr/local/bin/reshala`).
+  - On install/update, `/opt/reshala` is the canonical home of the code; do **not** change this without also updating `install.sh`, `self_update.sh` and docs.
+
+### 2. Privileges, OS support and external commands
+
+- **Target OS:**
+  - Only Linux, primarily Debian/Ubuntu. Do not silently add logic that breaks on these distros.
+- **Root requirement:**
+  - `reshala.sh::main` enforces `EUID == 0`. Do not remove this check; most modules assume root.
+- **Command execution:**
+  - Always use `run_cmd` for system-level actions (apt, sysctl, service management, file chmod/chown, etc.).
+  - Do **not** call `sudo` directly inside modules – `run_cmd` encapsulates sudo vs root.
+- **Speedtest / network tools:**
+  - `local_care` uses Ookla `speedtest` and `curl`/`jq`. If you swap tools, keep JSON-based parsing and error handling.
+
+### 3. Logging and error reporting
+
+- **Logging contract:**
+  - `LOGFILE` is defined in `config/reshala.conf`. Do not hardcode another main log path.
+  - Use `log ...` for anything that should end up in the central log (installs, updates, errors, Skynet ops, speedtests, etc.).
+- **User-facing messages:**
+  - Use `info`, `ok`, `warn`, `err` (wrappers over `printf_info`/`printf_ok`/`printf_warning`/`printf_error`) for messages to the user.
+  - Do not introduce new ad‑hoc color sequences or raw `\033[...]` for text styling. If you need a new style, add it to `modules/common.sh`.
+
+### 4. Menu and UX style
+
+- **Headers:**
+  - Use `menu_header "…"` for menu headers instead of hand-written `printf` blocks with `╔/║/╚`.
+  - Under the header, print 1–2 explanatory lines describing what the menu does and warn about destructive actions.
+  - Exception: the main dashboard header in `modules/dashboard.sh::show` ("ИНСТРУМЕНТ «РЕШАЛА» …" and SKYNET banner) – keep its look & feel.
+- **Navigation:**
+  - `[b]` / `[B]` is the standard "Назад" key in submenus.
+  - The main menu uses `q/Q` to exit; do not overload `q` in submenus for unrelated actions.
+  - Long-running views (e.g., `tail -f`, `docker logs -f`, `docker compose logs -f`) must exit on `CTRL+C` and return cleanly to their parent menu.
+- **Input helpers:**
+  - Use `safe_read` instead of raw `read` where you want default values and readline editing.
+  - For simple yes/no confirmations, plain `read -p` is acceptable but keep prompts short and clear.
+
+### 5. Widgets and plugin contracts
+
+- **Dashboard widgets (`plugins/dashboard_widgets/*.sh`):**
+  - Must be **non-interactive**: no `read`, no infinite loops, no `sleep` in the hot path.
+  - Output format: one or more lines of the form `Label : Value`. The dashboard will split on the first `:` and align columns.
+  - Heavy network or disk work should be done quickly or behind the widget cache:
+    - Respect that `modules/dashboard.sh` will cache your output in `/tmp/reshala_widgets_cache/<widget>.cache` and may call you from a background job.
+  - If your widget calls external APIs, handle timeouts and failures gracefully and output a human-readable error instead of crashing.
+- **Skynet plugins (`plugins/skynet_commands/*.sh`):
+  - Are executed remotely on many hosts. They must:
+    - Be non-interactive (no `read` from stdin).
+    - Exit with proper status codes (0 on success, non-zero on failure).
+    - Avoid assumptions about the remote distro beyond "Linux with basic POSIX userland".
+
+### 6. Skynet data model and behaviour
+
+- **Fleet DB format (`$FLEET_DATABASE_FILE`):**
+  - Lines are `name|user|ip|port|ssh_key_path|sudo_password`.
+  - Do not change field order or separator (`|`) without a **clear migration path** and back-compat.
+- **Key management:**
+  - `SKYNET_MASTER_KEY_NAME` and `SKYNET_UNIQUE_KEY_PREFIX` govern SSH key naming – do not change them lightly; existing fleets depend on these values.
+- **Remote agent:**
+  - Skynet relies on being able to deploy and run the same `reshala.sh` on remote servers via `SCRIPT_URL_RAW`.
+  - If you change the install/update protocol, update both local and remote sides (the bootstrap `install.sh`, `self_update.sh`, and the Skynet deployment logic) in sync.
+
+### 7. Self-update and versioning
+
+- **Version string:**
+  - `readonly VERSION="vX.YZZ"` in `reshala.sh` is parsed by `self_update::check_for_updates` using a simple `grep 'readonly VERSION=' ... | cut -d'"' -f2`.
+  - Do not change this pattern (no extra quotes, no comments on the same line, etc.).
+- **Update flow:**
+  - `check_for_updates` sets `UPDATE_AVAILABLE` and `LATEST_VERSION` and is called once before `show_main_menu`.
+  - `run_update` must, on success, `exec "$INSTALL_PATH"` so the new code is immediately in use.
+  - `install_script` is used by the bootstrapper (`install.sh`), and `_perform_install_or_update` is used by online updates. Keep both paths working.
+- **Uninstall:**
+  - `uninstall_script` must remove:
+    - the symlink at `INSTALL_PATH`,
+    - `/opt/reshala`,
+    - `LOGFILE` and `FLEET_DATABASE_FILE` (if set),
+    - the `alias reshala='sudo reshala'` line from `/root/.bashrc`.
+
+### 8. Coding style and language
+
+- **Shell style:**
+  - Bash only (`#!/bin/bash`). Avoid introducing dependencies on zsh/fish-specific features.
+  - Prefer `[[ ... ]]` over `[...]`, `$(...)` over backticks.
+  - Keep functions `snake_case` with `_` separators (e.g., `_run_speedtest`, `show_docker_menu`).
+- **Language and tone:**
+  - User-facing text is currently in Russian с лёгким бандитским/сленговым тоном. New messages should match this style unless there is a strong reason not to.
+  - Do not silently switch to English in the middle of Russian UI; if you add multi-language support, design it explicitly.
+
+### 9. How to extend safely
+
+When adding new functionality:
+
+1. Decide **where** it belongs:
+   - Core orchestration? → `reshala.sh` + `modules/common.sh`.
+   - A new big feature? → new `modules/<feature>.sh` + `run_module` entry from the main menu.
+   - A per-server action for Skynet? → `plugins/skynet_commands/NN_name.sh`.
+   - A dashboard metric? → new `plugins/dashboard_widgets/NN_name.sh`.
+2. Wire any persistent settings through `config/reshala.conf` via `set_config_var`/`get_config_var`.
+3. Use `menu_header` and `info/ok/warn/err` for all new menus and messages.
+4. Update this WARP Agent journal if you change UX, data formats, or cross-cutting behaviours (widgets, Skynet, self-update, etc.).
