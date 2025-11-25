@@ -173,7 +173,7 @@ _show_docker_networks_menu() {
 _docker_select_volume() {
     local list
     list=$(docker volume ls --format '{{.Name}}|{{.Driver}}') || return 1
-    if [[ -з "$list" ]]; then
+    if [[ -z "$list" ]]; then
         printf_warning "Томов не найдено."
         return 1
     fi
@@ -191,7 +191,7 @@ _docker_select_volume() {
     echo "----------------------------------------"
 
     local choice; choice=$(safe_read "Выбери номер тома: " "")
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -з "${names[$choice]:-}" ]; then
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
         printf_error "Нет такого номера."
         return 1
     fi

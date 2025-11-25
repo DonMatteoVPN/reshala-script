@@ -142,6 +142,19 @@ DASHBOARD_IP_ADDR=""
 DASHBOARD_LOCATION=""
 DASHBOARD_HOSTER_INFO=""
 
+# Общий кэш метрик дашборда (легкий TTL, чтобы не дёргать систему при быстрых переходах)
+DASHBOARD_CACHE_TS=0
+DASHBOARD_CACHE_TTL=3  # секунды; можно увеличить, если хочешь ещё менее частые обновления
+DASHBOARD_CACHE_OS=""
+DASHBOARD_CACHE_KERNEL=""
+DASHBOARD_CACHE_UPTIME=""
+DASHBOARD_CACHE_USERS=""
+DASHBOARD_CACHE_VIRT=""
+DASHBOARD_CACHE_CPUINFO=""
+DASHBOARD_CACHE_CPULOAD=""
+DASHBOARD_CACHE_RAMVIZ=""
+DASHBOARD_CACHE_DISKRAW=""
+
 # ============================================================ #
 #                  ГЛАВНАЯ ФУНКЦИЯ ОТРИСОВКИ                   #
 # ============================================================ #
@@ -163,9 +176,25 @@ show() {
     fi
 
     # --- Сбор данных ---
-    local os_ver=$(_get_os_ver); local kernel=$(_get_kernel)
-    local uptime=$(_get_uptime); local users_online=$(_get_active_users)
-    local virt=$(_get_virt_type)
+    local now_ts; now_ts=$(date +%s)
+
+    # Если кэш протух или ещё не заполнялся — обновляем метрики
+    if (( now_ts - ${DASHBOARD_CACHE_TS:-0} >= ${DASHBOARD_CACHE_TTL:-3} )); then
+        DASHBOARD_CACHE_OS=$(_get_os_ver)
+        DASHBOARD_CACHE_KERNEL=$(_get_kernel)
+        DASHBOARD_CACHE_UPTIME=$(_get_uptime)
+        DASHBOARD_CACHE_USERS=$(_get_active_users)
+        DASHBOARD_CACHE_VIRT=$(_get_virt_type)
+        DASHBOARD_CACHE_CPUINFO=$(_get_cpu_info_clean)
+        DASHBOARD_CACHE_CPULOAD=$(_get_cpu_load_visual)
+        DASHBOARD_CACHE_RAMVIZ=$(_get_ram_visual)
+        DASHBOARD_CACHE_DISKRAW=$(_get_disk_visual)
+        DASHBOARD_CACHE_TS=$now_ts
+    fi
+
+    local os_ver="$DASHBOARD_CACHE_OS"; local kernel="$DASHBOARD_CACHE_KERNEL"
+    local uptime="$DASHBOARD_CACHE_UPTIME"; local users_online="$DASHBOARD_CACHE_USERS"
+    local virt="$DASHBOARD_CACHE_VIRT"
 
     # Сетевую инфу и данные от внешних сервисов кэшируем, чтобы не грузить систему и не ловить rate limit
     if [[ ${DASHBOARD_NET_CACHE_INITIALIZED:-0} -eq 0 ]]; then
@@ -176,9 +205,11 @@ show() {
     fi
     local ip_addr="$DASHBOARD_IP_ADDR"; local location="$DASHBOARD_LOCATION"; local ping=$(_get_ping_google)
     local hoster_info="$DASHBOARD_HOSTER_INFO"
-    local cpu_info=$(_get_cpu_info_clean); local cpu_load_viz=$(_get_cpu_load_visual)
-    local ram_viz=$(_get_ram_visual)
-    local disk_raw=$(_get_disk_visual); local disk_type=$(echo "$disk_raw" | cut -d'|' -f1); local disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
+
+    local cpu_info="$DASHBOARD_CACHE_CPUINFO"
+    local cpu_load_viz="$DASHBOARD_CACHE_CPULOAD"
+    local ram_viz="$DASHBOARD_CACHE_RAMVIZ"
+    local disk_raw="$DASHBOARD_CACHE_DISKRAW"; local disk_type=$(echo "$disk_raw" | cut -d'|' -f1); local disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
     local port_speed; port_speed=$(_get_port_speed)
 
     # Вместимость / канал (если когда-то гоняли speedtest)

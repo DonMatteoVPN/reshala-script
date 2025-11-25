@@ -451,10 +451,28 @@ show_fleet_menu() {
                     # Если агента нет ИЛИ локальная версия ЦУПа новее — ставим/обновляем
                     if [[ -z "$remote_ver" || "$remote_ver" == "NONE" ]] || _skynet_is_local_newer "$VERSION" "$remote_ver"; then
                         printf "%b\n" "${C_YELLOW}Требуется установка/обновление агента...${C_RESET}"
+                        printf_info "Это может занять 30–90 секунд, не трогай клавиатуру."
+
                         # Ставим агента через полноценный install.sh, но тихо (логи на удалённой стороне).
                         # ВАЖНО: без sudo здесь, run_remote сам поднимет привилегии при необходимости.
                         local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} >/dev/null 2>&1 && bash /tmp/reshala_install.sh >/tmp/reshala_install.log 2>&1 && rm /tmp/reshala_install.sh"
-                        if ! run_remote "$install_cmd"; then
+
+                        # Запускаем установку в фоне и показываем примитивный прогресс (точки)
+                        run_remote "$install_cmd" &
+                        local install_pid=$!
+                        local spinner_chars='|/-\\'
+                        local i=0
+                        while kill -0 "$install_pid" 2>/dev/null; do
+                            local ch=${spinner_chars:i%${#spinner_chars}:1}
+                            printf "\r   ⏳ Устанавливаю агента... %s" "$ch"
+                            sleep 1
+                            ((i++))
+                        done
+                        printf "\r\033[K"  # очистить строку спиннера
+
+                        wait "$install_pid"
+                        local rc=$?
+                        if [[ $rc -ne 0 ]]; then
                            printf_error "Не удалось установить/обновить агента. Вход невозможен."
                            continue
                         fi
