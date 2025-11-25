@@ -54,7 +54,8 @@ _docker_select_container() {
     done <<< "$list"
     echo "----------------------------------------"
 
-    local choice; choice=$(safe_read "Выбери номер контейнера: " "")
+    local choice
+    read -r -p "Выбери номер контейнера: " choice
     if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
         printf_error "Нет такого номера."
         return 1
@@ -74,11 +75,10 @@ _show_docker_containers_menu() {
         echo "   2. 📜 Логи контейнера (docker logs)"
         echo "   3. ▶️ Старт / ⏹ Стоп / 🔁 Рестарт контейнера"
         echo "   4. 🗑️ Удалить контейнер (stop + rm)"
+        echo "   5. 🔍 Информация о контейнере (docker inspect)"
+        echo "   6. 📈 Статистика по ресурсам (docker stats --no-stream)"
+        echo "   7. 🐚 Войти в контейнер (docker exec -it)"
         echo "   b. Назад"
-        echo "----------------------------------------"
-
-        # Показываем список контейнеров сразу под меню
-        docker ps -a --format '   -> {{.ID}}  {{.Names}}  ({{.Status}})'
         echo "----------------------------------------"
 
         local choice; read -r -p "Твой выбор: " choice || continue
@@ -111,6 +111,25 @@ _show_docker_containers_menu() {
                 fi
                 wait_for_enter
                 ;;
+            5)
+                local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
+                echo "--- docker inspect $name ---"
+                docker inspect "$name" || printf_error "Не удалось получить информацию о '$name'"
+                wait_for_enter
+                ;;
+            6)
+                local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
+                echo "--- docker stats (одноразовый снимок) для $name ---"
+                docker stats --no-stream "$name" || printf_error "Не удалось получить статистику для '$name'"
+                wait_for_enter
+                ;;
+            7)
+                local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
+                echo "Входим в контейнер '$name' (bash/sh). Выйти: exit"
+                docker exec -it "$name" bash 2>/dev/null || docker exec -it "$name" sh 2>/dev/null || \
+                    printf_error "Не удалось запустить интерактивную оболочку в '$name'"
+                # После выхода из контейнера просто возвращаемся в меню
+                ;;
             [bB]) break ;;
             *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;
         esac
@@ -137,7 +156,8 @@ _docker_select_network() {
     done <<< "$list"
     echo "----------------------------------------"
 
-    local choice; choice=$(safe_read "Выбери номер сети: " "")
+    local choice
+    read -r -p "Выбери номер сети: " choice
     if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
         printf_error "Нет такого номера."
         return 1
@@ -190,7 +210,8 @@ _docker_select_volume() {
     done <<< "$list"
     echo "----------------------------------------"
 
-    local choice; choice=$(safe_read "Выбери номер тома: " "")
+    local choice
+    read -r -p "Выбери номер тома: " choice
     if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
         printf_error "Нет такого номера."
         return 1
@@ -232,6 +253,80 @@ _show_docker_volumes_menu() {
     done
 }
 
+# Выбор docker-образа из списка
+_docker_select_image() {
+    local list
+    list=$(docker images --format '{{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}') || return 1
+    if [[ -z "$list" ]]; then
+        printf_warning "Образов не найдено."
+        return 1
+    fi
+
+    echo ""
+    echo "Список образов (REPO:TAG / ID / SIZE):"
+    echo "----------------------------------------"
+    local i=1
+    local names=()
+    while IFS='|' read -r name id size; do
+        printf "   [%d] %s  (%s, %s)\\n" "$i" "$name" "$id" "$size"
+        names[$i]="$name"
+        ((i++))
+    done <<< "$list"
+    echo "----------------------------------------"
+
+    local choice
+    read -r -p "Выбери номер образа: " choice
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
+        printf_error "Нет такого номера."
+        return 1
+    fi
+
+    echo "${names[$choice]}"
+    return 0
+}
+
+# Меню управления docker-образами
+_show_docker_images_menu() {
+    while true; do
+        clear
+        echo "--- DOCKER: ОБРАЗЫ ---"
+        echo "----------------------------------------"
+        echo "   1. 🖼 Список образов (docker images)"
+        echo "   2. 🔍 Информация по образу (docker image inspect)"
+        echo "   3. 🗑️ Удалить образ (docker rmi)"
+        echo "   4. ▶️ Запустить временный контейнер из образа"
+        echo "   b. Назад"
+        echo "----------------------------------------"
+        local choice; read -r -p "Твой выбор: " choice || continue
+        case "$choice" in
+            1)
+                echo; docker images; wait_for_enter ;;
+            2)
+                local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
+                echo "--- docker image inspect $img ---"
+                docker image inspect "$img" || printf_error "Образ '$img' не найден."
+                wait_for_enter
+                ;;
+            3)
+                local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
+                read -p "Точно снести образ '$img'? (y/n): " c
+                if [[ "$c" == "y" ]]; then
+                    docker rmi "$img" || printf_error "Не удалось удалить образ '$img'"
+                fi
+                wait_for_enter
+                ;;
+            4)
+                local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
+                echo "Введи команду внутри контейнера (по умолчанию /bin/bash):"
+                local cmd; cmd=$(safe_read "Команда: " "/bin/bash")
+                docker run -it --rm "$img" $cmd || printf_error "Не удалось запустить контейнер из '$img'"
+                ;;
+            [bB]) break ;;
+            *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;
+        esac
+    done
+}
+
 show_docker_menu() {
     while true; do
         clear
@@ -243,6 +338,7 @@ show_docker_menu() {
         echo "   [2] 📦 Контейнеры (список, логи, управление)"
         echo "   [3] 🌐 Сети Docker"
         echo "   [4] 💽 Томa Docker"
+        echo "   [5] 🖼 Образы Docker (список, inspect, запуск, удаление)"
         echo ""
         echo "   [b] 🔙 Назад"
         echo "------------------------------------------------------"
@@ -252,6 +348,7 @@ show_docker_menu() {
             2) _show_docker_containers_menu ;;
             3) _show_docker_networks_menu ;;
             4) _show_docker_volumes_menu ;;
+            5) _show_docker_images_menu ;;
             [bB]) break ;;
             *) printf_error "Нет такого пункта. Смотри в меню, босс."; sleep 1 ;;
         esac
