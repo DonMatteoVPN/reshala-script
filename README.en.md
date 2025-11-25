@@ -1,8 +1,9 @@
 <p align="right">
-  <a href="README.md"><img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/ru.png" alt="RU" width="20" /> RU</a> |
-  <a href="README.en.md"><img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/us.png" alt="EN" width="20" /> EN</a>
+  <img src="https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/us.svg" alt="EN" width="20" /> EN |
+  <a href="README.md"><img src="[https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/us.svg](https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/ru.svg)" alt="EN" width="20" /> RU</a>
 </p>
 
+<a id="ru"></a>
 # Reshala Tool 🚀 v2.0x (Skynet + Widgets)
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
