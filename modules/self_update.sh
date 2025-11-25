@@ -40,7 +40,7 @@ _perform_install_or_update() {
 # ... (начало self_update.sh) ...
 
 install_script() {
-    printf_info "Запуск процедуры установки Решалы..."
+    info "Запуск процедуры установки Решалы (локальная копия из SCRIPT_DIR)..."
     
     # SCRIPT_DIR в данный момент указывает на временную папку,
     # куда bootstrapper уже всё распаковал. Нам больше не нужно ничего качать.
@@ -48,13 +48,13 @@ install_script() {
     
     local INSTALL_DIR="/opt/reshala"
     
-    printf_info "Копирую файлы из временной директории в ${INSTALL_DIR}..."
+    info "Копирую файлы из временной директории в ${INSTALL_DIR}..."
     run_cmd rm -rf "$INSTALL_DIR" # Чистим старую установку на всякий случай
     run_cmd mkdir -p "$INSTALL_DIR"
     # Вот ключевое изменение! Копируем из SCRIPT_DIR, а не качаем заново.
     run_cmd cp -r "${SCRIPT_DIR}/." "${INSTALL_DIR}/"
     
-    printf_info "Создаю команду 'reshala' в системе..."
+    info "Создаю системную команду 'reshala' (через symlink на /opt/reshala/reshala.sh)..."
     run_cmd ln -sf "${INSTALL_DIR}/reshala.sh" "$INSTALL_PATH"
     run_cmd chmod +x "${INSTALL_DIR}/reshala.sh"
     
@@ -64,31 +64,32 @@ install_script() {
     fi
 
     log "Скрипт успешно установлен."
-    printf_ok "Готово. Решала в системе."
+    ok "Решала установлена в системе."
     printf "   %b: %b\n" "${C_BOLD}Команда запуска" "${C_YELLOW}sudo reshala${C_RESET}"
-    printf_warning "ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала."
+    warn "ВАЖНО: переподключись к серверу, чтобы команда заработала в новой сессии."
 
     # Автозапуск Решалы сразу после установки
     # В режиме SKYNET мы передаём RESHALA_NO_AUTOSTART=1, чтобы не запускать интерактивную Решалу
     if [[ "${RESHALA_NO_AUTOSTART:-0}" != "1" ]]; then
         echo ""
-        printf_info "Стартую Решалу прямо сейчас..."
+        info "Стартую Решалу прямо сейчас..."
         sleep 1
         exec "$INSTALL_PATH"
     fi
 }
 
 uninstall_script() {
-    printf_warning "Точно хочешь выгнать Решалу НАХУЙ? УДАЛЮТСЯ ВСЕ УЕГО ФАЙЛЫ!"; read -p "(y/n): " confirm
-    if [[ "$confirm" != "y" ]]; then echo "Правильное решение."; return; fi
-    printf_info "Начинаю самоликвидацию..."
+    warn "Точно хочешь выгнать Решалу НАХУЙ? УДАЛЮТСЯ ВСЕ ЕЁ ФАЙЛЫ!"
+    read -p "(y/n): " confirm
+    if [[ "$confirm" != "y" ]]; then info "Отмена удаления. Решала остаётся."; return; fi
+    info "Начинаю самоликвидацию (удаляю бинарь, каталог /opt/reshala, лог и базу флота)..."
     run_cmd rm -f "$INSTALL_PATH"
     run_cmd rm -rf "/opt/reshala"
     # Сносим лог и базу флота, если есть
     if [ -n "${LOGFILE:-}" ]; then run_cmd rm -f "$LOGFILE" 2>/dev/null || true; fi
     if [ -n "${FLEET_DATABASE_FILE:-}" ]; then run_cmd rm -f "$FLEET_DATABASE_FILE" 2>/dev/null || true; fi
     if [ -f "/root/.bashrc" ]; then run_cmd sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; fi
-    printf_ok "Самоликвидация завершена. Переподключись к серверу."
+    ok "Самоликвидация завершена. Переподключись к серверу, чтобы очистить alias/окружение."
     exit 0
 }
 
@@ -131,8 +132,9 @@ check_for_updates() {
 run_update() {
     if _perform_install_or_update "update"; then
         log "Скрипт успешно обновлён до версии ${LATEST_VERSION}."
-        printf_ok "Готово. Теперь у тебя версия ${LATEST_VERSION}."
-        echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2
+        ok "Обновление завершено. Теперь у тебя версия ${LATEST_VERSION}."
+        info "Перезапускаю Решалу, чтобы все модули подхватили новую версию..."
+        sleep 2
         exec "$INSTALL_PATH"
     fi
 }
