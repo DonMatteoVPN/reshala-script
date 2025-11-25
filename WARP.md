@@ -446,7 +446,12 @@ These are core conventions and contracts for «Решала». When you change o
   - User-facing text is currently in Russian с лёгким бандитским/сленговым тоном. New messages should match this style unless there is a strong reason not to.
   - Do not silently switch to English in the middle of Russian UI; if you add multi-language support, design it explicitly.
 
-### 9. How to extend safely
+### 9. README «Стандарты»
+
+- `README.md` содержит короткий раздел для контрибьюторов («СТАНДАРТЫ (КРАТКО ДЛЯ КОНТРИБЬЮТОРОВ)»).
+- Любые изменения базовых контрактов (цвета, меню, формат БД, self-update, виджеты/плагины и т.п.) сначала фиксируем здесь, в этом списке, а затем обновляем выжимку в README, чтобы они не разъехались.
+
+### 10. How to extend safely
 
 When adding new functionality:
 
