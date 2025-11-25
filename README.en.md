@@ -1,6 +1,6 @@
 <p align="right">
-  <a href="README.md"><img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/ru.png" alt="RU" width="20" /> RU</a> |
-  <a href="README.en.md"><img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/us.png" alt="EN" width="20" /> EN</a>
+  <a href="README.md"><img src="https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/ru.svg" alt="RU" width="20" /> RU</a> |
+  <img src="https://cdn.jsdelivr.net/gh/hampusborgos/country-flags@main/svg/us.svg" alt="EN" width="20" /> EN
 </p>
 
 # Reshala Tool 🚀 v2.0x (Skynet + Widgets)
