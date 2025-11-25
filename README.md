@@ -1,4 +1,7 @@
-<p align="right">🇷🇺 RU | <a href="README.en.md">🇺🇸 EN</a></p>
+<p align="right">
+  <img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/ru.png" alt="RU" width="20" /> RU |
+  <a href="README.en.md"><img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/us.png" alt="EN" width="20" /> EN</a>
+</p>
 
 <a id="ru"></a>
 

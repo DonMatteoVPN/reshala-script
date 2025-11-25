@@ -1,4 +1,7 @@
-<p align="right"><a href="README.md">🇷🇺 RU</a> | 🇺🇸 EN</p>
+<p align="right">
+  <a href="README.md"><img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/ru.png" alt="RU" width="20" /> RU</a> |
+  <img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/us.png" alt="EN" width="20" /> EN
+</p>
 
 # Reshala Tool 🚀 v2.44x (Skynet + Widgets)
 
