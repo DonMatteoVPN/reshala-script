@@ -7,6 +7,16 @@
 #
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1 # Защита от прямого запуска
 
+# Безопасный запуск docker-команд с таймаутом, чтобы меню не вешалось навсегда
+_docker_safe() {
+    local timeout_sec="10"
+    if command -v timeout &>/dev/null; then
+        timeout "$timeout_sec" docker "$@"
+    else
+        docker "$@"
+    fi
+}
+
 _show_docker_cleanup_menu() {
     while true; do
         clear; echo "--- УПРАВЛЕНИЕ DOCKER: ОЧИСТКА ДИСКА ---"
@@ -20,11 +30,11 @@ _show_docker_cleanup_menu() {
         echo "----------------------------------------"; 
         local choice; read -r -p "Твой выбор: " choice
         case "$choice" in
-            1) echo; docker images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh | head; wait_for_enter ;;
-            2) docker system prune -f; printf_ok "Простая очистка завершена."; wait_for_enter ;;
-            3) read -p "Удалить ВСЕ неиспользуемые образы? (y/n): " c; if [[ "$c" == "y" ]]; then docker image prune -a -f; printf_ok "Полная очистка завершена."; fi; wait_for_enter ;;
-            4) printf_error "ОСТОРОЖНО! Удаляет ВСЕ тома, не привязанные к контейнерам!"; read -p "Точно продолжить? (y/n): " c; if [[ "$c" == "y" ]]; then docker volume prune -f; printf_ok "Очистка томов завершена."; fi; wait_for_enter ;;
-            5) echo; docker system df; wait_for_enter ;;
+            1) echo; _docker_safe images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh | head; wait_for_enter ;;
+            2) _docker_safe system prune -f; printf_ok "Простая очистка завершена."; wait_for_enter ;;
+            3) read -p "Удалить ВСЕ неиспользуемые образы? (y/n): " c; if [[ "$c" == "y" ]]; then _docker_safe image prune -a -f; printf_ok "Полная очистка завершена."; fi; wait_for_enter ;;
+            4) printf_error "ОСТОРОЖНО! Удаляет ВСЕ тома, не привязанные к контейнерам!"; read -p "Точно продолжить? (y/n): " c; if [[ "$c" == "y" ]]; then _docker_safe volume prune -f; printf_ok "Очистка томов завершена."; fi; wait_for_enter ;;
+            5) echo; _docker_safe system df; wait_for_enter ;;
             [bB]) break ;;
         esac
     done
@@ -86,7 +96,7 @@ _show_docker_containers_menu() {
         local choice; read -r -p "Твой выбор: " choice || continue
         case "$choice" in
             1)
-                echo ""; docker ps -a; wait_for_enter ;;
+                echo ""; _docker_safe ps -a; wait_for_enter ;;
             2)
                 local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
                 echo "--- ЛОГИ $name (CTRL+C, чтобы выйти) ---"
@@ -97,9 +107,9 @@ _show_docker_containers_menu() {
                 echo "   1) Старт  2) Стоп  3) Рестарт"
                 local act; act=$(safe_read "Действие: " "1")
                 case "$act" in
-                    1) docker start "$name" || printf_error "Не удалось стартануть '$name'" ;;
-                    2) docker stop "$name" || printf_error "Не удалось остановить '$name'" ;;
-                    3) docker restart "$name" || printf_error "Не удалось перезапустить '$name'" ;;
+                    1) _docker_safe start "$name" || printf_error "Не удалось стартануть '$name'" ;;
+                    2) _docker_safe stop "$name" || printf_error "Не удалось остановить '$name'" ;;
+                    3) _docker_safe restart "$name" || printf_error "Не удалось перезапустить '$name'" ;;
                     *) printf_error "Нет такого действия. Смори, что жмёшь." ;;
                 esac
                 wait_for_enter
@@ -108,21 +118,21 @@ _show_docker_containers_menu() {
                 local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
                 read -p "Точно снести '$name'? (y/n): " c
                 if [[ "$c" == "y" ]]; then
-                    docker stop "$name" 2>/dev/null || true
-                    docker rm "$name" || printf_error "Не удалось удалить '$name'"
+                    _docker_safe stop "$name" 2>/dev/null || true
+                    _docker_safe rm "$name" || printf_error "Не удалось удалить '$name'"
                 fi
                 wait_for_enter
                 ;;
             5)
                 local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
                 echo "--- docker inspect $name ---"
-                docker inspect "$name" || printf_error "Не удалось получить информацию о '$name'"
+                _docker_safe inspect "$name" || printf_error "Не удалось получить информацию о '$name'"
                 wait_for_enter
                 ;;
             6)
                 local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
                 echo "--- docker stats (одноразовый снимок) для $name ---"
-                docker stats --no-stream "$name" || printf_error "Не удалось получить статистику для '$name'"
+                _docker_safe stats --no-stream "$name" || printf_error "Не удалось получить статистику для '$name'"
                 wait_for_enter
                 ;;
             7)
@@ -180,10 +190,10 @@ _show_docker_networks_menu() {
         echo "----------------------------------------"
         local choice; read -r -p "Твой выбор: " choice || continue
         case "$choice" in
-            1) echo; docker network ls; wait_for_enter ;;
+            1) echo; _docker_safe network ls; wait_for_enter ;;
             2)
                 local net; net=$(_docker_select_network) || { wait_for_enter; continue; }
-                docker network inspect "$net" || printf_error "Сеть '$net' не найдена."
+                _docker_safe network inspect "$net" || printf_error "Сеть '$net' не найдена."
                 wait_for_enter
                 ;;
             [bB]) break ;;
@@ -235,17 +245,17 @@ _show_docker_volumes_menu() {
         echo "----------------------------------------"
         local choice; read -r -p "Твой выбор: " choice || continue
         case "$choice" in
-            1) echo; docker volume ls; wait_for_enter ;;
+            1) echo; _docker_safe volume ls; wait_for_enter ;;
             2)
                 local vol; vol=$(_docker_select_volume) || { wait_for_enter; continue; }
-                docker volume inspect "$vol" || printf_error "Том '$vol' не найден."
+                _docker_safe volume inspect "$vol" || printf_error "Том '$vol' не найден."
                 wait_for_enter
                 ;;
             3)
                 local vol; vol=$(_docker_select_volume) || { wait_for_enter; continue; }
                 read -p "Точно снести том '$vol'? (y/n): " c
                 if [[ "$c" == "y" ]]; then
-                    docker volume rm "$vol" || printf_error "Не удалось удалить том '$vol'"
+                    _docker_safe volume rm "$vol" || printf_error "Не удалось удалить том '$vol'"
                 fi
                 wait_for_enter
                 ;;
@@ -302,18 +312,18 @@ _show_docker_images_menu() {
         local choice; read -r -p "Твой выбор: " choice || continue
         case "$choice" in
             1)
-                echo; docker images; wait_for_enter ;;
+                echo; _docker_safe images; wait_for_enter ;;
             2)
                 local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
                 echo "--- docker image inspect $img ---"
-                docker image inspect "$img" || printf_error "Образ '$img' не найден."
+                _docker_safe image inspect "$img" || printf_error "Образ '$img' не найден."
                 wait_for_enter
                 ;;
             3)
                 local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
                 read -p "Точно снести образ '$img'? (y/n): " c
                 if [[ "$c" == "y" ]]; then
-                    docker rmi "$img" || printf_error "Не удалось удалить образ '$img'"
+                    _docker_safe rmi "$img" || printf_error "Не удалось удалить образ '$img'"
                 fi
                 wait_for_enter
                 ;;
@@ -321,7 +331,7 @@ _show_docker_images_menu() {
                 local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
                 echo "Введи команду внутри контейнера (по умолчанию /bin/bash):"
                 local cmd; cmd=$(safe_read "Команда: " "/bin/bash")
-                docker run -it --rm "$img" $cmd || printf_error "Не удалось запустить контейнер из '$img'"
+                _docker_safe run -it --rm "$img" $cmd || printf_error "Не удалось запустить контейнер из '$img'"
                 ;;
             [bB]) break ;;
             *) printf_error "Нет такого пункта. Внимательнее, босс."; sleep 1 ;;

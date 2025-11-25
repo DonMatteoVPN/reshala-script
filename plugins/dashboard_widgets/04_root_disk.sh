@@ -36,5 +36,4 @@ elif [ "$CMP_LOW" = "low" ]; then
   MOOD="пинает балду"
 fi
 
-echo "Настроение     : $MOOD (аптайм: $UPTIME_RAW, load: $LOAD_RAW/$CORES)"\r\n
-echo "Диск /         : $USED ($PERC, $STATUS)"
+echo "Настроение     : $MOOD (аптайм: $UPTIME_RAW, load: $LOAD_RAW/$CORES)"

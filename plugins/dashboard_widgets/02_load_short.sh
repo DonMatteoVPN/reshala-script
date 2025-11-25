@@ -24,5 +24,4 @@ if [ -z "$TOTAL" ]; then
   exit 0
 fi
 
-echo "Docker        : всего $TOTAL, живых $RUNNING, рестартится $RESTARTING, мёртвых $EXITED"\r\n
-echo "Пульс сервера  : $STATUS (load: $LOAD_RAW, ядер: $CORES)"
+echo "Docker        : всего $TOTAL, живых $RUNNING, рестартится $RESTARTING, мёртвых $EXITED"
