@@ -123,7 +123,7 @@ show_main_menu() {
             1) run_module local_care show_maintenance_menu ;;
             2) run_module diagnostics show_diagnostics_menu ;;
             3) run_module diagnostics show_docker_menu ;; # Теперь отдельное докер-меню
-            4) printf_warning "Модуль установки панели в разработке." && sleep 2 ;;
+            4) run_module remnawave_panel_node show_remnawave_panel_node_menu ;;
             5) printf_warning "Модуль установки бота в разработке." && sleep 2 ;;
             w|W) run_module widget_manager show_widgets_menu ;; # НАША НОВАЯ ФИЧА
             u|U) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_module self_update run_update; else printf_error "Обновлений нет."; fi ;;

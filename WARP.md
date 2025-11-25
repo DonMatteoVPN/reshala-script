@@ -350,6 +350,33 @@ Then consult this Agent journal to understand the latest UX and behavior decisio
   - EN flag links to `README.en.md`.
 - This ensures that on GitHub clicking a flag always switches language by opening the corresponding README instead of the raw image.
 
+### 2025-11-25 – Plan: Remnawave panel/node modules and certificate strategy
+
+- **Goal:** integrate Remnawave panel and nodes into Reshala as first-class modules, using Skynet for remote node installs and keeping full compatibility with the existing Remnawave installer logic.
+- **Modules to create:**
+  - `modules/remnawave_panel_node.sh` – installs panel + node on the current server (port of donor `installation()` / `install_remnawave()`): asks for panel/subscription/selfsteal domains, prepares `/opt/remnawave` (`.env`, `docker-compose.yml`, `nginx.conf`), generates/attaches certificates, registers superadmin, creates config profile + node + host via HTTP API, updates squads, starts docker and sets up a masking site.
+  - `modules/remnawave_panel.sh` – installs only the panel on the current server (port of `installation_panel()`), including API-driven config profile/node/host bootstrap without a local node container.
+  - `modules/remnawave_node.sh` – everything related to nodes: installing a node on the current server for an existing panel, and orchestrating **remote** node installs across the fleet via Skynet.
+- **Skynet integration for nodes:**
+  - A dedicated plugin `plugins/skynet_commands/10_install_remnawave_node.sh` will encapsulate the node-side logic from `installation_node()` (Docker + nginx + local certs/masking site).
+  - `remnawave_node.sh` will:
+    - On the panel server, work with Remnawave HTTP API (using `api-1.json` as reference) to create config profiles, nodes and hosts, and update squads for each selected node.
+    - Use existing Skynet fleet DB to select one or multiple servers, then run the node installer plugin on them (no interactive prompts on the remote side beyond what is absolutely necessary).
+- **Certificate strategy (panel + nodes):**
+  - The donor script already supports two methods via certbot:
+    - **Cloudflare API (DNS-01, wildcard)**.
+    - **ACME HTTP-01 (один домен, без wildcard)**.
+  - In the new Reshala modules, при установке **ноды** (локально или через Skynet) пользователь будет явно выбирать:
+    - `[1]` «Нода будет использовать wildcard-сертификат панели (Cloudflare API)» – допустимо **только если** панель действительно настроена на Cloudflare API / wildcard.
+    - `[2]` «Сгенерировать отдельный сертификат на этой ноде (ACME HTTP-01 или свой Cloudflare)».
+  - Для варианта `[1]` (Cloudflare/wildcard):
+    - На панели будет вестись список нод, которые используют **панельный wildcard** (отдельный файл в `${DIR_REMNAWAVE}` с `user@ip` и путями до cert’ов на ноде).
+    - В `renew_hook` Let’s Encrypt на панели (который уже правит `nginx` в доноре) будет добавлен вызов маленького скрипта синхронизации: он через `scp/rsync` копирует обновлённый `fullchain.pem`/`privkey.pem` с панели на каждую ноду из списка и перезапускает nginx/контейнер на ноде.
+    - На нодах храним только «принимающую» сторону (пути cert’ов и маленький helper-скрипт, который можно вызвать локально для принудительной ресинхронизации, но в обычном режиме всё пушит панель).
+  - Для варианта `[2]` (отдельный сертификат на ноде):
+    - На ноде разворачивается упрощённая логика донора: `handle_certificates` + `get_certificates` (Cloudflare или ACME HTTP-01), локальный `certbot renew` и `renew_hook`, который перезапускает nginx/контейнер ноды.
+- **UX:** все новые меню и вопросы будут оформлены через `menu_header`, `safe_read`, `info/ok/warn/err`, без своих цветовых костылей. Выбор метода сертификата будет формулироваться с явной привязкой к Cloudflare API (wildcard), чтобы не вводить пользователя в заблуждение.
+
 ## Project standards (do not break)
 
 These are core conventions and contracts for «Решала». When you change or extend the code, treat these as **constraints** – breaking them может поломать обновления, плагины или мышечную память пользователей.
