@@ -1,4 +1,4 @@
-# Инструмент «Решала» 🚀 v2.44x (Skynet + Widgets)
+# Инструмент «Решала» 🚀 v2.0x (Skynet + Widgets)
 
 ![Лого Решалы](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
 
