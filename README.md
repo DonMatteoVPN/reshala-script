@@ -1,6 +1,6 @@
 <p align="right">[🇷🇺 RU](#ru) | [🇬🇧 EN](#en)</p>
 
-<a name="ru"></a>
+<a id="ru"></a>
 
 # Инструмент «Решала» 🚀 v2.0x (Skynet + Widgets)
 
@@ -159,7 +159,7 @@ apt update && apt install -y sudo && sudo reshala
 
 ---
 
-<a name="en"></a>
+<a id="en"></a>
 # Reshala Tool 🚀 v2.44x (Skynet + Widgets)
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
