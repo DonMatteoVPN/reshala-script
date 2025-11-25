@@ -455,30 +455,17 @@ show_fleet_menu() {
 
                         # Ставим агента через полноценный install.sh, но тихо (логи на удалённой стороне).
                         # ВАЖНО: без sudo здесь, run_remote сам поднимет привилегии при необходимости.
-                        local install_cmd="wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} >/dev/null 2>&1 && bash /tmp/reshala_install.sh >/tmp/reshala_install.log 2>&1 && rm /tmp/reshala_install.sh"
+                        # Передаём переменную RESHALA_NO_AUTOSTART=1, чтобы инсталлятор НЕ запускал Решалу интерактивно.
+                        local install_cmd="RESHALA_NO_AUTOSTART=1 wget -q -O /tmp/reshala_install.sh ${INSTALLER_URL_RAW} >/dev/null 2>&1 && RESHALA_NO_AUTOSTART=1 bash /tmp/reshala_install.sh >/tmp/reshala_install.log 2>&1 && rm /tmp/reshala_install.sh"
 
-                        # Запускаем установку в фоне и показываем примитивный прогресс (точки)
-                        run_remote "$install_cmd" &
-                        local install_pid=$!
-                        local spinner_chars='|/-\\'
-                        local i=0
-                        while kill -0 "$install_pid" 2>/dev/null; do
-                            local ch=${spinner_chars:i%${#spinner_chars}:1}
-                            printf "\r   ⏳ Устанавливаю агента... %s" "$ch"
-                            sleep 1
-                            ((i++))
-                        done
-                        printf "\r\033[K"  # очистить строку спиннера
-
-                        wait "$install_pid"
-                        local rc=$?
-                        if [[ $rc -ne 0 ]]; then
+                        # Выполняем установку синхронно (без фона), просто предупреждаем пользователя, что это займёт время
+                        if ! run_remote "$install_cmd"; then
                            printf_error "Не удалось установить/обновить агента. Вход невозможен."
                            continue
                         fi
                         printf_ok "Агент успешно развёрнут."
                     else
-                        printf "%b\n" "${C_GREEN}OK (v${remote_ver})${C_RESET}"
+                        printf "%b\n" "${C_GREEN}OK (${remote_ver})${C_RESET}"
                     fi
 
                     # Телепортация!

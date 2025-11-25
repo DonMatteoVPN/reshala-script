@@ -144,7 +144,8 @@ DASHBOARD_HOSTER_INFO=""
 
 # Общий кэш метрик дашборда (легкий TTL, чтобы не дёргать систему при быстрых переходах)
 DASHBOARD_CACHE_TS=0
-DASHBOARD_CACHE_TTL=3  # секунды; можно увеличить, если хочешь ещё менее частые обновления
+# TTL берём из конфига, но если его там нет — используем 3 сек
+DASHBOARD_CACHE_TTL=${DASHBOARD_CACHE_TTL:-3}  # секунды; можно увеличить в config/reshala.conf
 DASHBOARD_CACHE_OS=""
 DASHBOARD_CACHE_KERNEL=""
 DASHBOARD_CACHE_UPTIME=""
@@ -155,11 +156,16 @@ DASHBOARD_CACHE_CPULOAD=""
 DASHBOARD_CACHE_RAMVIZ=""
 DASHBOARD_CACHE_DISKRAW=""
 
+# Кэш для вывода виджетов (через файлы, чтобы не мудрить с eval)
+WIDGET_CACHE_DIR="/tmp/reshala_widgets_cache"
+DASHBOARD_WIDGET_CACHE_TTL=${DASHBOARD_WIDGET_CACHE_TTL:-10}
+
 # ============================================================ #
 #                  ГЛАВНАЯ ФУНКЦИЯ ОТРИСОВКИ                   #
 # ============================================================ #
 show() {
     clear
+    mkdir -p "$WIDGET_CACHE_DIR" 2>/dev/null || true
 
     # Чтобы конфиг, даже если он поехал, не ломал всю отрисовку
     local label_width="${DASHBOARD_LABEL_WIDTH:-16}"
@@ -222,39 +228,38 @@ show() {
 
     # --- Заголовок ---
     if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
-        printf "%b\\n" "${C_RED}╔════════════════════════════════════════════════════════════════╗${C_RESET}"
-        printf "%b\\n" "${C_RED}║   👁️  ПОДКЛЮЧЕН ЧЕРЕЗ SKYNET (УДАЛЕННОЕ УПРАВЛЕНИЕ) 👁️    ║${C_RESET}"
-        printf "%b\\n" "${C_RED}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
-        # Показываем версию агента Решалы на удалённом сервере
-        printf "%b\\n" "${C_CYAN}║${C_RESET}"
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Агент Решалы" "${C_WHITE}" "${VERSION}" "${C_RESET}"
-        printf "%b\\n" "${C_CYAN}║${C_RESET}"
+        printf "%b\n" "${C_RED}╔════════════════════════════════════════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_RED}║   👁️  ПОДКЛЮЧЕН ЧЕРЕЗ SKYNET (УДАЛЕННОЕ УПРАВЛЕНИЕ) 👁️    ║${C_RESET}"
+        printf "%b\n" "${C_RED}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
+        printf "%b\n" "${C_CYAN}║${C_RESET}"
+        printf "║ ${C_GRAY}Агент Решалы   :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "${VERSION}"
+        printf "%b\n" "${C_CYAN}║${C_RESET}"
     else
-        printf "%b\\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
-        printf "%b\\n" "${C_CYAN}║${C_RESET}"
+        printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
+        printf "%b\n" "${C_CYAN}║${C_RESET}"
     fi
 
-    # --- Секция "Система" ---
-    printf "%b\\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s (%s)%b\n" "${C_GRAY}" "$label_width" "ОС / Ядро" "${C_WHITE}" "$os_ver" "$kernel" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s (Юзеров: %s)%b\n" "${C_GRAY}" "$label_width" "Аптайм" "${C_WHITE}" "$uptime" "$users_online" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Виртуализация" "${C_CYAN}" "$virt" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b (%s) [%b%s%b]\n" "${C_GRAY}" "$label_width" "IP Адрес" "${C_YELLOW}" "$ip_addr" "${C_RESET}" "$ping" "${C_CYAN}" "$location" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "Хостер" "${C_CYAN}" "$hoster_info" "${C_RESET}"
+    # --- Секция "Система" (жёсткое выравнивание, как в Primer/install_reshala.sh) ---
+    printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
+    printf "║ ${C_GRAY}ОС / Ядро      :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$os_ver ($kernel)"
+    printf "║ ${C_GRAY}Аптайм         :${C_RESET} ${C_WHITE}%s${C_RESET} (Юзеров: %s)\n" "$uptime" "$users_online"
+    printf "║ ${C_GRAY}Виртуалка      :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$virt"
+    printf "║ ${C_GRAY}IP Адрес       :${C_RESET} ${C_YELLOW}%s${C_RESET} (%s) [%b%s%b]\n" "$ip_addr" "$ping" "${C_CYAN}" "$location" "${C_RESET}"
+    printf "║ ${C_GRAY}Хостер         :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$hoster_info"
     
     printf "%b\n" "${C_CYAN}║${C_RESET}"
 
-    # --- Секция "Железо" ---
+    # --- Секция "ЖЕЛЕЗО" ---
     printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %b%s%b\n" "${C_GRAY}" "$label_width" "CPU Модель" "${C_WHITE}" "$cpu_info" "${C_RESET}"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "$label_width" "Загрузка CPU" "$cpu_load_viz"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "$label_width" "Память (RAM)" "$ram_viz"
-    printf "║ %b%-*s${C_RESET} : %s\n" "${C_GRAY}" "$label_width" "Диск (${disk_type})" "$disk_viz"
+    printf "║ ${C_GRAY}CPU Модель     :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$cpu_info"
+    printf "║ ${C_GRAY}Загрузка CPU   :${C_RESET} %s\n" "$cpu_load_viz"
+    printf "║ ${C_GRAY}Память (RAM)   :${C_RESET} %s\n" "$ram_viz"
+    printf "║ ${C_GRAY}Диск (%-3s)     :${C_RESET} %s\n" "$disk_type" "$disk_viz"
  
     printf "%b\n" "${C_CYAN}║${C_RESET}"
     
     # --- Секция "Статус" ---
-    printf "%b\\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
+    printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
  
     # Нормализуем отображение версий, чтобы не было "vlatest(... )" и прочего трэша
     local panel_ver_pretty="" node_ver_pretty="" bot_ver_pretty=""
@@ -282,33 +287,33 @@ show() {
 
     # Remnawave / Нода / Бот (данные даёт state_scanner)
     if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "🔥 COMBO (Панель + Нода)" "${C_RESET}"
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Версии" "${C_WHITE}" "P: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}" "${C_RESET}"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET}\n" "🔥 COMBO (Панель + Нода)"
+        printf "║ ${C_GRAY}Версии         :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "P: ${panel_ver_pretty:-?} | N: ${node_ver_pretty:-?}"
     elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (%s)\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Панель управления" "${C_RESET}" "${panel_ver_pretty:-unknown}"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET} (%s)\n" "Панель управления" "${panel_ver_pretty:-unknown}"
     elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (%s)\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_GREEN}" "Боевая Нода" "${C_RESET}" "${node_ver_pretty:-unknown}"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET} (%s)\n" "Боевая Нода" "${node_ver_pretty:-unknown}"
     elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_RED}" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ" "${C_RESET}"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_RED}%s${C_RESET}\n" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ"
     else
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Remnawave" "${C_WHITE}" "Не установлена" "${C_RESET}"
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Не установлена"
     fi
 
     if [ "${BOT_DETECTED:-0}" -eq 1 ]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b (%s)\\n" "${C_GRAY}" "$label_width" "Bedalaga" "${C_CYAN}" "АКТИВЕН" "${C_RESET}" "${bot_ver_pretty:-unknown}"
+        printf "║ ${C_GRAY}Bedalaga       :${C_RESET} ${C_CYAN}%s${C_RESET} (%s)\n" "АКТИВЕН" "${bot_ver_pretty:-unknown}"
     fi
 
     if [[ "$WEB_SERVER" != "Не определён" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Web-Server" "${C_CYAN}" "$WEB_SERVER" "${C_RESET}"
+        printf "║ ${C_GRAY}Web-Server     :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$WEB_SERVER"
     fi
 
     if [[ -n "$port_speed" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "Канал (Link)" "${C_BOLD}" "$port_speed" "${C_RESET}"
+        printf "║ ${C_GRAY}Канал (Link)   :${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$port_speed"
     fi
 
     # Если есть сохранённая вместимость — покажем её, чтобы боссу было приятно
     if [[ -n "$capacity_display" ]]; then
-        printf "║ %b%-*s${C_RESET} : %b%s%b юзеров\\n" "${C_GRAY}" "$label_width" "Вместимость" "${C_GREEN}" "$capacity_display" "${C_RESET}"
+        printf "║ ${C_GRAY}Вместимость    :${C_RESET} ${C_GREEN}%s${C_RESET} юзеров\n" "$capacity_display"
     fi
 
     printf "%b\\n" "${C_CYAN}║${C_RESET}"
@@ -323,21 +328,30 @@ show() {
     if [ -d "$WIDGETS_DIR" ] && [ -n "$enabled_widgets" ]; then
         local has_visible_widgets=0
         
-        # Проходим по всем файлам в папке виджетов (не требуем +x, запускаем через bash)
-        for widget_file in "$WIDGETS_DIR"/*.sh; do
-            if [ -f "$widget_file" ]; then
-                local widget_name; widget_name=$(basename "$widget_file")
-                
-                # Проверяем, есть ли имя этого виджета в списке включенных
-                if [[ ",$enabled_widgets," == *",$widget_name,"* ]]; then
-                    # Если это первый видимый виджет, рисуем заголовок
-                    if [ $has_visible_widgets -eq 0 ]; then
-                        printf "%b\\n" "${C_CYAN}║${C_RESET}"
-                        printf "%b\\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
-                        has_visible_widgets=1
-                    fi
+    # Проходим по всем файлам в папке виджетов (не требуем +x, запускаем через bash)
+    for widget_file in "$WIDGETS_DIR"/*.sh; do
+        if [ -f "$widget_file" ]; then
+            local widget_name; widget_name=$(basename "$widget_file")
+            
+            # Проверяем, есть ли имя этого виджета в списке включенных
+            if [[ ",$enabled_widgets," == *",$widget_name,"* ]]; then
+                # Если это первый видимый виджет, рисуем заголовок
+                if [ $has_visible_widgets -eq 0 ]; then
+                    printf "%b\n" "${C_CYAN}║${C_RESET}"
+                    printf "%b\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
+                    has_visible_widgets=1
+                fi
 
-                    local widget_output; widget_output=$(bash "$widget_file")
+                local widget_output
+                local now_ts; now_ts=$(date +%s)
+                local cache_file="$WIDGET_CACHE_DIR/${widget_name}.cache"
+
+                if [ -f "$cache_file" ] && (( now_ts - $(stat -c %Y "$cache_file" 2>/dev/null || echo 0) < DASHBOARD_WIDGET_CACHE_TTL )); then
+                    widget_output=$(cat "$cache_file" 2>/dev/null || true)
+                else
+                    widget_output=$(bash "$widget_file" 2>/dev/null || true)
+                    printf "%s" "$widget_output" >"$cache_file" 2>/dev/null || true
+                fi
                     while IFS= read -r line; do
                         local label; label=$(echo "$line" | cut -d':' -f1 | xargs)
                         local value; value=$(echo "$line" | cut -d':' -f2- | xargs)

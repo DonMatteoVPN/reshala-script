@@ -69,10 +69,13 @@ install_script() {
     printf_warning "ВАЖНО: ПЕРЕПОДКЛЮЧИСЬ к серверу, чтобы команда заработала."
 
     # Автозапуск Решалы сразу после установки
-    echo ""
-    printf_info "Стартую Решалу прямо сейчас..."
-    sleep 1
-    exec "$INSTALL_PATH"
+    # В режиме SKYNET мы передаём RESHALA_NO_AUTOSTART=1, чтобы не запускать интерактивную Решалу
+    if [[ "${RESHALA_NO_AUTOSTART:-0}" != "1" ]]; then
+        echo ""
+        printf_info "Стартую Решалу прямо сейчас..."
+        sleep 1
+        exec "$INSTALL_PATH"
+    fi
 }
 
 uninstall_script() {
