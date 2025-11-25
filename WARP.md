@@ -342,6 +342,14 @@ If you are an AI agent picking up work on this repo, start by reading:
 
 Then consult this Agent journal to understand the latest UX and behavior decisions before making changes.
 
+### 2025-11-25 – README language switcher flags
+
+- Updated `README.md` (RU) and `README.en.md` (EN) headers to use SVG flag icons from `cdn.jsdelivr.net/gh/hampusborgos/country-flags`.
+- Both READMEs now show RU and EN flags in the top-right corner, each wrapped in an anchor:
+  - RU flag links to `README.md`.
+  - EN flag links to `README.en.md`.
+- This ensures that on GitHub clicking a flag always switches language by opening the corresponding README instead of the raw image.
+
 ## Project standards (do not break)
 
 These are core conventions and contracts for «Решала». When you change or extend the code, treat these as **constraints** – breaking them может поломать обновления, плагины или мышечную память пользователей.
