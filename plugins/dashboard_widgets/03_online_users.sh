@@ -1,18 +1,24 @@
 #!/bin/bash
-# TITLE: Кто сейчас на сервере (SSH)
-# Виджет показывает сколько активных SSH/tty‑сессий и кто именно залогинен.
+# TITLE: Сетевой движ (TCP)
+# Виджет показывает, сколько активных TCP‑подключений есть сейчас.
 #
 # КАК НАСТРОИТЬ ПОД СЕБЯ:
-#   - Если хочешь показывать только количество без имён — убери часть с `$USERS_LIST` в echo.
-#   - Если хочешь фильтровать каких‑то пользователей — правь обработку вывода `who`.
-#   - Лейбл "Кто на сервере  :" можно сменить на любой другой.
+#   - Если хочешь считать только ESTABLISHED — оставь как есть.
+#   - Если нужен полный треш (все состояния) — убери фильтр state established.
+#   - Лейбл "TCP-сессии    :" можно переименовать.
 
-COUNT=$(who 2>/dev/null | wc -l | xargs)
-
-if [ -z "$COUNT" ] || [ "$COUNT" = "0" ]; then
-  echo "Кто на сервере  : никто, тишина"
+if command -v ss &>/dev/null; then
+  ESTAB=$(ss -tan state established 2>/dev/null | tail -n +2 | wc -l | xargs)
+elif command -v netstat &>/dev/null; then
+  ESTAB=$(netstat -tan 2>/dev/null | grep ESTABLISHED | wc -l | xargs)
+else
+  echo "TCP-сессии    : ss/netstat не найдены"
   exit 0
 fi
 
-USERS_LIST=$(who 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ $//')
-echo "Кто на сервере  : $COUNT сессий ($USERS_LIST)"
+if [ -z "$ESTAB" ]; then
+  echo "TCP-сессии    : нет данных"
+  exit 0
+fi
+
+echo "TCP-сессии    : $ESTAB активных"

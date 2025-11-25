@@ -1,37 +1,40 @@
 #!/bin/bash
-# TITLE: Здоровье диска / (root)
-# Виджет показывает использование корневого раздела и словесную оценку.
+# TITLE: Настроение сервера
+# Забавный, но лёгкий виджет: даёт оценку состояния сервера по аптайму и нагрузке.
 #
 # КАК НАСТРОИТЬ ПОД СЕБЯ:
-#   - Пороги заполнения (70/85%) правятся в переменных WARN_PERC и DANGER_PERC.
-#   - Тексты статусов ("зеленый", "жёлтый", "КРАСНЫЙ") можно переписать под свой стиль.
-#   - При желании можно заменить `/` на другой путь в команде `df -h /`.
+#   - Можешь переписать фразы в блоке case на свой фирменный стиль.
+#   - Можешь поменять пороговые значения для аптайма/нагрузки.
+#   - Лейбл "Настроение     :" можно сменить.
 
-LINE=$(df -h / 2>/dev/null | awk 'NR==2')
-USED=$(echo "$LINE" | awk '{print $3 "/" $2}')
-PERC=$(echo "$LINE" | awk '{print $5}')
+UPTIME_RAW=$(uptime -p 2>/dev/null | sed 's/^up //;s/,//g')
+LOAD_RAW=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | cut -d',' -f1 | xargs)
+CORES=$(nproc 2>/dev/null || echo 1)
 
-if [ -z "$USED" ] || [ -z "$PERC" ]; then
-  echo "Диск /         : нет данных"
-  exit 0
-fi
-
-WARN_PERC=70
-DANGER_PERC=85
-
-NUM_PERC=$(echo "$PERC" | tr -d '%' )
-STATUS=""
-
-if [[ "$NUM_PERC" =~ ^[0-9]+$ ]]; then
-  if [ "$NUM_PERC" -lt "$WARN_PERC" ]; then
-    STATUS="зелёный, можно жить"
-  elif [ "$NUM_PERC" -lt "$DANGER_PERC" ]; then
-    STATUS="жёлтый, подумай о уборке"
-  else
-    STATUS="КРАСНЫЙ, срочно чистить!"
-  fi
+if [[ "$CORES" =~ ^[0-9]+$ ]] && [[ "$CORES" -gt 0 ]] && [[ "$LOAD_RAW" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  REL_LOAD=$(awk -v l="$LOAD_RAW" -v c="$CORES" 'c>0 {printf "%.2f", l/c}')
 else
-  STATUS="непонятно, смотри df"
+  REL_LOAD="0.0"
 fi
 
+MOOD=""
+if [[ "$UPTIME_RAW" == *"мин"* ]] || [[ "$UPTIME_RAW" == *"min"* ]]; then
+  MOOD="новенький, ещё пахнет заводом"
+elif [[ "$UPTIME_RAW" == *"час"* ]] || [[ "$UPTIME_RAW" == *"hour"* ]]; then
+  MOOD="разогрет, в боевом режиме"
+else
+  MOOD="закалённый временем боец"
+fi
+
+# Чуть корректируем по нагрузке
+CMP_HIGH=$(awk -v x="$REL_LOAD" 'BEGIN{print (x>1.2)?"high":"ok"}')
+CMP_LOW=$(awk -v x="$REL_LOAD" 'BEGIN{print (x<0.3)?"low":"ok"}')
+
+if [ "$CMP_HIGH" = "high" ]; then
+  MOOD="пыхтит изо всех сил"
+elif [ "$CMP_LOW" = "low" ]; then
+  MOOD="пинает балду"
+fi
+
+echo "Настроение     : $MOOD (аптайм: $UPTIME_RAW, load: $LOAD_RAW/$CORES)"
 echo "Диск /         : $USED ($PERC, $STATUS)"

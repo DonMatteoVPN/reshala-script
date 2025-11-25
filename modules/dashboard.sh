@@ -343,7 +343,8 @@ show() {
                 fi
 
                 local widget_output
-                local now_ts; now_ts=$(date +%s)
+                # Используем уже посчитанный now_ts из начала функции show(),
+                # чтобы не дёргать date каждый раз и немного разгрузить систему.
                 local cache_file="$WIDGET_CACHE_DIR/${widget_name}.cache"
 
                 if [ -f "$cache_file" ] && (( now_ts - $(stat -c %Y "$cache_file" 2>/dev/null || echo 0) < DASHBOARD_WIDGET_CACHE_TTL )); then
