@@ -3,7 +3,7 @@
   <img src="https://raw.githubusercontent.com/hjnilsson/country-flags/master/png100px/us.png" alt="EN" width="20" /> EN
 </p>
 
-# Reshala Tool 🚀 v2.44x (Skynet + Widgets)
+# Reshala Tool 🚀 v2.0x (Skynet + Widgets)
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
 
