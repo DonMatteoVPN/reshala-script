@@ -804,6 +804,44 @@ _remna_node_api_add_inbound_to_squad() {
     return 0
 }
 
+# Простая проверка доступности API панели по адресу host:port
+_remna_node_check_panel_api() {
+    local panel_api="$1"   # host:port
+    local url="http://$panel_api/api/auth/status"
+
+    info "Проверяю доступность API панели по адресу $url..."
+    local http_code
+    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 "$url" 2>/dev/null || echo "000")
+
+    # При нормальной работе ждём 200 (OK) или 401 (нет токена)
+    if [[ "$http_code" != "200" && "$http_code" != "401" ]]; then
+        err "Панель по адресу $panel_api не отвечает на /api/auth/status (HTTP $http_code). Проверь домен/IP, порт и файрвол."
+        return 1
+    fi
+
+    return 0
+}
+
+# Быстрая DNS‑проверка selfsteal‑домена (используется в Skynet‑сценариях)
+_remna_node_check_domain_dns() {
+    local domain="$1"
+    local domain_ip=""
+
+    if command -v dig >/dev/null 2>&1; then
+        domain_ip=$(dig +short A "$domain" | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -n 1)
+    else
+        domain_ip=$(getent ahostsv4 "$domain" 2>/dev/null | awk 'NR==1 {print $1}')
+    fi
+
+    if [[ -z "$domain_ip" ]]; then
+        err "Домен '$domain' не резолвится в IP-адрес. Проверь DNS‑запись перед установкой ноды."
+        return 1
+    fi
+
+    info "Домен '$domain' резолвится в $domain_ip — DNS выглядит живым."
+    return 0
+}
+
 # Мастер‑визард установки локальной ноды на этот сервер
 _remna_node_install_local_wizard() {
     menu_header "Нода Remnawave на этот сервак"
@@ -814,6 +852,10 @@ _remna_node_install_local_wizard() {
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME
     PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return 130
+    if ! _remna_node_check_panel_api "$PANEL_API"; then
+        wait_for_enter
+        return 1
+    fi
     PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return 130
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return 130
     NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return 130
@@ -919,8 +961,16 @@ _remna_node_install_skynet_one() {
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME NODE_PORT CERT_MODE
     PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return
+    if ! _remna_node_check_panel_api "$PANEL_API"; then
+        wait_for_enter
+        return
+    fi
     PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return
+    if ! _remna_node_check_domain_dns "$SELFSTEAL_DOMAIN"; then
+        wait_for_enter
+        return
+    fi
     NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return
     NODE_PORT=$(safe_read "Порт ноды (по умолчанию 2222): " "2222") || return
 
@@ -1039,6 +1089,10 @@ _remna_node_install_skynet_many() {
 
     local PANEL_API PANEL_API_TOKEN NODE_PORT CERT_MODE
     PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
+    if ! _remna_node_check_panel_api "$PANEL_API"; then
+        wait_for_enter
+        return
+    fi
     PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
     NODE_PORT=$(safe_read "Порт нод (по умолчанию 2222, общий для всех): " "2222")
 
@@ -1115,6 +1169,12 @@ _remna_node_install_skynet_many() {
 
         if [[ -z "$SELFSTEAL_DOMAIN" || -z "$NODE_NAME" ]]; then
             warn "Для сервера '$name' домен и имя ноды обязательны, пропускаю."
+            continue
+        fi
+
+        # Быстрая DNS‑проверка, что домен хотя бы резолвится
+        if ! _remna_node_check_domain_dns "$SELFSTEAL_DOMAIN"; then
+            warn "DNS для '$SELFSTEAL_DOMAIN' сейчас не годится — этот сервак '$name' пропускаю."
             continue
         fi
 
