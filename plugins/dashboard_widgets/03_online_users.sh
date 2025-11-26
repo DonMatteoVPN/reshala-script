@@ -12,13 +12,13 @@ if command -v ss &>/dev/null; then
 elif command -v netstat &>/dev/null; then
   ESTAB=$(netstat -tan 2>/dev/null | grep ESTABLISHED | wc -l | xargs)
 else
-  echo "TCP-сессии    : ss/netstat не найдены"
+  echo "TCP-сессии: ss/netstat не найдены"
   exit 0
 fi
 
 if [ -z "$ESTAB" ]; then
-  echo "TCP-сессии    : нет данных"
+  echo "TCP-сессии: нет данных"
   exit 0
 fi
 
-echo "TCP-сессии    : $ESTAB активных"
+echo "TCP-сессии: $ESTAB активных"

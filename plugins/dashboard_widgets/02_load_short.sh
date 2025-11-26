@@ -9,7 +9,7 @@
 
 # Проверяем, что docker вообще есть
 if ! command -v docker &>/dev/null; then
-  echo "Docker        : не установлен"
+  echo "Docker: не установлен"
   exit 0
 fi
 
@@ -20,8 +20,8 @@ RESTARTING=$(docker ps --filter "status=restarting" -q 2>/dev/null | wc -l | xar
 EXITED=$(docker ps -a --filter "status=exited" -q 2>/dev/null | wc -l | xargs)
 
 if [ -z "$TOTAL" ]; then
-  echo "Docker        : нет данных"
+  echo "Docker: нет данных"
   exit 0
 fi
 
-echo "Docker        : всего $TOTAL, живых $RUNNING, рестартится $RESTARTING, мёртвых $EXITED"
+echo "Docker: всего $TOTAL, живых $RUNNING, рестартится $RESTARTING, мёртвых $EXITED"

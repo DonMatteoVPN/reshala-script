@@ -224,12 +224,13 @@ show() {
     clear
     mkdir -p "$WIDGET_CACHE_DIR" 2>/dev/null || true
 
-    # Чтобы конфиг, даже если он поехал, не ломал всю отрисовку
-    local label_width="${DASHBOARD_LABEL_WIDTH:-16}"
+    # Минимальная ширина колонки для лейблов виджетов.
+    # Фактическая ширина будет = max(минимум, максимальный лейбл среди активных виджетов).
+    local min_label_width="${DASHBOARD_LABEL_WIDTH:-16}"
     # Оставляем только цифры в начале, остальное отбрасываем
-    label_width="${label_width%%[^0-9]*}"
-    if [[ -z "$label_width" ]]; then
-        label_width=16
+    min_label_width="${min_label_width%%[^0-9]*}"
+    if [[ -z "$min_label_width" ]]; then
+        min_label_width=16
     fi
 
     # Обновляем картину мира Remnawave/бота перед отрисовкой панели
@@ -384,6 +385,11 @@ show() {
 
     if [ -d "$WIDGETS_DIR" ] && [ -n "$enabled_widgets" ]; then
         local has_visible_widgets=0
+
+        # Сначала собираем все строки виджетов, чтобы вычислить максимальную ширину лейбла
+        local -a widget_labels=()
+        local -a widget_values=()
+        local max_label_len=0
         
         # Проходим по всем файлам в папке виджетов (не требуем +x, запускаем через bash)
         for widget_file in "$WIDGETS_DIR"/*.sh; do
@@ -392,18 +398,13 @@ show() {
                 
                 # Проверяем, есть ли имя этого виджета в списке включенных
                 if [[ ",$enabled_widgets," == *",$widget_name,"* ]]; then
+                    has_visible_widgets=1
+
                     # Человеко-читаемый заголовок виджета из # TITLE
                     local widget_title
                     widget_title=$(grep -m1 '^# TITLE:' "$widget_file" 2>/dev/null | sed 's/^# TITLE:[[:space:]]*//')
                     if [[ -z "$widget_title" ]]; then
                         widget_title="$widget_name"
-                    fi
-
-                    # Если это первый видимый виджет, рисуем заголовок блока
-                    if [ $has_visible_widgets -eq 0 ]; then
-                        printf "%b\n" "${C_CYAN}║${C_RESET}"
-                        printf "%b\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
-                        has_visible_widgets=1
                     fi
 
                     local widget_output=""
@@ -426,7 +427,7 @@ show() {
                         fi
                     else
                         # Кеша ещё нет: запускаем сборку в фоне и выводим аккуратную заглушку
-                        widget_output="$widget_title : загрузка..."
+                        widget_output="$widget_title: загрузка..."
                         if [ ! -f "$building_flag" ]; then
                             (
                                 touch "$building_flag" 2>/dev/null || true
@@ -437,7 +438,7 @@ show() {
                         fi
                     fi
 
-                    # Отрисовываем вывод виджета, пропуская пустые строки
+                    # Разбираем вывод и накапливаем строки для дальнейшей отрисовки
                     while IFS= read -r line; do
                         # Убираем возможные символы CR (\r), чтобы не было артефактов вида "rn" при копипасте
                         line=${line%$'\r'}
@@ -461,11 +462,37 @@ show() {
                             continue
                         fi
 
-                        printf "║ %b%-*s${C_RESET} : %b%s%b\\n" "${C_GRAY}" "$label_width" "$label" "${C_CYAN}" "$value" "${C_RESET}"
+                        widget_labels+=("$label")
+                        widget_values+=("$value")
+
+                        if (( ${#label} > max_label_len )); then
+                            max_label_len=${#label}
+                        fi
                     done <<< "$widget_output"
                 fi
             fi
         done
+
+        # Если есть хоть один виджет/строка — отрисовываем блок с автоподбором ширины
+        if [ $has_visible_widgets -eq 1 ] && [ ${#widget_labels[@]} -gt 0 ]; then
+            printf "%b\n" "${C_CYAN}║${C_RESET}"
+            printf "%b\n" "${C_CYAN}╠═[ WIDGETS ]${C_RESET}"
+
+            local effective_width=$max_label_len
+            if (( effective_width < min_label_width )); then
+                effective_width=$min_label_width
+            fi
+
+            local idx
+            for idx in "${!widget_labels[@]}"; do
+                local label="${widget_labels[$idx]}"
+                local value="${widget_values[$idx]}"
+
+                printf "║ %b%-*s${C_RESET} : %b%s%b\\n" \
+                    "${C_GRAY}" "$effective_width" "$label" \
+                    "${C_CYAN}" "$value" "${C_RESET}"
+            done
+        fi
     fi
     # ======================================================= #
     # === КОНЕЦ БЛОКА ВИДЖЕТОВ ================================ #

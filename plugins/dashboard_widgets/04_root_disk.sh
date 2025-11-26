@@ -30,10 +30,10 @@ fi
 CMP_HIGH=$(awk -v x="$REL_LOAD" 'BEGIN{print (x>1.2)?"high":"ok"}')
 CMP_LOW=$(awk -v x="$REL_LOAD" 'BEGIN{print (x<0.3)?"low":"ok"}')
 
-if [ "$CMP_HIGH" = "high" ]; then
+if [[ "$CMP_HIGH" = "high" ]]; then
   MOOD="пыхтит изо всех сил"
 elif [ "$CMP_LOW" = "low" ]; then
   MOOD="пинает балду"
 fi
 
-echo "Настроение     : $MOOD (аптайм: $UPTIME_RAW, load: $LOAD_RAW/$CORES)"
+echo "Настроение сервера: $MOOD (аптайм: $UPTIME_RAW, load: $LOAD_RAW/$CORES)"
