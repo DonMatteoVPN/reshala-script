@@ -4,7 +4,7 @@
 </p>
 
 <a id="ru"></a>
-# Reshala Tool 🚀 v2.0x (Skynet + Widgets)
+# Reshala Tool 🚀 v2.x (Skynet + Widgets + Remnawave)
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
 
@@ -22,7 +22,7 @@ Now with **SKYNET** fleet mode and **dashboard widgets**.
 When you start the script you get a **control panel**, not a black hole:
 
 * **Visuals:** CPU / RAM / Disk usage bars so you instantly see bottlenecks.
-* **Honest math:** can run an official Ookla speedtest and **estimate how many real users your node can handle**.
+* **Honest math:** can run official Ookla speedtest and **estimate how many real users your node can handle**. In agent mode (SKYNET_MODE=1) CPU load is also calculated correctly (no more “stuck at 100%”).
 * **Status:** kernel version, virtualization, ping, country, panel/node/bot status.
 * **WIDGETS:** small, toggleable widgets (BTC price, Docker state, network activity, "server mood"), rendered from `plugins/dashboard_widgets/*`.
 
@@ -72,10 +72,31 @@ Docker loves to eat disk. This menu keeps it on a leash:
   * `docker inspect` and `docker stats --no-stream`,
   * manage networks, volumes and images.
 
-#### [4] & [5] 💿 BUSINESS INSTALLERS (WIP)
+#### [4] 💿 INSTALL REMNAWAVE PANEL (High-Load)
 
-* **Remnawave Panel:** high-load panel installer (module under active development).
-* **Bedalaga Bot:** bot installer for sales (marked as `Coming Soon`).
+This entry opens the **Remnawave hub**:
+
+- **[1] Panel only** – installs Remnawave panel on this server, registers superadmin, creates a base config-profile and can immediately enable **HTTPS (TLS, Let’s Encrypt)** for panel + subscription domains.
+- **[2] Panel + Node** – installs panel and a first node on the same host:
+  - asks for three domains (panel, subscription, selfsteal node);
+  - validates DNS (with Cloudflare proxy checks; selfsteal must be DNS-only);
+  - brings up Docker stack, drives the panel via HTTP API (superadmin, config-profile, node, host, squad);
+  - can immediately enable **TLS for panel/subscription (ACME HTTP-01)**;
+  - selfsteal domain gets a masking site and can run HTTP or HTTPS.
+- **[3] Remnawave nodes** – module `remnawave_node.sh`:
+  - installs a node **on this server** for an existing panel;
+  - installs a node **on ONE remote server** via Skynet;
+  - distributes nodes **to MULTIPLE fleet servers** via Skynet;
+  - uses a **hidden Skynet plugin** for remote installs so users cannot call it directly from the generic fleet menu.
+- **[4] Manage local Remnawave install** – interactive menu:
+  - show Docker status;
+  - restart the stack;
+  - stream logs (`docker compose logs -f` with clean `CTRL+C` exit);
+  - show INSTALL_INFO (domains, superadmin login/password, service vars).
+
+#### [5] 🤖 INSTALL BEDALAGA BOT
+
+Reserved for the Bedalaga bot installer. Currently marked as `Coming Soon` and only shows a warning.
 
 ---
 

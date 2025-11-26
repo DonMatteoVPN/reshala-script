@@ -181,16 +181,94 @@ _calculate_vpn_capacity() {
     fi
 }
 
+# Вспомогательный хелпер: установка официального клиента Speedtest от Ookla
+_install_official_speedtest() {
+    if ! command -v apt-get &>/dev/null; then
+        err "apt-get не найден. Не могу автоматически установить официальный speedtest."
+        return 1
+    fi
+
+    printf_info "Ставлю официальный Speedtest от Ookla (через packagecloud)..."
+    # Скрипт репозитория может уже быть применён — это окей
+    curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | run_cmd bash >/dev/null 2>&1 || true
+    run_cmd apt-get update -qq >/dev/null 2>&1 || true
+    run_cmd apt-get install -y speedtest >/dev/null 2>&1 || {
+        err "Не удалось установить пакет speedtest. Проверь репозитории вручную."
+        return 1
+    }
+    return 0
+}
+
+# Детектор/чистильщик кривых speedtest (не-Ookla, битый бинарь, snap и т.п.)
+_cleanup_broken_speedtest() {
+    local bin_path
+    bin_path=$(command -v speedtest 2>/dev/null || true)
+
+    # Пробуем аккуратно удалить известные пакеты speedtest/speedtest-cli
+    if command -v dpkg &>/dev/null; then
+        if dpkg -l 2>/dev/null | grep -qE '^ii[[:space:]]+speedtest-cli[[:space:]]'; then
+            run_cmd apt-get remove -y speedtest-cli >/dev/null 2>&1 || true
+        fi
+        if dpkg -l 2>/dev/null | grep -qE '^ii[[:space:]]+speedtest[[:space:]]'; then
+            run_cmd apt-get remove -y speedtest >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Если стоял snap-овский speedtest — убираем и его
+    if command -v snap &>/dev/null; then
+        if snap list 2>/dev/null | grep -q '^speedtest\b'; then
+            run_cmd snap remove speedtest >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Если после этого бинарь всё ещё есть в PATH — пробуем удалить файл руками
+    if command -v speedtest &>/dev/null 2>&1; then
+        bin_path=$(command -v speedtest 2>/dev/null || true)
+        if [[ -n "$bin_path" && -x "$bin_path" ]]; then
+            warn "Speedtest по-прежнему в PATH ($bin_path). Пробую удалить бинарь руками..."
+            run_cmd rm -f "$bin_path" || true
+        fi
+    fi
+}
+
+# Главный хелпер: убедиться, что стоит именно официальный Speedtest от Ookla
+_ensure_speedtest_ok() {
+    ensure_package "curl"
+
+    if ! command -v speedtest &>/dev/null; then
+        _install_official_speedtest
+        return
+    fi
+
+    # Проверяем версию: у официального клиента в версии фигурирует строка "Speedtest by Ookla"
+    local ver_out
+    ver_out=$(speedtest --version 2>/dev/null | head -n1 || true)
+
+    if [[ -z "$ver_out" ]]; then
+        warn "Speedtest установлен, но не отвечает на --version. Попробую переустановить."
+        _cleanup_broken_speedtest
+        _install_official_speedtest
+        return
+    fi
+
+    if [[ "$ver_out" != *"Ookla"* ]]; then
+        warn "Обнаружен нестандартный speedtest ('$ver_out'). Переставляю официальный клиент."
+        _cleanup_broken_speedtest
+        _install_official_speedtest
+    fi
+}
+
 _run_speedtest() {
     clear
     printf_info "🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ..."
-    ensure_package "curl"
+
     ensure_package "jq"
+    _ensure_speedtest_ok
 
     if ! command -v speedtest &>/dev/null; then
-        printf_info "Устанавливаю официальный клиент Speedtest..."
-        curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | run_cmd bash >/dev/null 2>&1
-        run_cmd apt-get install -y speedtest >/dev/null 2>&1
+        printf_error "Speedtest так и не установился автоматически. Проверь интернет и репозитории."
+        wait_for_enter
+        return
     fi
 
     printf_warning "РУКИ УБРАЛ ОТ КЛАВИАТУРЫ! Идёт замер..."
@@ -241,6 +319,64 @@ _run_speedtest() {
 # ============================================================ #
 #                ГЛАВНОЕ МЕНЮ ОБСЛУЖИВАНИЯ                     #
 # ============================================================ #
+_set_dashboard_profile_menu() {
+    while true; do
+        clear
+        menu_header "Профиль нагрузки дашборда"
+        echo
+        echo "   Тут настраиваем, как часто дашборд будет трогать систему и сеть."
+        echo "   Профиль влияет на TTL кэша основных метрик и виджетов."
+        echo
+
+        local current
+        current=$(get_config_var "DASHBOARD_LOAD_PROFILE")
+        if [[ -z "$current" ]]; then
+            current="normal"
+        fi
+
+        local mark_normal=" " mark_light=" " mark_ultra=" "
+        case "$current" in
+            normal)      mark_normal="*" ;;
+            light)       mark_light="*" ;;
+            ultra_light) mark_ultra="*" ;;
+        esac
+
+        echo "   [1] ($mark_normal) NORMAL      — стандартный режим (база: 25/60 сек)"
+        echo "   [2] ($mark_light)  LIGHT       — реже обновление (примерно x2: ~50/120)"
+        echo "   [3] ($mark_ultra) ULTRA_LIGHT — минимальная нагрузка (примерно x4: ~100/240)"
+        echo
+        echo "   [b] 🔙 Назад"
+        echo "------------------------------------------------------"
+
+        local choice
+        choice=$(safe_read "Твой выбор: " "")
+
+        case "$choice" in
+            1)
+                set_config_var "DASHBOARD_LOAD_PROFILE" "normal"
+                ok "Профиль дашборда: NORMAL. Изменения применятся при следующем открытии панели."
+                sleep 1
+                ;;
+            2)
+                set_config_var "DASHBOARD_LOAD_PROFILE" "light"
+                ok "Профиль дашборда: LIGHT. Метрики и виджеты будут обновляться реже."
+                sleep 1
+                ;;
+            3)
+                set_config_var "DASHBOARD_LOAD_PROFILE" "ultra_light"
+                ok "Профиль дашборда: ULTRA_LIGHT. Минимум нагрузки, максимум кеша."
+                sleep 1
+                ;;
+            [bB])
+                return
+                ;;
+            *)
+                err "Нет такого пункта, смотри внимательнее, босс."
+                ;;
+        esac
+    done
+}
+
 show_maintenance_menu() {
     while true; do
         clear
@@ -250,6 +386,7 @@ show_maintenance_menu() {
         echo "   [2] 🚀 Настройка сети «Форсаж» (BBR + CAKE)"
         echo "   [3] 🌐 Управление IPv6 (Вкл/Выкл)"
         echo "   [4] ⚡ Тест скорости до Москвы (Speedtest)"
+        echo "   [5] 🎛 Профиль нагрузки дашборда (NORMAL/LIGHT/ULTRA)"
         echo ""
         echo "   [b] 🔙 Назад в главное меню"
         echo "------------------------------------------------------"
@@ -261,6 +398,7 @@ show_maintenance_menu() {
             2) _apply_bbr ;;
             3) _toggle_ipv6 ;;
             4) _run_speedtest ;;
+            5) _set_dashboard_profile_menu ;;
             [bB]) break ;;
             *) ;;
         esac

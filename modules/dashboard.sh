@@ -70,15 +70,45 @@ _draw_bar() {
 }
 
 _get_cpu_load_visual() {
-    local cores; cores=$(nproc)
-    local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | xargs)
-    local perc; perc=$(awk "BEGIN {printf \"%.0f\", ($load / $cores) * 100}")
-    # Не даём процентажу улетать за 100, чтобы не пугать босса
-    if [[ "$perc" -gt 100 ]]; then
-        perc=100
+    # Более честная оценка загрузки CPU через /proc/stat, работает и в режиме агента
+    local cpu_line1 cpu_line2
+    cpu_line1=$(grep '^cpu ' /proc/stat 2>/dev/null)
+    sleep 0.2
+    cpu_line2=$(grep '^cpu ' /proc/stat 2>/dev/null)
+
+    if [[ -z "$cpu_line1" || -z "$cpu_line2" ]]; then
+        echo "N/A"
+        return
     fi
+
+    local _ user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1 guest1 guest_nice1
+    local user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2 guest2 guest_nice2
+
+    read -r _ user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1 guest1 guest_nice1 <<<"$cpu_line1"
+    read -r _ user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2 guest2 guest_nice2 <<<"$cpu_line2"
+
+    local idle_all1 idle_all2 non_idle1 non_idle2 total1 total2 total_delta idle_delta
+    idle_all1=$((idle1 + iowait1))
+    idle_all2=$((idle2 + iowait2))
+    non_idle1=$((user1 + nice1 + system1 + irq1 + softirq1 + steal1))
+    non_idle2=$((user2 + nice2 + system2 + irq2 + softirq2 + steal2))
+    total1=$((idle_all1 + non_idle1))
+    total2=$((idle_all2 + non_idle2))
+
+    total_delta=$((total2 - total1))
+    idle_delta=$((idle_all2 - idle_all1))
+
+    local perc=0
+    if (( total_delta > 0 )); then
+        perc=$(awk "BEGIN {printf \"%.0f\", (1 - $idle_delta / $total_delta) * 100}")
+    fi
+
+    if [[ "$perc" -lt 0 ]]; then perc=0; fi
+    if [[ "$perc" -gt 100 ]]; then perc=100; fi
+
+    local cores; cores=$(nproc 2>/dev/null || echo 1)
     local bar; bar=$(_draw_bar "$perc")
-    echo "$bar ($load / $cores vCore)"
+    echo "$bar (${perc}% / ${cores} vCore)"
 }
 
 _get_ram_visual() {
@@ -144,8 +174,36 @@ DASHBOARD_HOSTER_INFO=""
 
 # Общий кэш метрик дашборда (легкий TTL, чтобы не дёргать систему при быстрых переходах)
 DASHBOARD_CACHE_TS=0
-# TTL берём из конфига, но если его там нет — используем 3 сек
-DASHBOARD_CACHE_TTL=${DASHBOARD_CACHE_TTL:-3}  # секунды; можно увеличить в config/reshala.conf
+
+# Профиль нагрузки дашборда: normal / light / ultra_light
+# Хранится в конфиге через set_config_var "DASHBOARD_LOAD_PROFILE".
+# Если не указан, используем normal.
+DASHBOARD_LOAD_PROFILE=$(get_config_var "DASHBOARD_LOAD_PROFILE")
+if [[ -z "$DASHBOARD_LOAD_PROFILE" ]]; then
+    DASHBOARD_LOAD_PROFILE="normal"
+fi
+
+# Базовые TTL берём из конфига (readonly-константы), если они есть
+local_base_cache_ttl=${DASHBOARD_CACHE_TTL:-25}
+local_base_widget_ttl=${DASHBOARD_WIDGET_CACHE_TTL:-60}
+
+# Множители в зависимости от профиля
+case "$DASHBOARD_LOAD_PROFILE" in
+    light)
+        local_factor=2
+        ;;
+    ultra_light)
+        local_factor=4
+        ;;
+    *)
+        DASHBOARD_LOAD_PROFILE="normal"
+        local_factor=1
+        ;;
+esac
+
+DASHBOARD_CACHE_TTL=$(( local_base_cache_ttl * local_factor ))
+DASHBOARD_WIDGET_CACHE_TTL=$(( local_base_widget_ttl * local_factor ))
+
 DASHBOARD_CACHE_OS=""
 DASHBOARD_CACHE_KERNEL=""
 DASHBOARD_CACHE_UPTIME=""
@@ -158,7 +216,6 @@ DASHBOARD_CACHE_DISKRAW=""
 
 # Кэш для вывода виджетов (через файлы, чтобы не мудрить с eval)
 WIDGET_CACHE_DIR="/tmp/reshala_widgets_cache"
-DASHBOARD_WIDGET_CACHE_TTL=${DASHBOARD_WIDGET_CACHE_TTL:-10}
 
 # ============================================================ #
 #                  ГЛАВНАЯ ФУНКЦИЯ ОТРИСОВКИ                   #

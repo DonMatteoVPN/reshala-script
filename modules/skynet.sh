@@ -320,17 +320,28 @@ show_fleet_menu() {
         echo "   редактируешь, смотришь статус и запускаешь команды на всём флоте."
         echo ""
 
-        # --- Параллельный опрос состояния серверов ---
+        # Режим автосканирования SSH-состояния (ON/OFF), хранится в конфиге
+        local auto_scan
+        auto_scan=$(get_config_var "SKYNET_AUTO_SSH_SCAN")
+        if [[ -z "$auto_scan" ]]; then
+            auto_scan="on"
+        fi
+
+        printf "   Авто-сканирование SSH статуса: %s%s%s (переключить [s])\n\n" \
+            "${C_YELLOW}" "$auto_scan" "${C_RESET}"
+
+        # --- Параллельный опрос состояния серверов (если включен) ---
         local servers=()
         local raw_lines=()
         if [ -s "$FLEET_DATABASE_FILE" ]; then
             mapfile -t raw_lines < "$FLEET_DATABASE_FILE"
         fi
 
+        local tmp_dir=""
         if [ ${#raw_lines[@]} -eq 0 ]; then
             echo -e "\n   (База данных пуста. Добавь свой первый сервер [a])"
-        else
-            local tmp_dir; tmp_dir=$(mktemp -d)
+        elif [[ "$auto_scan" == "on" ]]; then
+            tmp_dir=$(mktemp -d)
             printf "\n   %b⏳ Сканирую сеть (параллельный опрос)...%b" "${C_YELLOW}" "${C_RESET}"
             local i=1
             for line in "${raw_lines[@]}"; do
@@ -341,6 +352,8 @@ show_fleet_menu() {
             done
             wait
             printf "\r\033[K" # Стираем строку "Сканирую..."
+        else
+            echo -e "\n   (Авто-сканирование SSH отключено, статусы не обновляются — см. [s])"
         fi
 
         # --- Отрисовка списка серверов ---
@@ -354,20 +367,33 @@ show_fleet_menu() {
             for line in "${raw_lines[@]}"; do
                 IFS='|' read -r name user ip port key_path sudo_pass <<< "$line"
                 servers[$i]="$line" # Сохраняем полную строку для будущего использования
-                local status_text="UNK"; [ -f "$tmp_dir/$i" ] && status_text=$(cat "$tmp_dir/$i")
-                local status_color="${C_RED}OFF${C_RESET}"; [[ "$status_text" == "ON" ]] && status_color="${C_GREEN}ON ${C_RESET}"
+
+                local status_text="??"
+                if [[ -n "$tmp_dir" && -f "$tmp_dir/$i" ]]; then
+                    status_text=$(cat "$tmp_dir/$i")
+                fi
+                local status_color="${C_YELLOW}?? ${C_RESET}"
+                if [[ "$status_text" == "ON" ]]; then
+                    status_color="${C_GREEN}ON ${C_RESET}"
+                elif [[ "$status_text" == "OFF" ]]; then
+                    status_color="${C_RED}OFF${C_RESET}"
+                fi
+
                 local kp_display="Master"; [[ "$key_path" == *"${SKYNET_UNIQUE_KEY_PREFIX}"* ]] && kp_display="Unique"
                 local pass_icon=""; if [[ "$user" != "root" && -n "$sudo_pass" ]]; then pass_icon="🔑"; fi
                 printf "   [%d] [%b] %b%-15s%b -> %s@%s:%s [%s] %s\n" "$i" "$status_color" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display" "$pass_icon"
                 ((i++))
             done
-            rm -rf "$tmp_dir"
+            if [[ -n "$tmp_dir" ]]; then
+                rm -rf "$tmp_dir"
+            fi
         fi
         
         echo "----------------------------------------------------------------"
         printf "   %-3s %-18s %-3s %-16s %-3s %-10s\n" "[a]" "➕ Добавить" "[d]" "🗑️ Удалить" "[k]" "🔑 Ключи"
         printf "   %-3s %-30s\n" "[c]" "☢️  Выполнить команду на флоте"
         printf "   %-3s %-18s %-3s %-10s\n" "[x]" "🗑️  Удалить сервер" "[m]" "📝 Редактор"
+        printf "   %-3s %-22s\n" "[s]" "⚙️  Авто-скан SSH ON/OFF"
         printf "   %-3s %-10s\n" "[b]" "🔙  Назад"
         echo ""
 
@@ -430,6 +456,18 @@ show_fleet_menu() {
 
             [kK]) _show_keys_menu ;;
             [mM]) ensure_package "nano"; nano "$FLEET_DATABASE_FILE" ;;
+            [sS])
+                # Переключаем режим авто-сканирования SSH и сохраняем в конфиг
+                if [[ "$auto_scan" == "on" ]]; then
+                    auto_scan="off"
+                    printf_warning "Авто-скан SSH статусов выключено. Список будет отображаться без проверки онлайн."
+                else
+                    auto_scan="on"
+                    printf_ok "Авто-скан SSH статусов включено. При входе в меню буду проверять, кто онлайн."
+                fi
+                set_config_var "SKYNET_AUTO_SSH_SCAN" "$auto_scan"
+                sleep 1
+                ;;
             [xX])
                 read -p "Ты ТОЧНО хочешь удалить ВСЕ серверы из базы? (yes/no): " confirm
                 if [[ "$confirm" == "yes" ]]; then > "$FLEET_DATABASE_FILE"; printf_ok "База флота уничтожена."; sleep 1; fi
