@@ -286,7 +286,7 @@ _docker_select_image() {
 
     local choice
     read -r -p "Выбери номер образа: " choice
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -з "${names[$choice]:-}" ]; then
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ -z "${names[$choice]:-}" ]; then
         printf_error "Нет такого номера."
         return 1
     fi

@@ -818,7 +818,7 @@ _remna_node_install_local_wizard() {
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return 130
     NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return 130
 
-    if [[ -з "$SELFSTEAL_DOMAIN" || -з "$NODE_NAME" ]]; then
+    if [[ -z "$SELFSTEAL_DOMAIN" || -z "$NODE_NAME" ]]; then
         err "Имя ноды и домен — обязательно."
         return 1
     fi
@@ -995,7 +995,7 @@ _remna_node_install_skynet_one() {
 
     local s_choice
     s_choice=$(ask_number_in_range "Номер сервера для ноды: " 1 "$((idx-1))" "") || { wait_for_enter; return; }
-    if [[ -з "${servers[$s_choice]:-}" ]]; then
+    if [[ -z "${servers[$s_choice]:-}" ]]; then
         err "Нет такого номера сервера."
         wait_for_enter
         return
