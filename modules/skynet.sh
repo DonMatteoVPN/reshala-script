@@ -14,22 +14,25 @@
 # ============================================================ #
 
 # Проверяет/создаёт главный мастер-ключ
+# ВАЖНО: ВСЁ, что идёт в stdout, должно быть ТОЛЬКО путём до ключа,
+# чтобы можно было безопасно писать $( _ensure_master_key ).
 _ensure_master_key() {
     local key_path="${HOME}/.ssh/${SKYNET_MASTER_KEY_NAME}"
     if [ ! -f "$key_path" ]; then
-        printf_info "🔑 Генерирую МАСТЕР-КЛЮЧ (${SKYNET_MASTER_KEY_NAME})..."
+        printf_info "🔑 Генерирую МАСТЕР-КЛЮЧ (${SKYNET_MASTER_KEY_NAME})..." >&2
         ssh-keygen -t ed25519 -f "$key_path" -N "" -q
     fi
     echo "$key_path"
 }
 
 # Генерирует уникальный ключ для конкретного сервера
+# Аналогично: stdout = только путь до ключа.
 _generate_unique_key() {
     local name="$1"
     local safe_name; safe_name=$(echo "$name" | tr -cd '[:alnum:]_-')
     local key_path="${HOME}/.ssh/${SKYNET_UNIQUE_KEY_PREFIX}${safe_name}"
     if [ ! -f "$key_path" ]; then
-        printf_info "🔑 Генерирую УНИКАЛЬНЫЙ ключ для '${name}'..."
+        printf_info "🔑 Генерирую УНИКАЛЬНЫЙ ключ для '${name}'..." >&2
         ssh-keygen -t ed25519 -f "$key_path" -N "" -q
     fi
     echo "$key_path"
@@ -182,7 +185,24 @@ _skynet_is_local_newer() {
 
 _sanitize_fleet_database() {
     if [ -f "$FLEET_DATABASE_FILE" ]; then
-        sed -i '/^$/d' "$FLEET_DATABASE_FILE" # Удаляем пустые строки
+        # Удаляем пустые строки
+        sed -i '/^$/d' "$FLEET_DATABASE_FILE"
+
+        # Фильтруем явный мусор: строки без нормального имени/пользователя/IP/порта/ключа
+        local tmp
+        tmp=$(mktemp)
+        while IFS='|' read -r name user ip port key_path sudo_pass; do
+            # Пропускаем пустое имя или "шумные" ANSI-строки (начинаются с ESC)
+            if [[ -z "$name" ]] || [[ "$name" == $'\e'* ]]; then
+                continue
+            fi
+            # Минимально валидная строка: есть имя и IP
+            if [[ -z "$ip" ]]; then
+                continue
+            fi
+            echo "$name|$user|$ip|$port|$key_path|$sudo_pass" >> "$tmp"
+        done < "$FLEET_DATABASE_FILE"
+        mv "$tmp" "$FLEET_DATABASE_FILE"
     fi
 }
 
