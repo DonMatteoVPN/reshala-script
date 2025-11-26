@@ -43,6 +43,111 @@ _remna_prepare_dir() {
     return 0
 }
 
+# Проверка, что домен резолвится и указывает на этот сервер (по мотивам donor check_domain)
+_remna_check_domain() {
+    local domain="$1"
+    local show_warning="${2:-true}"
+    local allow_cf_proxy="${3:-true}"
+
+    local domain_ip=""
+    local server_ip=""
+
+    if command -v dig >/dev/null 2>&1; then
+        domain_ip=$(dig +short A "$domain" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+    else
+        domain_ip=$(getent ahostsv4 "$domain" 2>/dev/null | awk 'NR==1 {print $1}')
+    fi
+
+    server_ip=$(curl -s -4 ifconfig.me || curl -s -4 api.ipify.org || curl -s -4 ipinfo.io/ip)
+
+    # 0  - всё ок
+    # 1  - есть проблема, но пользователь согласился продолжить
+    # 2  - пользователь решил прервать установку
+
+    if [[ -z "$domain_ip" || -z "$server_ip" ]]; then
+        if [[ "$show_warning" == true ]]; then
+            warn "Не смог определить IP домена '$domain' или IP этого сервера."
+            info "Проверь DNS: домен должен указывать на текущий сервер. Сейчас сервер видится как: ${server_ip:-\"не удалось определить\"}."
+            local confirm
+            confirm=$(safe_read "Продолжить установку, игнорируя эту проверку? (y/N): " "n")
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                return 2
+            fi
+        fi
+        return 1
+    fi
+
+    local cf_ranges
+    local -a cf_array=()
+    cf_ranges=$(curl -s https://www.cloudflare.com/ips-v4 || true)
+    if [[ -n "$cf_ranges" ]]; then
+        mapfile -t cf_array <<<"$cf_ranges"
+    fi
+
+    local ip_in_cloudflare=false
+    local a b c d
+    local domain_ip_int
+    local IFS='.'
+    read -r a b c d <<<"$domain_ip"
+    domain_ip_int=$(( (a << 24) + (b << 16) + (c << 8) + d ))
+
+    if (( ${#cf_array[@]} > 0 )); then
+        local cidr network mask network_int mask_bits range_size min_ip_int max_ip_int
+        for cidr in "${cf_array[@]}"; do
+            [[ -z "$cidr" ]] && continue
+            network=${cidr%/*}
+            mask=${cidr#*/}
+            IFS='.' read -r a b c d <<<"$network"
+            network_int=$(( (a << 24) + (b << 16) + (c << 8) + d ))
+            mask_bits=$(( 32 - mask ))
+            range_size=$(( 1 << mask_bits ))
+            min_ip_int=$network_int
+            max_ip_int=$(( network_int + range_size - 1 ))
+
+            if (( domain_ip_int >= min_ip_int && domain_ip_int <= max_ip_int )); then
+                ip_in_cloudflare=true
+                break
+            fi
+        done
+    fi
+
+    if [[ "$domain_ip" == "$server_ip" ]]; then
+        return 0
+    elif [[ "$ip_in_cloudflare" == true ]]; then
+        if [[ "$allow_cf_proxy" == true ]]; then
+            return 0
+        fi
+
+        if [[ "$show_warning" == true ]]; then
+            warn "Домен '$domain' сейчас указывает на IP Cloudflare ($domain_ip), для selfsteal-домена так нельзя."
+            info "Выключи оранжевое облако (режим 'DNS only') для этого домена в Cloudflare, подожди обновление DNS и запусти установку ещё раз."
+            local confirm
+            confirm=$(safe_read "Всё равно продолжить установку? (y/N): " "n")
+            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+                return 1
+            else
+                return 2
+            fi
+        fi
+        return 1
+    else
+        if [[ "$show_warning" == true ]]; then
+            warn "Домен '$domain' указывает на IP $domain_ip, а текущий сервер видится как $server_ip."
+            info "Для нормальной работы Remnawave домен должен указывать именно на этот сервер."
+            local confirm
+            confirm=$(safe_read "Продолжить установку, игнорируя несовпадение IP? (y/N): " "n")
+            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+                return 1
+            else
+                return 2
+            fi
+        fi
+        return 1
+    fi
+
+    return 0
+}
+
 # --- HTTP API хелперы ----------------------------------------
 
 _remna_api_request() {
@@ -663,6 +768,30 @@ _remna_install_panel_and_node_wizard() {
 
     if [[ "$PANEL_DOMAIN" == "$SUB_DOMAIN" || "$PANEL_DOMAIN" == "$SELFSTEAL_DOMAIN" || "$SUB_DOMAIN" == "$SELFSTEAL_DOMAIN" ]]; then
         err "Домены панели, подписки и ноды должны быть разными. Не мешай кашу." 
+        return 1
+    fi
+
+    info "Проверяю, что домены реально смотрят на этот сервер..."
+    local rc
+
+    _remna_check_domain "$PANEL_DOMAIN" true true
+    rc=$?
+    if [[ $rc -eq 2 ]]; then
+        err "Установка прервана по твоему запросу на проверке домена панели."
+        return 1
+    fi
+
+    _remna_check_domain "$SUB_DOMAIN" true true
+    rc=$?
+    if [[ $rc -eq 2 ]]; then
+        err "Установка прервана по твоему запросу на проверке домена подписки."
+        return 1
+    fi
+
+    _remna_check_domain "$SELFSTEAL_DOMAIN" true false
+    rc=$?
+    if [[ $rc -eq 2 ]]; then
+        err "Установка прервана по твоему запросу на проверке selfsteal-домена ноды."
         return 1
     fi
 

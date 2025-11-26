@@ -377,6 +377,49 @@ Then consult this Agent journal to understand the latest UX and behavior decisio
     - На ноде разворачивается упрощённая логика донора: `handle_certificates` + `get_certificates` (Cloudflare или ACME HTTP-01), локальный `certbot renew` и `renew_hook`, который перезапускает nginx/контейнер ноды.
 - **UX:** все новые меню и вопросы будут оформлены через `menu_header`, `safe_read`, `info/ok/warn/err`, без своих цветовых костылей. Выбор метода сертификата будет формулироваться с явной привязкой к Cloudflare API (wildcard), чтобы не вводить пользователя в заблуждение.
 
+### 2025-11-26 – Remnawave panel/node implementation progress
+
+- **Domain validation (ported from donor `check_domain`)**
+  - Implemented `_remna_check_domain` in `remnawave_panel_node.sh` and wired it into the panel+node installer wizard for all three domains: panel, subscription, and selfsteal (with Cloudflare proxy allowed only for panel/subs, not for selfsteal).
+  - Implemented `_remna_panel_check_domain` in `remnawave_panel.sh` and wired it into the panel-only installer (panel + subscription domains).
+  - Implemented `_remna_node_check_domain` in `remnawave_node.sh` and wired it into the local node wizard for the selfsteal domain (Cloudflare proxy forbidden, with explicit user confirmation prompts on mismatches).
+- **HTTP API layers for Remnawave**
+  - `modules/remnawave_panel_node.sh`:
+    - Added `_remna_api_request` + helpers for register, x25519 keygen, config-profile creation, node/host creation and squad update.
+    - The panel+node wizard now fully drives Remnawave via HTTP API: registers superadmin, generates x25519 keys, creates a config profile for the selfsteal domain, a node and host, and attaches the inbound to the default squad.
+  - `modules/remnawave_panel.sh`:
+    - Added a separate `_remna_panel_api_request` + `_remna_panel_api_register_superadmin`, `_remna_panel_api_generate_x25519`, `_remna_panel_api_create_config_profile`.
+    - Panel-only wizard now registers a superadmin, generates x25519 keys, creates a base config profile (for future nodes) and starts the HTTP-only stack.
+  - `modules/remnawave_node.sh`:
+    - Added `_remna_node_api_request` and node-specific helpers for x25519 keygen, config-profile, node, host and squad update.
+    - Added `_remna_node_api_check_node_domain` to ensure the panel does not already have a node with the same `address` before creating a new one.
+- **HTTP-only environments (no TLS yet)**
+  - Panel+node (`remnawave_panel_node.sh`):
+    - `_remna_write_env_and_compose` now creates `/opt/remnawave/.env`, `docker-compose.yml` and `nginx.conf` for the combined panel+node setup, but in an HTTP-only mode (nginx listening on port 80 for panel/subscription/selfsteal, Reality inbound still pointing to `/dev/shm/nginx.sock`).
+    - Installer wizard starts the compose stack, waits for `/api/auth/status`, then runs the full API bootstrap (superadmin, x25519, config-profile, node, host, squad update).
+  - Panel-only (`remnawave_panel.sh`):
+    - `_remna_panel_write_env_and_compose` mirrors the donor `installation_panel` structure but again HTTP-only: panel on 3000 behind nginx:80, subscription page on 3010 behind nginx:80.
+    - Panel-only wizard now fully boots the stack, registers superadmin, and creates a base config-profile for future nodes.
+- **Local node module – API and runtime**
+  - API side in `modules/remnawave_node.sh`:
+    - `_remna_node_install_local_wizard` now asks for `PANEL_API` (`host:port`), `PANEL_API_TOKEN`, `SELFSTEAL_DOMAIN`, `NODE_NAME`.
+    - Validates the selfsteal domain (DNS/IP/Cloudflare) and checks uniqueness in the panel via `_remna_node_api_check_node_domain`.
+    - Uses the panel HTTP API to: generate x25519, create a config-profile for the selfsteal domain, create node + host, and attach the inbound to the default squad.
+  - Runtime side for a local node (`/opt/remnanode`):
+    - `_remna_node_prepare_runtime_dir` ensures `/opt/remnanode` exists.
+    - `_remna_node_write_runtime_compose_and_nginx` writes:
+      - `/opt/remnanode/docker-compose.yml` with two services:
+        - `remnanode` (Remnawave node container, `network_mode: host`, `NODE_PORT=2222`, `SECRET_KEY` placeholder).
+        - `remnanode-nginx` (nginx in host network, mounting `nginx.conf` and `/var/www/html`).
+      - `/opt/remnanode/nginx.conf` with a simple HTTP-only server on port 80 for the selfsteal domain, serving `/var/www/html` and setting strict `X-Robots-Tag`.
+    - If `/var/www/html/index.html` is missing, writes a minimal masking HTML page so the selfsteal domain exposes a benign static site.
+- **Node SECRET_KEY wiring (panel → node)**
+  - Added `_remna_node_api_apply_public_key(domain_url, token, compose_path)` which:
+    - Calls `GET http://<panel>/api/keygen` to retrieve `response.pubKey`.
+    - Replaces the `SECRET_KEY="PUBLIC KEY FROM REMNAWAVE-PANEL"` placeholder in `/opt/remnanode/docker-compose.yml` with the real public key using `sed` via `run_cmd`.
+  - Local node wizard now, after writing the runtime compose/nginx files, calls `_remna_node_api_apply_public_key` before starting `docker compose up -d` in `/opt/remnanode`.
+  - Result: the local node is registered in the panel, has a masking HTTP site on `http://SELFSTEAL_DOMAIN`, and already runs with the correct `SECRET_KEY` from the panel. TLS and cert management for selfsteal will be added as a dedicated next step.
+
 ## Project standards (do not break)
 
 These are core conventions and contracts for «Решала». When you change or extend the code, treat these as **constraints** – breaking them может поломать обновления, плагины или мышечную память пользователей.
