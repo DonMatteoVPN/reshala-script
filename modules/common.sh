@@ -94,13 +94,94 @@ safe_read() {
     local prompt="$1"
     local default="${2:-}"
     local result
-    read -e -p "$prompt" -i "$default" result
+    read -e -p "$prompt" -i "$default" result || return 130  # Ctrl+C -> возврат кода 130
     echo "${result:-$default}"
 }
 
 # --- Простое ожидание нажатия Enter ---
 wait_for_enter() {
-    read -rp $'\nНажми Enter, чтобы продолжить...'
+    read -rp $'\nНажми Enter, чтобы продолжить...' || return 130
+}
+
+# --- Универсальные хелперы для Ctrl+C ---
+# Устанавливает trap, который при Ctrl+C тихо возвращается в предыдущее меню.
+# Использовать в начале каждого подменю (не в главном).
+enable_graceful_ctrlc() {
+    # Сохраняем старый trap, чтобы восстановить потом
+    _OLD_TRAP_INT=$(trap -p INT)
+    trap 'printf "\r\033[K"; return 130' INT
+}
+
+# Восстанавливает trap, который был до enable_graceful_ctrlc.
+# Вызывать перед выходом из подменю.
+disable_graceful_ctrlc() {
+    if [ -n "${_OLD_TRAP_INT:-}" ]; then
+        eval "$_OLD_TRAP_INT"
+    else
+        trap - INT
+    fi
+    unset _OLD_TRAP_INT
+}
+
+# --- Универсальные хелперы "защиты от дурака" при вводе ---
+# Нормализованный yes/no: возвращает 0 для "yes", 1 для "no", 130 для Ctrl+C.
+# Пример:
+#   if ask_yes_no "Точно снести всё? (y/n): " "n"; then ...; fi
+ask_yes_no() {
+    local prompt="$1"
+    local def="${2:-n}"
+    local answer
+
+    # Нормализуем дефолт в один символ y/n
+    case "$def" in
+        y|Y) def="y" ;;
+        *)   def="n" ;;
+    esac
+
+    while true; do
+        answer=$(safe_read "$prompt" "$def") || return 130
+        case "$answer" in
+            y|Y) return 0 ;;
+            n|N|"") return 1 ;;
+            *)
+                err "Отвечай 'y' или 'n', босс."
+                ;;
+        esac
+    done
+}
+
+# Обязательное непустое значение. Пустые строки не принимаются.
+# Возвращает 0 и пишет значение в stdout, либо 130 при Ctrl+C.
+ask_non_empty() {
+    local prompt="$1"
+    local def="${2:-}"
+    local value
+    while true; do
+        value=$(safe_read "$prompt" "$def") || return 130
+        if [[ -n "$value" ]]; then
+            echo "$value"
+            return 0
+        fi
+        err "Поле не может быть пустым. Попробуй ещё раз."
+    done
+}
+
+# Число в диапазоне [min; max]. Печатает выбранное число в stdout, либо 130 при Ctrl+C.
+ask_number_in_range() {
+    local prompt="$1"; local min="$2"; local max="$3"; local def="${4:-}"
+    local value
+    while true; do
+        value=$(safe_read "$prompt" "$def") || return 130
+        if [[ "$value" =~ ^[0-9]+$ ]]; then
+            if [[ -n "$min" && "$value" -lt "$min" ]] || [[ -n "$max" && "$value" -gt "$max" ]]; then
+                err "Вводи число от $min до $max, босс."
+                continue
+            fi
+            echo "$value"
+            return 0
+        fi
+        err "Нужно ввести цифру(ы), без букв и пробелов."
+    done
 }
 
 # --- Проверка наличия и установка пакетов ---

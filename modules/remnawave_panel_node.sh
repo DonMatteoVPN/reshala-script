@@ -954,6 +954,7 @@ _remna_panel_node_setup_tls_acme() {
 }
 
 _remna_install_panel_and_node_wizard() {
+    enable_graceful_ctrlc
     clear
     menu_header "Панель + Нода Remnawave на этот сервак"
     echo
@@ -1102,12 +1103,14 @@ _remna_install_panel_and_node_wizard() {
     info "Логин суперадмина: $SUPERADMIN_USERNAME"
     info "Пароль суперадмина: $SUPERADMIN_PASSWORD"
     echo
-    wait_for_enter
+    wait_for_enter || true
+    disable_graceful_ctrlc
 }
 
 # === ГЛАВНОЕ МЕНЮ МОДУЛЯ =====================================
 
 show_remnawave_panel_node_menu() {
+    enable_graceful_ctrlc
     while true; do
         clear
         menu_header "Remnawave: Панель и Ноды (High-Load)"
@@ -1123,7 +1126,7 @@ show_remnawave_panel_node_menu() {
         echo "------------------------------------------------------"
 
         local choice
-        choice=$(safe_read "Твой выбор: " "")
+        choice=$(safe_read "Твой выбор: " "") || break
 
         case "$choice" in
             1)
@@ -1146,4 +1149,5 @@ show_remnawave_panel_node_menu() {
                 ;;
         esac
     done
+    disable_graceful_ctrlc
 }

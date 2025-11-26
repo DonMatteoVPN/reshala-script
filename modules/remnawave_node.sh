@@ -813,12 +813,12 @@ _remna_node_install_local_wizard() {
     echo
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME
-    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
-    PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
-    SELFSTEAL_DOMAIN=$(safe_read "Selfsteal домен ноды (node.example.com): " "")
-    NODE_NAME=$(safe_read "Имя ноды в панели (например Germany-1): " "")
+    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return 130
+    PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return 130
+    SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return 130
+    NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return 130
 
-    if [[ -z "$SELFSTEAL_DOMAIN" || -z "$NODE_NAME" ]]; then
+    if [[ -з "$SELFSTEAL_DOMAIN" || -з "$NODE_NAME" ]]; then
         err "Имя ноды и домен — обязательно."
         return 1
     fi
@@ -918,11 +918,11 @@ _remna_node_install_skynet_one() {
     fi
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME NODE_PORT CERT_MODE
-    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
-    PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
-    SELFSTEAL_DOMAIN=$(safe_read "Selfsteal домен ноды (node.example.com): " "")
-    NODE_NAME=$(safe_read "Имя ноды в панели (например Germany-1): " "")
-    NODE_PORT=$(safe_read "Порт ноды (по умолчанию 2222): " "2222")
+    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return
+    PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return
+    SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return
+    NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return
+    NODE_PORT=$(safe_read "Порт ноды (по умолчанию 2222): " "2222") || return
 
     local tls_remote_choice
     info "TLS на удалённой ноде = HTTPS-сертификат для selfsteal-домена, шифрует трафик и выглядит как обычный https-сайт."
@@ -994,8 +994,8 @@ _remna_node_install_skynet_one() {
     fi
 
     local s_choice
-    s_choice=$(safe_read "Номер сервера для ноды: " "")
-    if [[ ! "$s_choice" =~ ^[0-9]+$ ]] || [[ -z "${servers[$s_choice]:-}" ]]; then
+    s_choice=$(ask_number_in_range "Номер сервера для ноды: " 1 "$((idx-1))" "") || { wait_for_enter; return; }
+    if [[ -з "${servers[$s_choice]:-}" ]]; then
         err "Нет такого номера сервера."
         wait_for_enter
         return

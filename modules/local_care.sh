@@ -34,8 +34,10 @@ _apply_bbr() {
         wait_for_enter
         return
     fi
-    read -p "Хочешь включить максимальный форсаж (BBR + CAKE)? (y/n): " confirm
-    if [[ "$confirm" != "y" ]]; then echo "Как скажешь."; return; fi
+    if ! ask_yes_no "Хочешь включить максимальный форсаж (BBR + CAKE)? (y/n): " "n"; then
+        echo "Как скажешь."
+        return
+    fi
 
     local preferred_cc="bbr"; [[ $(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null) == *"bbr2"* ]] && preferred_cc="bbr2"
     local preferred_qdisc="fq"; [[ "$cake_available" == "true" ]] && preferred_qdisc="cake"
@@ -66,6 +68,7 @@ _get_ipv6_status_string() {
 }
 
 _toggle_ipv6() {
+    enable_graceful_ctrlc
     while true; do
         clear; echo "--- УПРАВЛЕНИЕ IPv6 ---"; printf "Статус IPv6: %b\n" "$(_get_ipv6_status_string)"
         echo "--------------------------"; echo "   1. Кастрировать (Отключить)"; echo "   2. Реанимировать (Включить)"; echo "   b. Назад"
@@ -76,6 +79,7 @@ _toggle_ipv6() {
             [bB]) break ;;
         esac
     done
+    disable_graceful_ctrlc
 }
 
 # ============================================================ #
@@ -114,8 +118,7 @@ _run_system_update() {
     else
         printf_error "ОШИБКА ОБНОВЛЕНИЯ! Похоже, твоя версия ОС устарела (EOL)."
         echo "Это значит, что стандартные репозитории больше не доступны."
-        read -p "🚑 Применить лечение (переключиться на архивные репозитории)? (y/n): " confirm_fix
-        if [[ "$confirm_fix" == "y" ]]; then
+        if ask_yes_no "🚑 Применить лечение (переключиться на архивные репозитории)? (y/n): " "n"; then
             log "Запуск процедуры EOL Fix..."
             local backup_dir="/var/backups/reshala_apt_$(date +%F)"
             printf_info "Делаю бэкап конфигов в ${backup_dir}..."

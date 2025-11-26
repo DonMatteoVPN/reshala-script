@@ -80,8 +80,7 @@ install_script() {
 
 uninstall_script() {
     warn "Точно хочешь выгнать Решалу НАХУЙ? УДАЛЮТСЯ ВСЕ ЕЁ ФАЙЛЫ!"
-    read -p "(y/n): " confirm
-    if [[ "$confirm" != "y" ]]; then info "Отмена удаления. Решала остаётся."; return; fi
+    if ! ask_yes_no "(y/n): " "n"; then info "Отмена удаления. Решала остаётся."; return; fi
     info "Начинаю самоликвидацию (удаляю бинарь, каталог /opt/reshala, лог и базу флота)..."
     run_cmd rm -f "$INSTALL_PATH"
     run_cmd rm -rf "/opt/reshala"

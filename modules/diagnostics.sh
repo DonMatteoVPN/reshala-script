@@ -32,8 +32,8 @@ _show_docker_cleanup_menu() {
         case "$choice" in
             1) echo; _docker_safe images --format "{{.Repository}}:{{.Tag}}\t{{.Size}}" | sort -rh | head; wait_for_enter ;;
             2) _docker_safe system prune -f; printf_ok "Простая очистка завершена."; wait_for_enter ;;
-            3) read -p "Удалить ВСЕ неиспользуемые образы? (y/n): " c; if [[ "$c" == "y" ]]; then _docker_safe image prune -a -f; printf_ok "Полная очистка завершена."; fi; wait_for_enter ;;
-            4) printf_error "ОСТОРОЖНО! Удаляет ВСЕ тома, не привязанные к контейнерам!"; read -p "Точно продолжить? (y/n): " c; if [[ "$c" == "y" ]]; then _docker_safe volume prune -f; printf_ok "Очистка томов завершена."; fi; wait_for_enter ;;
+            3) if ask_yes_no "Удалить ВСЕ неиспользуемые образы? (y/n): " "n"; then _docker_safe image prune -a -f; printf_ok "Полная очистка завершена."; fi; wait_for_enter ;;
+            4) printf_error "ОСТОРОЖНО! Удаляет ВСЕ тома, не привязанные к контейнерам!"; if ask_yes_no "Точно продолжить? (y/n): " "n"; then _docker_safe volume prune -f; printf_ok "Очистка томов завершена."; fi; wait_for_enter ;;
             5) echo; _docker_safe system df; wait_for_enter ;;
             [bB]) break ;;
         esac
@@ -116,8 +116,7 @@ _show_docker_containers_menu() {
                 ;;
             4)
                 local name; name=$(_docker_select_container) || { wait_for_enter; continue; }
-                read -p "Точно снести '$name'? (y/n): " c
-                if [[ "$c" == "y" ]]; then
+                if ask_yes_no "Точно снести '$name'? (y/n): " "n"; then
                     _docker_safe stop "$name" 2>/dev/null || true
                     _docker_safe rm "$name" || printf_error "Не удалось удалить '$name'"
                 fi
@@ -253,8 +252,7 @@ _show_docker_volumes_menu() {
                 ;;
             3)
                 local vol; vol=$(_docker_select_volume) || { wait_for_enter; continue; }
-                read -p "Точно снести том '$vol'? (y/n): " c
-                if [[ "$c" == "y" ]]; then
+                if ask_yes_no "Точно снести том '$vol'? (y/n): " "n"; then
                     _docker_safe volume rm "$vol" || printf_error "Не удалось удалить том '$vol'"
                 fi
                 wait_for_enter
@@ -321,8 +319,7 @@ _show_docker_images_menu() {
                 ;;
             3)
                 local img; img=$(_docker_select_image) || { wait_for_enter; continue; }
-                read -p "Точно снести образ '$img'? (y/n): " c
-                if [[ "$c" == "y" ]]; then
+                if ask_yes_no "Точно снести образ '$img'? (y/n): " "n"; then
                     _docker_safe rmi "$img" || printf_error "Не удалось удалить образ '$img'"
                 fi
                 wait_for_enter

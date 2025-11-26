@@ -275,20 +275,19 @@ _run_fleet_command() {
                     ((idx++))
                 done < "$FLEET_DATABASE_FILE"
 
-                local s_choice; s_choice=$(safe_read "Номер сервера: " "")
-                if [[ "$s_choice" =~ ^[0-9]+$ ]] && [ -n "${servers[$s_choice]:-}" ]; then
+                local s_choice
+                s_choice=$(ask_number_in_range "Номер сервера: " 1 "$((idx-1))" "") || continue
+                if [ -n "${servers[$s_choice]:-}" ]; then
                     IFS='|' read -r name user ip port key_path <<< "${servers[$s_choice]}"
                     printf_warning "Выполняю '${selected_plugin##*/}' на сервере '$name'."
-                    read -p "Начать? (y/n): " confirm
-                    if [[ "$confirm" == "y" ]]; then
+                    if ask_yes_no "Начать? (y/n): " "n"; then
                         _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path"
                         printf_ok "Команда выполнена."; wait_for_enter
                     fi
                 fi
             else
                 printf_warning "Выполняю '${selected_plugin##*/}' на ВСЁМ флоте. Это может занять время."
-                read -p "Начать? (y/n): " confirm
-                if [[ "$confirm" == "y" ]]; then
+                if ask_yes_no "Начать? (y/n): " "n"; then
                     # Читаем базу и выполняем на каждом
                     while IFS='|' read -r name user ip port key_path sudo_pass; do
                         _skynet_run_plugin_on_server "$selected_plugin" "$name" "$user" "$ip" "$port" "$key_path"
@@ -428,8 +427,7 @@ show_fleet_menu() {
                     # Тестовое подключение по ключу и предложение вырубить вход по паролю
                     if ssh -q -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "echo OK" >/dev/null 2>&1; then
                         printf_ok "Тестовое подключение по ключу прошло успешно — всё заебись."
-                        read -p "Вырубаем вход по паролю и оставляем только ключи? (y/n): " disable_pw
-                        if [[ "$disable_pw" == "y" ]]; then
+                        if ask_yes_no "Вырубаем вход по паролю и оставляем только ключи? (y/n): " "n"; then
                             if [[ "$s_user" == "root" ]]; then
                                 ssh -t -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "sed -i.bak -E 's/^#?PasswordAuthentication\\s+.*/PasswordAuthentication no/' /etc/ssh/sshd_config && (systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null)"
                             elif [[ -n "$s_pass" ]]; then
@@ -469,7 +467,7 @@ show_fleet_menu() {
                 sleep 1
                 ;;
             [xX])
-                read -p "Ты ТОЧНО хочешь удалить ВСЕ серверы из базы? (yes/no): " confirm
+                read -p "Ты ТОЧНО хочешь удалить ВСЕ серверы из базы? (yes/no): " confirm || continue
                 if [[ "$confirm" == "yes" ]]; then > "$FLEET_DATABASE_FILE"; printf_ok "База флота уничтожена."; sleep 1; fi
                 ;;
             [bB]) break ;;
@@ -484,8 +482,7 @@ show_fleet_menu() {
                     if [[ "$s_user" != "root" && -z "$s_pass" ]]; then
                         printf_warning "Для управления этим сервером нужен пароль sudo."
                         read -p "Введи пароль для '$s_user': " -s s_pass; echo
-                        read -p "Сохранить этот пароль в базу? (y/n): " save_pass
-                        if [[ "$save_pass" == "y" ]]; then
+                        if ask_yes_no "Сохранить этот пароль в базу? (y/n): " "n"; then
                             _update_fleet_record "$choice" "$s_name|$s_user|$s_ip|$s_port|$s_key|$s_pass"
                             printf_ok "Пароль сохранён."
                         fi

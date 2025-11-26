@@ -756,6 +756,7 @@ _remna_panel_setup_tls_acme() {
 }
 
 _remna_panel_install_wizard() {
+    enable_graceful_ctrlc
     clear
     menu_header "Remnawave: только панель"
     echo
@@ -882,12 +883,14 @@ _remna_panel_install_wizard() {
     info "Логин суперадмина: $SUPERADMIN_USERNAME"
     info "Пароль суперадмина: $SUPERADMIN_PASSWORD"
     echo
-    wait_for_enter
+    wait_for_enter || true
+    disable_graceful_ctrlc
 }
 
 # === МЕНЮ МОДУЛЯ =============================================
 
 show_remnawave_panel_menu() {
+    enable_graceful_ctrlc
     while true; do
         clear
         menu_header "Remnawave: установка панели"
@@ -899,7 +902,7 @@ show_remnawave_panel_menu() {
         echo "------------------------------------------------------"
 
         local choice
-        choice=$(safe_read "Твой выбор: " "")
+        choice=$(safe_read "Твой выбор: " "") || break
 
         case "$choice" in
             1) _remna_panel_install_wizard ;;
@@ -908,4 +911,5 @@ show_remnawave_panel_menu() {
             *) err "Нет такого пункта, смотри внимательнее, босс." ;;
         esac
     done
+    disable_graceful_ctrlc
 }
