@@ -226,6 +226,13 @@ _run_fleet_command() {
         local plugins=(); local i=1
         for p in "$PLUGINS_DIR"/*.sh; do
             if [ -f "$p" ]; then
+                # Системные/внутренние плагины можно скрывать через маркер SKYNET_HIDDEN
+                local hidden
+                hidden=$(grep -m1 '^# SKYNET_HIDDEN:' "$p" 2>/dev/null | sed 's/^# SKYNET_HIDDEN:[[:space:]]*//')
+                if [[ "$hidden" == "true" || "$hidden" == "1" ]]; then
+                    continue
+                fi
+
                 local title
                 title=$(grep -m1 '^# TITLE:' "$p" 2>/dev/null | sed 's/^# TITLE:[[:space:]]*//')
                 if [[ -z "$title" ]]; then
