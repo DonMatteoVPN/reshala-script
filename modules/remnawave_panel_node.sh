@@ -150,15 +150,36 @@ _remna_check_domain() {
 
 # --- HTTP API хелперы ----------------------------------------
 
+# Нормализация base URL панели: принимаем host:port или http(s)://...
+_remna_api_normalize_base_url() {
+    local base="$1"
+    if [[ -z "$base" ]]; then
+        base="127.0.0.1:3000"
+    fi
+    if [[ "$base" != http://* && "$base" != https://* ]]; then
+        base="http://$base"
+    fi
+    echo "${base%/}"
+}
+
 _remna_api_request() {
     local method="$1"
-    local url="$2"
+    local url="$2"      # Полный URL: http(s)://host[:port]/path
     local token="${3:-}"
     local data="${4:-}"
 
-    local args=(-s -X "$method" "$url" \
+    # Имитация запроса через reverse‑proxy c HTTPS как в donor/make_api_request
+    local forwarded_for="$url"
+    forwarded_for="${forwarded_for#http://}"
+    forwarded_for="${forwarded_for#https://}"
+
+    local args=(
+        -s -X "$method" "$url" \
         -H "Content-Type: application/json" \
-        -H "X-Remnawave-Client-Type: reshala")
+        -H "X-Remnawave-Client-Type: reshala" \
+        -H "X-Forwarded-For: $forwarded_for" \
+        -H "X-Forwarded-Proto: https"
+    )
 
     if [[ -n "$token" ]]; then
         args+=( -H "Authorization: Bearer $token" )
@@ -171,15 +192,18 @@ _remna_api_request() {
 }
 
 _remna_api_register_superadmin() {
-    local domain_url="$1"   # host:port, без схемы
+    local domain_url="$1"   # host:port или base URL
     local username="$2"
     local password="$3"
 
     local body
     body=$(jq -n --arg u "$username" --arg p "$password" '{username:$u,password:$p}') || return 1
 
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
+
     local resp
-    resp=$(_remna_api_request "POST" "http://$domain_url/api/auth/register" "" "$body") || true
+    resp=$(_remna_api_request "POST" "$base_url/api/auth/register" "" "$body") || true
 
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на /api/auth/register. Смотри docker-логи Remnawave."
@@ -201,8 +225,11 @@ _remna_api_generate_x25519() {
     local domain_url="$1"
     local token="$2"
 
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
+
     local resp
-    resp=$(_remna_api_request "GET" "http://$domain_url/api/system/tools/x25519/generate" "$token") || true
+    resp=$(_remna_api_request "GET" "$base_url/api/system/tools/x25519/generate" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на генерацию x25519-ключей."
         return 1
@@ -226,6 +253,9 @@ _remna_api_create_config_profile() {
     local domain="$4"
     local private_key="$5"
     local inbound_tag="${6:-Steal}"
+
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
 
     local short_id
     short_id=$(openssl rand -hex 8 2>/dev/null || tr -dc 'a-f0-9' </dev/urandom | head -c 16)
@@ -278,7 +308,7 @@ _remna_api_create_config_profile() {
         }') || return 1
 
     local resp
-    resp=$(_remna_api_request "POST" "http://$domain_url/api/config-profiles" "$token" "$body") || true
+    resp=$(_remna_api_request "POST" "$base_url/api/config-profiles" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Не получил ответ от /api/config-profiles при создании профиля."
         return 1
@@ -305,6 +335,9 @@ _remna_api_create_node() {
     local node_address="${5:-172.30.0.1}"
     local node_name="${6:-Steal}"
 
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
+
     local body
     body=$(jq -n \
         --arg cfg "$config_profile_uuid" \
@@ -328,7 +361,7 @@ _remna_api_create_node() {
         }') || return 1
 
     local resp
-    resp=$(_remna_api_request "POST" "http://$domain_url/api/nodes" "$token" "$body") || true
+    resp=$(_remna_api_request "POST" "$base_url/api/nodes" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/nodes при создании ноды."
         return 1
@@ -350,6 +383,9 @@ _remna_api_create_host() {
     local address="$4"
     local config_uuid="$5"
     local remark="${6:-Steal}"
+
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
 
     local body
     body=$(jq -n \
@@ -375,7 +411,7 @@ _remna_api_create_host() {
         }') || return 1
 
     local resp
-    resp=$(_remna_api_request "POST" "http://$domain_url/api/hosts" "$token" "$body") || true
+    resp=$(_remna_api_request "POST" "$base_url/api/hosts" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/hosts при создании host'а."
         return 1
@@ -394,8 +430,11 @@ _remna_api_get_default_squad_uuid() {
     local domain_url="$1"
     local token="$2"
 
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
+
     local resp
-    resp=$(_remna_api_request "GET" "http://$domain_url/api/internal-squads" "$token") || true
+    resp=$(_remna_api_request "GET" "$base_url/api/internal-squads" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/internal-squads."
         return 1
@@ -418,8 +457,11 @@ _remna_api_add_inbound_to_squad() {
     local squad_uuid="$3"
     local inbound_uuid="$4"
 
+    local base_url
+    base_url=$(_remna_api_normalize_base_url "$domain_url")
+
     local resp
-    resp=$(_remna_api_request "GET" "http://$domain_url/api/internal-squads" "$token") || true
+    resp=$(_remna_api_request "GET" "$base_url/api/internal-squads" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Не удалось перечитать список squadов перед обновлением."
         return 1

@@ -397,12 +397,15 @@ Then consult this Agent journal to understand the latest UX and behavior decisio
 - **HTTP API layers for Remnawave**
   - `modules/remnawave_panel_node.sh`:
     - Added `_remna_api_request` + helpers for register, x25519 keygen, config-profile creation, node/host creation and squad update.
+    - `_remna_api_request` always talks to the panel via a **base URL** (either `http://host:port` or `https://panel.domain`) and unconditionally sends `X-Forwarded-Proto: https`/`X-Forwarded-For`/`X-Remnawave-Client-Type` headers, mirroring the donor `make_api_request` behaviour so the backend is happy both when called directly and when it sits behind a reverse proxy.
     - The panel+node wizard now fully drives Remnawave via HTTP API: registers superadmin, generates x25519 keys, creates a config profile for the selfsteal domain, a node and host, and attaches the inbound to the default squad.
   - `modules/remnawave_panel.sh`:
     - Added a separate `_remna_panel_api_request` + `_remna_panel_api_register_superadmin`, `_remna_panel_api_generate_x25519`, `_remna_panel_api_create_config_profile`.
+    - `_remna_panel_api_request` uses the same base-URL + proxy-header model as above, so future tooling can hit either the local backend (`http://127.0.0.1:3000`) or the public panel URL.
     - Panel-only wizard now registers a superadmin, generates x25519 keys, creates a base config profile (for future nodes) and starts the HTTP-only stack.
   - `modules/remnawave_node.sh`:
     - Added `_remna_node_api_request` and node-specific helpers for x25519 keygen, config-profile, node, host and squad update.
+    - `_remna_node_api_request` also works from a base URL and always injects `X-Forwarded-Proto: https`, which fixes the "Reverse proxy and HTTPS are required" errors when hitting the backend directly from another host.
     - Added `_remna_node_api_check_node_domain` to ensure the panel does not already have a node with the same `address` before creating a new one.
 - **HTTP-only environments (no TLS yet)**
   - Panel+node (`remnawave_panel_node.sh`):
@@ -413,8 +416,10 @@ Then consult this Agent journal to understand the latest UX and behavior decisio
     - Panel-only wizard now fully boots the stack, registers superadmin, and creates a base config-profile for future nodes.
 - **Local node module – API and runtime**
   - API side in `modules/remnawave_node.sh`:
-    - `_remna_node_install_local_wizard` now asks for `PANEL_API` (`host:port`), `PANEL_API_TOKEN`, `SELFSTEAL_DOMAIN`, `NODE_NAME`.
-    - Validates the selfsteal domain (DNS/IP/Cloudflare) and checks uniqueness in the panel via `_remna_node_api_check_node_domain`.
+    - `_remna_node_install_local_wizard` now asks for `PANEL_API` (**URL или host:port**, пример: `https://panel.example.com` или `127.0.0.1:3000`), `PANEL_API_TOKEN`, `SELFSTEAL_DOMAIN`, `NODE_NAME`.
+    - `_remna_node_check_panel_api` нормализует ввод в базовый URL (`http://host:3000` или `https://domain`) и делает пробный запрос к `/api/auth/status`, всегда подкидывая `X-Forwarded-Proto: https`/`X-Remnawave-Client-Type`, чтобы панель не ругалась на отсутствие reverse‑proxy.
+    - `_remna_node_check_panel_api_with_token` поверх того же base URL дергает `/api/internal-squads` и валидирует токен (должен иметь права API и возвращать хотя бы один internal squad).
+    - Сам визард валидирует selfsteal-домен (DNS/IP/Cloudflare) и проверяет уникальность в панели через `_remna_node_api_check_node_domain`.
     - Uses the panel HTTP API to: generate x25519, create a config-profile for the selfsteal domain, create node + host, and attach the inbound to the default squad.
   - Runtime side for a local node (`/opt/remnanode`):
     - `_remna_node_prepare_runtime_dir` ensures `/opt/remnanode` exists.

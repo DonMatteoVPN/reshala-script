@@ -151,15 +151,36 @@ _remna_panel_check_domain() {
 
 # --- HTTP API хелперы ----------------------------------------
 
+# Нормализация base URL панели: принимаем host:port или http(s)://...
+_remna_panel_api_normalize_base_url() {
+    local base="$1"
+    if [[ -z "$base" ]]; then
+        base="127.0.0.1:3000"
+    fi
+    if [[ "$base" != http://* && "$base" != https://* ]]; then
+        base="http://$base"
+    fi
+    echo "${base%/}"
+}
+
 _remna_panel_api_request() {
     local method="$1"
-    local url="$2"
+    local url="$2"      # Полный URL: http(s)://host[:port]/path
     local token="${3:-}"
     local data="${4:-}"
 
-    local args=(-s -X "$method" "$url" \
+    # Имитация запроса через reverse‑proxy c HTTPS как в donor/make_api_request
+    local forwarded_for="$url"
+    forwarded_for="${forwarded_for#http://}"
+    forwarded_for="${forwarded_for#https://}"
+
+    local args=(
+        -s -X "$method" "$url" \
         -H "Content-Type: application/json" \
-        -H "X-Remnawave-Client-Type: reshala-panel")
+        -H "X-Remnawave-Client-Type: reshala-panel" \
+        -H "X-Forwarded-For: $forwarded_for" \
+        -H "X-Forwarded-Proto: https"
+    )
 
     if [[ -n "$token" ]]; then
         args+=( -H "Authorization: Bearer $token" )
@@ -172,15 +193,18 @@ _remna_panel_api_request() {
 }
 
 _remna_panel_api_register_superadmin() {
-    local domain_url="$1"   # host:port, без схемы
+    local domain_url="$1"   # host:port или base URL
     local username="$2"
     local password="$3"
 
     local body
     body=$(jq -n --arg u "$username" --arg p "$password" '{username:$u,password:$p}') || return 1
 
+    local base_url
+    base_url=$(_remna_panel_api_normalize_base_url "$domain_url")
+
     local resp
-    resp=$(_remna_panel_api_request "POST" "http://$domain_url/api/auth/register" "" "$body") || true
+    resp=$(_remna_panel_api_request "POST" "$base_url/api/auth/register" "" "$body") || true
 
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на /api/auth/register. Смотри docker-логи Remnawave."
@@ -202,8 +226,11 @@ _remna_panel_api_generate_x25519() {
     local domain_url="$1"
     local token="$2"
 
+    local base_url
+    base_url=$(_remna_panel_api_normalize_base_url "$domain_url")
+
     local resp
-    resp=$(_remna_panel_api_request "GET" "http://$domain_url/api/system/tools/x25519/generate" "$token") || true
+    resp=$(_remna_panel_api_request "GET" "$base_url/api/system/tools/x25519/generate" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на генерацию x25519-ключей."
         return 1
@@ -227,6 +254,9 @@ _remna_panel_api_create_config_profile() {
     local domain="$4"
     local private_key="$5"
     local inbound_tag="${6:-Steal}"
+
+    local base_url
+    base_url=$(_remna_panel_api_normalize_base_url "$domain_url")
 
     local short_id
     short_id=$(openssl rand -hex 8 2>/dev/null || tr -dc 'a-f0-9' </dev/urandom | head -c 16)
@@ -279,7 +309,7 @@ _remna_panel_api_create_config_profile() {
         }') || return 1
 
     local resp
-    resp=$(_remna_panel_api_request "POST" "http://$domain_url/api/config-profiles" "$token" "$body") || true
+    resp=$(_remna_panel_api_request "POST" "$base_url/api/config-profiles" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Не получил ответ от /api/config-profiles при создании профиля панели."
         return 1

@@ -121,13 +121,22 @@ _remna_node_check_domain() {
 
 _remna_node_api_request() {
     local method="$1"
-    local url="$2"
+    local url="$2"      # Полный URL: http(s)://host[:port]/path
     local token="${3:-}"
     local data="${4:-}"
 
-    local args=(-s -X "$method" "$url" \
+    # Имитация запроса через reverse‑proxy c HTTPS как в donor/make_api_request
+    local forwarded_for="$url"
+    forwarded_for="${forwarded_for#http://}"
+    forwarded_for="${forwarded_for#https://}"
+
+    local args=(
+        -s -X "$method" "$url" \
         -H "Content-Type: application/json" \
-        -H "X-Remnawave-Client-Type: reshala-node")
+        -H "X-Remnawave-Client-Type: reshala-node" \
+        -H "X-Forwarded-For: $forwarded_for" \
+        -H "X-Forwarded-Proto: https"
+    )
 
     if [[ -n "$token" ]]; then
         args+=( -H "Authorization: Bearer $token" )
@@ -140,11 +149,12 @@ _remna_node_api_request() {
 }
 
 _remna_node_api_generate_x25519() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели: http://host:3000 или https://panel.domain
     local token="$2"
 
+    base_url="${base_url%/}"
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/system/tools/x25519/generate" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$base_url/api/system/tools/x25519/generate" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на генерацию x25519-ключей (нодовый модуль)."
         return 1
@@ -162,12 +172,14 @@ _remna_node_api_generate_x25519() {
 }
 
 _remna_node_api_create_config_profile() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
     local name="$3"
     local domain="$4"
     local private_key="$5"
     local inbound_tag="${6:-Steal}"
+
+    base_url="${base_url%/}"
 
     local short_id
     short_id=$(openssl rand -hex 8 2>/dev/null || tr -dc 'a-f0-9' </dev/urandom | head -c 16)
@@ -216,11 +228,11 @@ _remna_node_api_create_config_profile() {
                         { type: "field", protocol: ["bittorrent"], outboundTag: "BLOCK" }
                     ]
                 }
-            }
+        }
         }') || return 1
 
     local resp
-    resp=$(_remna_node_api_request "POST" "http://$domain_url/api/config-profiles" "$token" "$body") || true
+    resp=$(_remna_node_api_request "POST" "$base_url/api/config-profiles" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Не получил ответ от /api/config-profiles при создании профиля для ноды."
         return 1
@@ -240,12 +252,14 @@ _remna_node_api_create_config_profile() {
 }
 
 _remna_node_api_create_node() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
     local config_profile_uuid="$3"
     local inbound_uuid="$4"
     local node_address="${5:-172.30.0.1}"
     local node_name="${6:-Steal}"
+
+    base_url="${base_url%/}"
 
     local body
     body=$(jq -n \
@@ -270,7 +284,7 @@ _remna_node_api_create_node() {
         }') || return 1
 
     local resp
-    resp=$(_remna_node_api_request "POST" "http://$domain_url/api/nodes" "$token" "$body") || true
+    resp=$(_remna_node_api_request "POST" "$base_url/api/nodes" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/nodes при создании ноды."
         return 1
@@ -286,12 +300,14 @@ _remna_node_api_create_node() {
 }
 
 _remna_node_api_create_host() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
     local inbound_uuid="$3"
     local address="$4"
     local config_uuid="$5"
     local remark="${6:-Steal}"
+
+    base_url="${base_url%/}"
 
     local body
     body=$(jq -n \
@@ -317,7 +333,7 @@ _remna_node_api_create_host() {
         }') || return 1
 
     local resp
-    resp=$(_remna_node_api_request "POST" "http://$domain_url/api/hosts" "$token" "$body") || true
+    resp=$(_remna_node_api_request "POST" "$base_url/api/hosts" "$token" "$body") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/hosts при создании host'а."
         return 1
@@ -334,12 +350,14 @@ _remna_node_api_create_host() {
 
 # Проверка, что в панели ещё нет ноды с таким доменом
 _remna_node_api_check_node_domain() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
     local domain="$3"
 
+    base_url="${base_url%/}"
+
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/nodes" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$base_url/api/nodes" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Не удалось проверить домен ноды через /api/nodes (пустой ответ)."
         return 1
@@ -364,12 +382,14 @@ _remna_node_api_check_node_domain() {
 
 # Получение публичного ключа для ноды из панели и прошивка его в docker-compose
 _remna_node_api_apply_public_key() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
     local compose_path="$3"
 
+    base_url="${base_url%/}"
+
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/keygen" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$base_url/api/keygen" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на /api/keygen (нода не получила публичный ключ)."
         return 1
@@ -391,11 +411,13 @@ _remna_node_api_apply_public_key() {
 
 # Получение публичного ключа панели для использования на удалённых нодах
 _remna_node_api_get_public_key() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
 
+    base_url="${base_url%/}"
+
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/keygen" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$base_url/api/keygen" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Панель не ответила на /api/keygen (не получил pubKey для удалённой ноды)."
         return 1
@@ -745,11 +767,13 @@ _remna_node_setup_tls_renew() {
 
 # Получение UUID дефолтного internal-squad из панели (нодовый модуль)
 _remna_node_api_get_default_squad_uuid() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
 
+    base_url="${base_url%/}"
+
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/internal-squads" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$base_url/api/internal-squads" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/internal-squads (нодовый модуль)."
         return 1
@@ -767,13 +791,15 @@ _remna_node_api_get_default_squad_uuid() {
 }
 
 _remna_node_api_add_inbound_to_squad() {
-    local domain_url="$1"
+    local base_url="$1"   # Базовый URL панели
     local token="$2"
     local squad_uuid="$3"
     local inbound_uuid="$4"
 
+    base_url="${base_url%/}"
+
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/internal-squads" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$base_url/api/internal-squads" "$token") || true
     if [[ -z "$resp" ]]; then
         err "Пустой ответ от /api/internal-squads (нодовый модуль)."
         return 1
@@ -804,28 +830,63 @@ _remna_node_api_add_inbound_to_squad() {
     return 0
 }
 
-# Нормализуем ввод API панели: убираем http(s):// и добавляем порт 3000 при необходимости
+# Нормализуем ввод API панели: принимаем URL или host[:port] и приводим к базовому URL
+# Примеры ввода:
+#   panel.example.com           -> https://panel.example.com
+#   panel.example.com:3000      -> http://panel.example.com:3000
+#   http://127.0.0.1:3000       -> http://127.0.0.1:3000
+#   127.0.0.1:3000              -> http://127.0.0.1:3000
+#   (пусто)                     -> http://127.0.0.1:3000
 _remna_node_normalize_panel_api() {
     local api="$1"
-    api=${api#http://}
-    api=${api#https://}
-    if [[ "$api" != *:* ]]; then
-        api="$api:3000"
+
+    # Значение по умолчанию — локальный backend панели
+    if [[ -z "$api" ]]; then
+        echo "http://127.0.0.1:3000"
+        return 0
     fi
-    echo "$api"
+
+    # Если пользователь явно указал схему — уважаем её
+    if [[ "$api" == http://* || "$api" == https://* ]]; then
+        # Убираем хвостовой слэш, если есть
+        api="${api%%/}"
+        echo "$api"
+        return 0
+    fi
+
+    # Без схемы: IPv4/localhost считаем прямым доступом к backend (http, порт 3000 по умолчанию)
+    if [[ "$api" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(:[0-9]+)?$ || "$api" == localhost* ]]; then
+        if [[ "$api" != *:* ]]; then
+            api="$api:3000"
+        fi
+        echo "http://$api"
+        return 0
+    fi
+
+    # Остальное — доменные имена. Если указан порт — считаем, что это прямой http-доступ;
+    # если порта нет — предполагаем, что это нормальный внешний https-домен панели.
+    if [[ "$api" == *:* ]]; then
+        echo "http://$api"
+    else
+        echo "https://$api"
+    fi
 }
 
-# Простая проверка доступности API панели по адресу host:port
+# Простая проверка доступности API панели по адресу URL/host:port.
 # Здесь нас интересует именно Доступность, а не бизнес-логика кода ответа.
 _remna_node_check_panel_api() {
-    local panel_api_raw="$1"   # может быть с http(s)://
-    local panel_api
-    panel_api=$(_remna_node_normalize_panel_api "$panel_api_raw")
-    local url="http://$panel_api/api/auth/status"
+    local panel_api_raw="$1"   # может быть URL (https://panel.example.com) или host:port
+    local base_url
+    base_url=$(_remna_node_normalize_panel_api "$panel_api_raw") || return 1
+
+    local url="${base_url%/}/api/auth/status"
 
     info "Проверяю доступность API панели по адресу $url..."
     local http_code
-    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 "$url" 2>/dev/null || echo "000")
+    http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 8 \
+        -H "X-Forwarded-Proto: https" \
+        -H "X-Remnawave-Client-Type: reshala-node" \
+        "$url" 2>/dev/null || echo "000")
 
     if [[ "$http_code" == "000" ]]; then
         err "Не смог подключиться к панели по адресу $panel_api_raw (curl вернул HTTP 000). Проверь DNS/IP, порт и файрвол."
@@ -833,18 +894,20 @@ _remna_node_check_panel_api() {
     fi
 
     info "API панели отвечает (HTTP $http_code) — двигаемся дальше."
-    echo "$panel_api"
+    echo "$base_url"
     return 0
 }
 
 # Проверка, что API + токен реально работают (используем internal-squads как простую пробу)
 _remna_node_check_panel_api_with_token() {
-    local panel_api="$1"   # уже host:port
+    local panel_base="$1"   # базовый URL панели (http/https)
     local token="$2"
+
+    panel_base="${panel_base%/}"
 
     info "Проверяю токен панели через /api/internal-squads..."
     local resp
-    resp=$(_remna_node_api_request "GET" "http://$panel_api/api/internal-squads" "$token") || true
+    resp=$(_remna_node_api_request "GET" "$panel_base/api/internal-squads" "$token") || true
 
     if [[ -z "$resp" ]]; then
         err "Панель вернула пустой ответ на /api/internal-squads. Скорее всего, токен или API введены неверно."
@@ -892,7 +955,7 @@ _remna_node_install_local_wizard() {
     echo
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME
-    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return 130
+    PANEL_API=$(safe_read "API панели (URL или host:port, например https://panel.example.com или 127.0.0.1:3000): " "127.0.0.1:3000") || return 130
     local normalized
     normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return 1; }
     PANEL_API="$normalized"
@@ -1004,7 +1067,7 @@ _remna_node_install_skynet_one() {
     fi
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME NODE_PORT CERT_MODE
-    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return
+    PANEL_API=$(safe_read "API панели (URL или host:port, например https://panel.example.com или 127.0.0.1:3000): " "127.0.0.1:3000") || return
     local normalized
     normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return; }
     PANEL_API="$normalized"
@@ -1135,7 +1198,7 @@ _remna_node_install_skynet_many() {
     fi
 
     local PANEL_API PANEL_API_TOKEN NODE_PORT CERT_MODE
-    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
+    PANEL_API=$(safe_read "API панели (URL или host:port, например https://panel.example.com или 127.0.0.1:3000): " "127.0.0.1:3000")
     local normalized
     normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return; }
     PANEL_API="$normalized"
