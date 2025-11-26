@@ -410,17 +410,30 @@ Then consult this Agent journal to understand the latest UX and behavior decisio
     - `_remna_node_write_runtime_compose_and_nginx` writes:
       - `/opt/remnanode/docker-compose.yml` with two services:
         - `remnanode` (Remnawave node container, `network_mode: host`, `NODE_PORT=2222`, `SECRET_KEY` placeholder).
-        - `remnanode-nginx` (nginx in host network, mounting `nginx.conf` and `/var/www/html`).
+        - `remnanode-nginx` (nginx in host network, mounting `nginx.conf`, `/var/www/html` and `/etc/letsencrypt`).
       - `/opt/remnanode/nginx.conf` with a simple HTTP-only server on port 80 for the selfsteal domain, serving `/var/www/html` and setting strict `X-Robots-Tag`.
     - If `/var/www/html/index.html` is missing, writes a minimal masking HTML page so the selfsteal domain exposes a benign static site.
+  - Masking site autoupdate for local node (`remask.sh`):
+    - `_remna_node_install_remask_tool` creates `/opt/remnanode/tools/remask.sh` – a standalone Bash script that pulls a random template from one of three public repos (simple-web-templates, sni-templates, nothing-sni) and refreshes `/var/www/html`.
+    - The same helper also ensures a root cron entry `17 3 */14 * * /opt/remnanode/tools/remask.sh` is present, so the masking site is automatically rotated roughly every 14 days.
 - **Node SECRET_KEY wiring (panel → node)**
   - Added `_remna_node_api_apply_public_key(domain_url, token, compose_path)` which:
     - Calls `GET http://<panel>/api/keygen` to retrieve `response.pubKey`.
     - Replaces the `SECRET_KEY="PUBLIC KEY FROM REMNAWAVE-PANEL"` placeholder in `/opt/remnanode/docker-compose.yml` with the real public key using `sed` via `run_cmd`.
   - Local node wizard now, after writing the runtime compose/nginx files, calls `_remna_node_api_apply_public_key` before starting `docker compose up -d` in `/opt/remnanode`.
-  - Result: the local node is registered in the panel, has a masking HTTP site on `http://SELFSTEAL_DOMAIN`, and already runs with the correct `SECRET_KEY` from the panel. TLS and cert management for selfsteal will be added as a dedicated next step.
+  - Result: the local node is registered in the panel, has a masking HTTP site on `http://SELFSTEAL_DOMAIN`, and already runs with the correct `SECRET_KEY` from the panel.
+- **Local node TLS (ACME HTTP-01, first pass)**
+  - `modules/remnawave_node.sh` local wizard `_remna_node_install_local_wizard` now optionally issues a Let's Encrypt certificate for the selfsteal domain via `_remna_node_setup_tls_acme` (certbot `--standalone` HTTP-01 with `ensure_package certbot` on demand).
+  - `_remna_node_write_runtime_compose_and_nginx` now mounts `/etc/letsencrypt` into the `remnanode-nginx` container, and `_remna_node_write_nginx_tls` rewrites `/opt/remnanode/nginx.conf` to serve an HTTP→HTTPS redirect and a 443 vhost pointing at `/etc/letsencrypt/live/SELFSTEAL_DOMAIN`.
+  - `_remna_node_setup_tls_renew` теперь прописывает renew_hook в `/etc/letsencrypt/renewal/SELFSTEAL_DOMAIN.conf` (перезапуск `remnanode-nginx` через `docker compose`) и, если ещё нет, добавляет простой `cron` с `/usr/bin/certbot renew --quiet` раз в день в 05:00.
+- **Skynet plugin for remote node install (HTTP/HTTPS, first pass)**
+  - `plugins/skynet_commands/10_install_remnawave_node.sh` is now wired with a human-readable TITLE and can prepare `/opt/remnanode` (docker-compose + nginx + basic masking index.html) on a remote host via Skynet when `SELFSTEAL_DOMAIN` is provided.
+  - The plugin honours optional `NODE_PORT`/`NODE_SECRET_KEY` and `CERT_MODE` variables for the `remnanode` container: `NODE_SECRET_KEY` is passed from the panel via `_remna_node_api_get_public_key` in `remnawave_node.sh`, and when `CERT_MODE=node_acme` it will also obtain a Let's Encrypt certificate on the remote host (ACME HTTP-01), rewrite nginx to HTTPS and set up certbot renew cron and renew_hook, plus remask autocron via `/opt/remnanode/tools/remask.sh`.
+- **Skynet multi-node wizard (panel side)**
+  - `_remna_node_install_skynet_many` in `remnawave_node.sh` now allows picking multiple servers from the Skynet fleet (comma-separated indices), asking per-server `SELFSTEAL_DOMAIN` and `NODE_NAME` while sharing panel API/token, node port and TLS mode.
+  - For each selected server it creates a dedicated config-profile/node/host in the panel, attaches the inbound to the default internal squad, fetches `pubKey` via `_remna_node_api_get_public_key`, and then launches the `10_install_remnawave_node.sh` plugin on that host with `SELFSTEAL_DOMAIN`/`NODE_PORT`/`NODE_SECRET_KEY`/`CERT_MODE` wired in.
 
-## Project standards (do not break)
+ ## Project standards (do not break)
 
 These are core conventions and contracts for «Решала». When you change or extend the code, treat these as **constraints** – breaking them может поломать обновления, плагины или мышечную память пользователей.
 

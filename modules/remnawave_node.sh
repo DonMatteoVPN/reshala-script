@@ -389,6 +389,29 @@ _remna_node_api_apply_public_key() {
     return 0
 }
 
+# Получение публичного ключа панели для использования на удалённых нодах
+_remna_node_api_get_public_key() {
+    local domain_url="$1"
+    local token="$2"
+
+    local resp
+    resp=$(_remna_node_api_request "GET" "http://$domain_url/api/keygen" "$token") || true
+    if [[ -z "$resp" ]]; then
+        err "Панель не ответила на /api/keygen (не получил pubKey для удалённой ноды)."
+        return 1
+    fi
+
+    local pubkey
+    pubkey=$(echo "$resp" | jq -r '.response.pubKey // empty') || true
+    if [[ -z "$pubkey" || "$pubkey" == "null" ]]; then
+        err "Не смог вытащить pubKey из ответа /api/keygen (удалённая нода)."
+        log "node remote keygen response: $resp"
+        return 1
+    fi
+
+    echo "$pubkey"
+}
+
 # --- ЛОКАЛЬНОЕ ОКРУЖЕНИЕ НОДЫ (docker-compose + nginx, HTTP) ---
 
 _remna_node_prepare_runtime_dir() {
@@ -429,6 +452,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - /var/www/html:/var/www/html:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     logging:
       driver: 'json-file'
       options:
@@ -477,7 +501,250 @@ HTML
     return 0
 }
 
-_remna_node_install_local_wizard() {
+# --- Маскировка: remask.sh + cron ------------------------------
+
+_remna_node_install_remask_tool() {
+    # Скрипт будет жить в /opt/remnanode/tools/remask.sh и крутить рандомные шаблоны в /var/www/html
+    run_cmd mkdir -p /opt/remnanode/tools || return 1
+
+    cat > /opt/remnanode/tools/remask.sh <<'EOF'
+#!/bin/bash
+# ============================================================ #
+#  remask.sh — рандомная маскировка для selfsteal-домена ноды  #
+# ============================================================ #
+# Тянет один из публичных наборов шаблонов (simple/sni/nothing)
+# и заливает случайный шаблон в /var/www/html как маскировку.
+#
+# Запускать от root (или через cron). Никаких интерактивных
+# вопросов не задаёт.
+
+set -euo pipefail
+
+log() {
+    echo "[remask] $(date -u +'%Y-%m-%dT%H:%M:%SZ') $*"
+}
+
+for bin in wget unzip; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+        log "нужна утилита '$bin' (apt install $bin). Выходим."
+        exit 1
+    fi
+done
+
+WORKDIR="$(mktemp -d /opt/remnanode/remask.XXXXXX)"
+trap 'rm -rf "$WORKDIR"' EXIT
+cd "$WORKDIR"
+
+TEMPLATES=(
+  "https://github.com/eGamesAPI/simple-web-templates/archive/refs/heads/main.zip"
+  "https://github.com/distillium/sni-templates/archive/refs/heads/main.zip"
+  "https://github.com/prettyleaf/nothing-sni/archive/refs/heads/main.zip"
+)
+
+# Можно передать REMASK_SOURCE=simple|sni|nothing, иначе выберем рандомно
+SOURCE=${REMASK_SOURCE:-}
+case "$SOURCE" in
+  simple) IDX=0 ;;
+  sni)    IDX=1 ;;
+  nothing)IDX=2 ;;
+  *)      IDX=$((RANDOM % 3)) ;;
+esac
+
+URL="${TEMPLATES[$IDX]}"
+log "качаю шаблоны: $URL"
+
+if ! wget -q -O main.zip --timeout=60 --tries=5 --retry-connrefused "$URL"; then
+    log "не смог скачать архив шаблонов"
+    exit 1
+fi
+
+unzip -q main.zip || { log "ошибка распаковки архива"; exit 1; }
+
+SRCDIR=""
+case "$URL" in
+  *simple-web-templates*) SRCDIR="$WORKDIR/simple-web-templates-main" ;;
+  *nothing-sni*)          SRCDIR="$WORKDIR/nothing-sni-main" ;;
+  *)                      SRCDIR="$WORKDIR/sni-templates-main" ;;
+esac
+
+if [[ ! -d "$SRCDIR" ]]; then
+    log "не нашёл распакованный каталог шаблонов ($SRCDIR)"
+    exit 1
+fi
+
+mkdir -p /var/www/html
+
+if [[ "$URL" == *"nothing-sni"* ]]; then
+    # В nothing-sni лежит пачка HTML-файлов — просто выбираем один и кладём как index.html
+    mapfile -t HTMLS < <(find "$SRCDIR" -maxdepth 1 -type f -name '*.html')
+    if [[ ${#HTMLS[@]} -eq 0 ]]; then
+        log "в nothing-sni не нашёл ни одного .html файла"
+        exit 1
+    fi
+    PICKED="${HTMLS[$((RANDOM % ${#HTMLS[@]}))]}"
+    log "выбран шаблон: $PICKED"
+    rm -rf /var/www/html/*
+    cp "$PICKED" /var/www/html/index.html
+else
+    # simple/sni: выбираем случайную подпапку и заливаем её содержимое в /var/www/html
+    mapfile -t DIRS < <(find "$SRCDIR" -maxdepth 1 -mindepth 1 -type d)
+    if [[ ${#DIRS[@]} -eq 0 ]]; then
+        log "в $SRCDIR нет подпапок с шаблонами"
+        exit 1
+    fi
+    PICKED="${DIRS[$((RANDOM % ${#DIRS[@]}))]}"
+    log "выбран шаблон: $PICKED"
+    rm -rf /var/www/html/*
+    cp -r "$PICKED"/. /var/www/html/
+fi
+
+log "маскировочный сайт обновлён в /var/www/html"
+EOF
+
+    run_cmd chmod +x /opt/remnanode/tools/remask.sh || return 1
+
+    # cron: раз в 14 дней в 03:17 по серверному времени
+    if ! crontab -u root -l 2>/dev/null | grep -q '/opt/remnanode/tools/remask.sh'; then
+        info "Вешаю cron на периодическую смену маскировочного сайта ноды (раз в ~14 дней)."
+        local current
+        current=$(crontab -u root -l 2>/dev/null || true)
+        printf '%s\n%s\n' "$current" "17 3 */14 * * /opt/remnanode/tools/remask.sh >/var/log/remnanode_remask.log 2>&1" | run_cmd crontab -u root - || {
+            warn "Не получилось прописать cron для remask.sh. Проверь crontab вручную."
+        }
+    fi
+
+    ok "remask.sh установлен в /opt/remnanode/tools и будет периодически обновлять /var/www/html."
+    return 0
+}
+
+# --- TLS для локальной ноды (упрощённый ACME HTTP-01) ----------
+
+# Переписывает nginx.conf под HTTPS (Let's Encrypt cert в /etc/letsencrypt)
+_remna_node_write_nginx_tls() {
+    local selfsteal_domain="$1"
+
+    cat > /opt/remnanode/nginx.conf <<EOL
+server {
+    listen 80;
+    server_name $selfsteal_domain;
+
+    return 301 https://$selfsteal_domain\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $selfsteal_domain;
+
+    ssl_certificate     /etc/letsencrypt/live/$selfsteal_domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$selfsteal_domain/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    root /var/www/html;
+    index index.html;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
+}
+EOL
+}
+
+# Запрос сертификата Let's Encrypt (ACME HTTP-01, certbot --standalone)
+_remna_node_setup_tls_acme() {
+    local selfsteal_domain="$1"
+
+    info "Готовлю TLS-сертификат Let's Encrypt для selfsteal-домена $selfsteal_domain (ACME HTTP-01)..."
+
+    if ! command -v certbot >/dev/null 2>&1; then
+        info "Не вижу certbot, сейчас попробую аккуратно докрутить пакет..."
+        if ! ensure_package certbot; then
+            err "Не смог установить certbot. TLS для ноды пока пропускаем."
+            return 1
+        fi
+    fi
+
+    local email
+    email=$(safe_read "Email для Let's Encrypt (уведомления, можно пустой): " "")
+
+    local -a certbot_args
+    certbot_args=(certbot certonly --standalone -d "$selfsteal_domain" --agree-tos --non-interactive --http-01-port 80 --key-type ecdsa --elliptic-curve secp384r1)
+    if [[ -n "$email" ]]; then
+        certbot_args+=(--email "$email")
+    else
+        certbot_args+=(--register-unsafely-without-email)
+    fi
+
+    # Если есть ufw — временно откроем 80 порт под challenge
+    if command -v ufw >/dev/null 2>&1; then
+        run_cmd ufw allow 80/tcp comment 'reshala remnanode acme http-01' || true
+    fi
+
+    if ! run_cmd "${certbot_args[@]}"; then
+        err "certbot не смог выписать сертификат для $selfsteal_domain."
+        if command -v ufw >/dev/null 2>&1; then
+            run_cmd ufw delete allow 80/tcp || true
+            run_cmd ufw reload || true
+        fi
+        return 1
+    fi
+
+    if command -v ufw >/dev/null 2>&1; then
+        run_cmd ufw delete allow 80/tcp || true
+        run_cmd ufw reload || true
+    fi
+
+    if [[ ! -d "/etc/letsencrypt/live/$selfsteal_domain" ]]; then
+        err "Каталог /etc/letsencrypt/live/$selfsteal_domain не появился после certbot. TLS пропускаем."
+        return 1
+    fi
+
+    _remna_node_write_nginx_tls "$selfsteal_domain" || return 1
+
+    # Настраиваем renew_hook и простейший cron для certbot renew
+    _remna_node_setup_tls_renew "$selfsteal_domain" || warn "renew_hook/cron для TLS-ноды не удалось настроить автоматически, смотри /etc/letsencrypt/renewal/$selfsteal_domain.conf."
+
+    ok "TLS-конфиг для ноды собран, nginx будет слушать 443 с сертификатом Let's Encrypt."
+    return 0
+}
+
+# renew_hook + cron для автопродления сертификата selfsteal-домена ноды
+_remna_node_setup_tls_renew() {
+    local selfsteal_domain="$1"
+    local renewal_conf="/etc/letsencrypt/renewal/$selfsteal_domain.conf"
+
+    if [[ ! -f "$renewal_conf" ]]; then
+        warn "Не нашёл $renewal_conf — не на что вешать renew_hook для ноды. Пропускаю авто-настройку."
+        return 1
+    fi
+
+    local hook
+    hook="renew_hook = sh -c 'cd /opt/remnanode && docker compose down remnanode-nginx && docker compose up -d remnanode-nginx'"
+
+    if grep -q '^renew_hook' "$renewal_conf"; then
+        run_cmd sed -i "s|^renew_hook.*|$hook|" "$renewal_conf" || return 1
+    else
+        echo "$hook" | run_cmd tee -a "$renewal_conf" >/dev/null || return 1
+    fi
+
+    ok "renew_hook для selfsteal-домена ноды прописан в $renewal_conf."
+
+    # Простейший cron на certbot renew раз в день в 05:00, если ещё нет никакого
+    if ! crontab -u root -l 2>/dev/null | grep -q '/usr/bin/certbot renew'; then
+        info "Вешаю cron-задачу на certbot renew для сертификатов (включая ноду)."
+        local current
+        current=$(crontab -u root -l 2>/dev/null || true)
+        printf '%s
+%s
+' "$current" "0 5 * * * /usr/bin/certbot renew --quiet" | run_cmd crontab -u root - || {
+            warn "Не получилось прописать cron для certbot renew. Проверь crontab вручную."
+        }
+    else
+        info "cron с certbot renew уже есть — не трогаю его."
+    fi
+
+    return 0
+}
+
+# Получение UUID дефолтного internal-squad из панели (нодовый модуль)
+_remna_node_api_get_default_squad_uuid() {
     local domain_url="$1"
     local token="$2"
 
@@ -537,8 +804,8 @@ _remna_node_api_add_inbound_to_squad() {
     return 0
 }
 
-# Проверка, что в панели ещё нет ноды с таким доменом
-_remna_node_api_check_node_domain() {
+# Мастер‑визард установки локальной ноды на этот сервер
+_remna_node_install_local_wizard() {
     menu_header "Нода Remnawave на этот сервак"
     echo
     echo "   Ставим НОДУ для уже существующей панели."
@@ -551,11 +818,11 @@ _remna_node_api_check_node_domain() {
     SELFSTEAL_DOMAIN=$(safe_read "Selfsteal домен ноды (node.example.com): " "")
     NODE_NAME=$(safe_read "Имя ноды в панели (например Germany-1): " "")
 
-    if [[ -з "$SELFSTEAL_DOMAIN" || -з "$NODE_NAME" ]]; then
+    if [[ -z "$SELFSTEAL_DOMAIN" || -z "$NODE_NAME" ]]; then
         err "Имя ноды и домен — обязательно."
         return 1
     fi
-    if [[ -з "$PANEL_API_TOKEN" ]]; then
+    if [[ -z "$PANEL_API_TOKEN" ]]; then
         err "Нужен API токен панели, без него я не могу создать ноду через HTTP API."
         return 1
     fi
@@ -593,7 +860,7 @@ _remna_node_api_check_node_domain() {
 
     ok "Нода зарегистрирована в панели Remnawave."
 
-    info "Готовлю /opt/remnanode и HTTP-окружение ноды (без TLS, только маскировка)..."
+    info "Готовлю /opt/remnanode и окружение ноды (HTTP, маскировка)..."
     if ! _remna_node_prepare_runtime_dir; then
         err "Не смог подготовить директорию /opt/remnanode. Смотри логи."
         return 1
@@ -604,10 +871,27 @@ _remna_node_api_check_node_domain() {
         return 1
     }
 
+    info "Ставлю remask.sh, чтобы selfsteal-домен ноды сам периодически менял морду."
+    _remna_node_install_remask_tool || warn "Не смог накатить remask.sh для ноды, маскировку придётся обновлять руками."
+
+    info "TLS = HTTPS-сертификат для домена: шифрует трафик и даёт нормальный замочек в браузере."
+    info "Сейчас могу сразу выписать бесплатный сертификат Let's Encrypt (ACME HTTP-01) для selfsteal-домена."
+    local tls_choice
+    tls_choice=$(safe_read "Включить HTTPS (TLS-сертификат Let's Encrypt) для этого домена прямо сейчас? (Y/n): " "y")
+    if [[ "$tls_choice" == "y" || "$tls_choice" == "Y" ]]; then
+        if _remna_node_setup_tls_acme "$SELFSTEAL_DOMAIN"; then
+            ok "TLS для ноды получен, nginx сконфигурен на 443."
+        else
+            warn "TLS для ноды получить не удалось, оставляю HTTP-режим. Можно будет заняться позже вручную."
+        fi
+    else
+        warn "Ок, оставляем пока только HTTP без сертификата. Если что, https://$SELFSTEAL_DOMAIN можно будет докрутить позже."
+    fi
+
     info "Получаю публичный ключ ноды из панели и прошиваю его в SECRET_KEY..."
     _remna_node_api_apply_public_key "$domain_url" "$PANEL_API_TOKEN" "/opt/remnanode/docker-compose.yml" || return 1
 
-    info "Стартую Docker-композ локальной ноды (HTTP-режим)..."
+    info "Стартую Docker-композ локальной ноды..."
     (
         cd /opt/remnanode && run_cmd docker compose up -d
     ) || {
@@ -615,7 +899,7 @@ _remna_node_api_check_node_domain() {
         return 1
     }
 
-    ok "Локальная нода поднята: маскировочный сайт крутится на http://$SELFSTEAL_DOMAIN. SECRET_KEY уже получен из панели, TLS прикрутим на следующем этапе."
+    ok "Локальная нода поднята: маскировочный сайт крутится на http://$SELFSTEAL_DOMAIN, а если TLS завёлся — то и на https://$SELFSTEAL_DOMAIN. SECRET_KEY уже получен из панели."
     wait_for_enter
 }
 
@@ -623,9 +907,119 @@ _remna_node_install_skynet_one() {
     clear
     menu_header "Нода Remnawave через Skynet (один сервер)"
     echo
-    echo "   Тут выберем один сервак из флота и воткнём туда ноду."
+    echo "   Сценарий: панель уже крутится, а ноду хотим воткнуть НА ДРУГОЙ сервак из флота Skynet."
+    echo "   На этом сервере я настрою ноду в панели и запущу плагин на выбранном хосте."
     echo
-    warn "Пока только каркас. Выбор сервера и запуск плагина ещё впереди."
+
+    if [[ ! -f "$FLEET_DATABASE_FILE" || ! -s "$FLEET_DATABASE_FILE" ]]; then
+        err "Флот пустой. Сначала зайди в Skynet и добавь хоть один сервер."
+        wait_for_enter
+        return
+    fi
+
+    local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME NODE_PORT CERT_MODE
+    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
+    PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
+    SELFSTEAL_DOMAIN=$(safe_read "Selfsteal домен ноды (node.example.com): " "")
+    NODE_NAME=$(safe_read "Имя ноды в панели (например Germany-1): " "")
+    NODE_PORT=$(safe_read "Порт ноды (по умолчанию 2222): " "2222")
+
+    local tls_remote_choice
+    info "TLS на удалённой ноде = HTTPS-сертификат для selfsteal-домена, шифрует трафик и выглядит как обычный https-сайт."
+    tls_remote_choice=$(safe_read "Сделать HTTPS (TLS-сертификат Let's Encrypt) прямо на удалённой ноде? (Y/n): " "y")
+    CERT_MODE=""
+    if [[ "$tls_remote_choice" == "y" || "$tls_remote_choice" == "Y" ]]; then
+        CERT_MODE="node_acme"
+    fi
+
+    if [[ -z "$SELFSTEAL_DOMAIN" || -z "$NODE_NAME" ]]; then
+        err "Имя ноды и домен — обязательно."
+        wait_for_enter
+        return
+    fi
+    if [[ -z "$PANEL_API_TOKEN" ]]; then
+        err "Нужен API токен панели, без него я не могу создать ноду через HTTP API."
+        wait_for_enter
+        return
+    fi
+
+    local domain_url="$PANEL_API"
+
+    info "Проверяю, что в панели ещё нет ноды с таким доменом..."
+    _remna_node_api_check_node_domain "$domain_url" "$PANEL_API_TOKEN" "$SELFSTEAL_DOMAIN" || { wait_for_enter; return; }
+
+    info "Генерю x25519-ключи для ноды через панель..."
+    local private_key
+    private_key=$(_remna_node_api_generate_x25519 "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
+
+    info "Создаю config-profile под selfsteal-домен ноды..."
+    local cfg inbound
+    if ! read -r cfg inbound < <(_remna_node_api_create_config_profile "$domain_url" "$PANEL_API_TOKEN" "Node-$NODE_NAME" "$SELFSTEAL_DOMAIN" "$private_key"); then
+        wait_for_enter
+        return
+    fi
+
+    info "Регистрирую ноду и host в панели..."
+    _remna_node_api_create_node "$domain_url" "$PANEL_API_TOKEN" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "$NODE_NAME" || { wait_for_enter; return; }
+    _remna_node_api_create_host "$domain_url" "$PANEL_API_TOKEN" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "$NODE_NAME" || { wait_for_enter; return; }
+
+    info "Прописываю inbound ноды в дефолтный squad..."
+    local squad
+    squad=$(_remna_node_api_get_default_squad_uuid "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
+    _remna_node_api_add_inbound_to_squad "$domain_url" "$PANEL_API_TOKEN" "$squad" "$inbound" || { wait_for_enter; return; }
+
+    ok "Нода зарегистрирована в панели Remnawave (HTTP-конфиг готов). Теперь получим ключ и выберем удалённый сервак из флота."
+
+    info "Получаю публичный ключ ноды из панели (для удалённого сервера)..."
+    local pubkey
+    pubkey=$(_remna_node_api_get_public_key "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
+
+    # Выбор сервера из флота (упрощённый одноразовый список)
+    local servers=()
+    local idx=1
+    echo
+    echo "Доступные сервера Skynet:"
+    echo "------------------------------------------------------"
+    while IFS='|' read -r name user ip port key_path sudo_pass; do
+        [[ -z "$name" ]] && continue
+        servers[$idx]="$name|$user|$ip|$port|$key_path|$sudo_pass"
+        printf "   [%d] %s (%s@%s:%s)\n" "$idx" "$name" "$user" "$ip" "$port"
+        ((idx++))
+    done < "$FLEET_DATABASE_FILE"
+
+    if [[ ${#servers[@]} -eq 0 ]]; then
+        err "Во флоте нет ни одного сервера."
+        wait_for_enter
+        return
+    fi
+
+    local s_choice
+    s_choice=$(safe_read "Номер сервера для ноды: " "")
+    if [[ ! "$s_choice" =~ ^[0-9]+$ ]] || [[ -z "${servers[$s_choice]:-}" ]]; then
+        err "Нет такого номера сервера."
+        wait_for_enter
+        return
+    fi
+
+    IFS='|' read -r name user ip port key_path sudo_pass <<< "${servers[$s_choice]}"
+
+    info "Запускаю Skynet-плагин установки ноды на сервере '$name'..."
+
+    local plugin_path
+    plugin_path="${SCRIPT_DIR}/plugins/skynet_commands/10_install_remnawave_node.sh"
+    if [[ ! -f "$plugin_path" ]]; then
+        err "Не нашёл плагин $plugin_path. Обнови Решалу или проверь репозиторий."
+        wait_for_enter
+        return
+    fi
+
+    # Собираем строку ENV-переменных для удалённого запуска плагина
+    local env_vars
+    env_vars="SELFSTEAL_DOMAIN='$SELFSTEAL_DOMAIN' NODE_PORT='$NODE_PORT' NODE_SECRET_KEY='$pubkey' CERT_MODE='$CERT_MODE'"
+
+    _skynet_run_plugin_on_server_with_env "$plugin_path" "$env_vars" "$name" "$user" "$ip" "$port" "$key_path"
+
+    ok "Команда на установку ноды на сервере '$name' отправлена. Проверяй http://$SELFSTEAL_DOMAIN после старта контейнеров."
     wait_for_enter
 }
 
@@ -633,9 +1027,163 @@ _remna_node_install_skynet_many() {
     clear
     menu_header "Ноды Remnawave через Skynet (несколько серверов)"
     echo
-    echo "   Раздаём ноды пачкой по выбранным серверам Skynet."
+    echo "   Сценарий: панель уже крутится, и хотим раздать НОДЫ сразу на несколько серваков из флота."
+    echo "   На этом сервере я настрою ноды в панели и запущу плагин на каждом выбранном хосте."
     echo
-    warn "Пока только каркас. Массовая установка ещё не реализована."
+
+    if [[ ! -f "$FLEET_DATABASE_FILE" || ! -s "$FLEET_DATABASE_FILE" ]]; then
+        err "Флот пустой. Сначала зайди в Skynet и добавь хоть один сервер."
+        wait_for_enter
+        return
+    fi
+
+    local PANEL_API PANEL_API_TOKEN NODE_PORT CERT_MODE
+    PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
+    PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
+    NODE_PORT=$(safe_read "Порт нод (по умолчанию 2222, общий для всех): " "2222")
+
+    info "TLS на удалённых нодах = HTTPS-сертификаты для их selfsteal-доменов, шифруют трафик и выглядят как обычные https-сайты."
+    local tls_remote_choice
+    tls_remote_choice=$(safe_read "Прикрутить HTTPS (TLS Let's Encrypt ACME HTTP-01) на КАЖДОЙ удалённой ноде? (Y/n): " "y")
+    CERT_MODE=""
+    if [[ "$tls_remote_choice" == "y" || "$tls_remote_choice" == "Y" ]]; then
+        CERT_MODE="node_acme"
+    fi
+
+    if [[ -z "$PANEL_API_TOKEN" ]]; then
+        err "Нужен API токен панели, без него я не могу создавать ноды через HTTP API."
+        wait_for_enter
+        return
+    fi
+
+    local domain_url="$PANEL_API"
+
+    info "Читаю дефолтный squad в панели один раз, чтобы вешать туда все новые ноды."
+    local squad
+    squad=$(_remna_node_api_get_default_squad_uuid "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
+
+    # Рисуем список серваков из флота
+    local servers=()
+    local idx=1
+    echo
+    echo "Доступные сервера Skynet:"
+    echo "------------------------------------------------------"
+    while IFS='|' read -r name user ip port key_path sudo_pass; do
+        [[ -z "$name" ]] && continue
+        servers[$idx]="$name|$user|$ip|$port|$key_path|$sudo_pass"
+        printf "   [%d] %s (%s@%s:%s)\n" "$idx" "$name" "$user" "$ip" "$port"
+        ((idx++))
+    done < "$FLEET_DATABASE_FILE"
+
+    if [[ ${#servers[@]} -eq 0 ]]; then
+        err "Во флоте нет ни одного сервера."
+        wait_for_enter
+        return
+    fi
+
+    echo
+    info "Можно задать несколько номеров через запятую, например: 1,3,5"
+    local selection_raw
+    selection_raw=$(safe_read "На какие сервера раздать ноды (номера через запятую): " "")
+    if [[ -z "$selection_raw" ]]; then
+        warn "Ничего не выбрал — массовую установку отменяем."
+        wait_for_enter
+        return
+    fi
+
+    # Нормализуем: убираем пробелы, заменяем запятые на пробел
+    local selection_normalized
+    selection_normalized=$(echo "$selection_raw" | tr ',' ' ')
+
+    local ok_any=false
+    local num
+    for num in $selection_normalized; do
+        [[ -z "$num" ]] && continue
+        if ! [[ "$num" =~ ^[0-9]+$ ]] || [[ -z "${servers[$num]:-}" ]]; then
+            warn "Пропускаю некорректный номер сервера: $num"
+            continue
+        fi
+
+        IFS='|' read -r name user ip port key_path sudo_pass <<< "${servers[$num]}"
+
+        echo
+        info "Готовлю ноду для сервера '$name' ($user@$ip:$port)..."
+
+        local SELFSTEAL_DOMAIN NODE_NAME
+        SELFSTEAL_DOMAIN=$(safe_read "Selfsteal домен для ноды на сервере '$name' (node.example.com): " "")
+        NODE_NAME=$(safe_read "Имя ноды в панели для '$name' (например ${name}-1): " "${name}-1")
+
+        if [[ -z "$SELFSTEAL_DOMAIN" || -z "$NODE_NAME" ]]; then
+            warn "Для сервера '$name' домен и имя ноды обязательны, пропускаю."
+            continue
+        fi
+
+        info "Проверяю, что в панели ещё нет ноды с доменом $SELFSTEAL_DOMAIN..."
+        if ! _remna_node_api_check_node_domain "$domain_url" "$PANEL_API_TOKEN" "$SELFSTEAL_DOMAIN"; then
+            warn "Скрипт панели не дал создать ноду для '$name' (домен занят или ошибка API) — этот сервак пропускаю."
+            continue
+        fi
+
+        info "Генерю x25519-ключи для ноды '$NODE_NAME' через панель..."
+        local private_key
+        private_key=$(_remna_node_api_generate_x25519 "$domain_url" "$PANEL_API_TOKEN") || {
+            warn "Не смог сгенерировать x25519 для '$name', пропускаю."
+            continue
+        }
+
+        info "Создаю config-profile под selfsteal-домен $SELFSTEAL_DOMAIN..."
+        local cfg inbound
+        if ! read -r cfg inbound < <(_remna_node_api_create_config_profile "$domain_url" "$PANEL_API_TOKEN" "Node-$NODE_NAME" "$SELFSTEAL_DOMAIN" "$private_key"); then
+            warn "Не смог создать config-profile для '$name', пропускаю."
+            continue
+        fi
+
+        info "Регистрирую ноду и host в панели для '$name'..."
+        if ! _remna_node_api_create_node "$domain_url" "$PANEL_API_TOKEN" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "$NODE_NAME"; then
+            warn "create_node в панели для '$name' отвалился, пропускаю."
+            continue
+        fi
+        if ! _remna_node_api_create_host "$domain_url" "$PANEL_API_TOKEN" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "$NODE_NAME"; then
+            warn "create_host в панели для '$name' отвалился, пропускаю."
+            continue
+        fi
+
+        info "Прописываю inbound ноды '$NODE_NAME' в дефолтный squad..."
+        if ! _remna_node_api_add_inbound_to_squad "$domain_url" "$PANEL_API_TOKEN" "$squad" "$inbound"; then
+            warn "Не смог привязать inbound к squad для '$name', пропускаю."
+            continue
+        fi
+
+        info "Тяну публичный ключ ноды из панели (SECRET_KEY) для '$name'..."
+        local pubkey
+        pubkey=$(_remna_node_api_get_public_key "$domain_url" "$PANEL_API_TOKEN") || {
+            warn "Не смог получить pubKey для '$name', пропускаю."
+            continue
+        }
+
+        local plugin_path
+        plugin_path="${SCRIPT_DIR}/plugins/skynet_commands/10_install_remnawave_node.sh"
+        if [[ ! -f "$plugin_path" ]]; then
+            err "Не нашёл плагин $plugin_path. Обнови Решалу или проверь репозиторий."
+            wait_for_enter
+            return
+        fi
+
+        info "Шлю Skynet-плагин на сервер '$name' (selfsteal-домен $SELFSTEAL_DOMAIN, порт ноды $NODE_PORT)..."
+        local env_vars
+        env_vars="SELFSTEAL_DOMAIN='$SELFSTEAL_DOMAIN' NODE_PORT='$NODE_PORT' NODE_SECRET_KEY='$pubkey' CERT_MODE='$CERT_MODE'"
+
+        _skynet_run_plugin_on_server_with_env "$plugin_path" "$env_vars" "$name" "$user" "$ip" "$port" "$key_path"
+        ok "Команда на установку ноды для '$name' отправлена. После старта контейнеров проверяй http(s)://$SELFSTEAL_DOMAIN."
+        ok_any=true
+    done
+
+    if [[ "$ok_any" == true ]]; then
+        ok "Массовая раздача нод через Skynet завершена."
+    else
+        warn "Ни для одного сервера ноду в итоге не поставили — смотри сообщения выше."
+    fi
+
     wait_for_enter
 }
 

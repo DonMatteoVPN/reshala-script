@@ -206,6 +206,15 @@ _skynet_run_plugin_on_server() {
     ssh -t -p "$port" -i "$key_path" "${user}@${ip}" "bash /tmp/reshala_plugin.sh; rm -f /tmp/reshala_plugin.sh"
 }
 
+# Запуск плагина Skynet на ОДНОМ сервере с дополнительными переменными окружения
+_skynet_run_plugin_on_server_with_env() {
+    local plugin="$1" env_vars="$2" name="$3" user="$4" ip="$5" port="$6" key_path="$7"
+    printf "\n%b--- Сервер: %s ---%b\n" "${C_YELLOW}" "$name" "${C_RESET}"
+    scp -q -P "$port" -i "$key_path" "$plugin" "${user}@${ip}:/tmp/reshala_plugin.sh"
+    # env_vars – это строка наподобие "VAR1=val1 VAR2=val2"
+    ssh -t -p "$port" -i "$key_path" "${user}@${ip}" "${env_vars} bash /tmp/reshala_plugin.sh; rm -f /tmp/reshala_plugin.sh"
+}
+
 _run_fleet_command() {
     local PLUGINS_DIR="${SCRIPT_DIR}/plugins/skynet_commands"
     if [ ! -d "$PLUGINS_DIR" ] || [ -z "$(ls -A "$PLUGINS_DIR")" ]; then

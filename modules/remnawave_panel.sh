@@ -204,14 +204,14 @@ _remna_panel_api_generate_x25519() {
 
     local resp
     resp=$(_remna_panel_api_request "GET" "http://$domain_url/api/system/tools/x25519/generate" "$token") || true
-    if [[ -з "$resp" ]]; then
+    if [[ -z "$resp" ]]; then
         err "Панель не ответила на генерацию x25519-ключей."
         return 1
     fi
 
     local priv
     priv=$(echo "$resp" | jq -r '.response.keypairs[0].privateKey // empty') || true
-    if [[ -з "$priv" || "$priv" == "null" ]]; then
+    if [[ -z "$priv" || "$priv" == "null" ]]; then
         err "Не смог вытащить privateKey из ответа x25519."
         log "panel x25519 response: $resp"
         return 1
@@ -280,7 +280,7 @@ _remna_panel_api_create_config_profile() {
 
     local resp
     resp=$(_remna_panel_api_request "POST" "http://$domain_url/api/config-profiles" "$token" "$body") || true
-    if [[ -з "$resp" ]]; then
+    if [[ -z "$resp" ]]; then
         err "Не получил ответ от /api/config-profiles при создании профиля панели."
         return 1
     fi
@@ -289,7 +289,7 @@ _remna_panel_api_create_config_profile() {
     cfg=$(echo "$resp" | jq -r '.response.uuid // empty') || true
     inbound=$(echo "$resp" | jq -r '.response.inbounds[0].uuid // empty') || true
 
-    if [[ -з "$cfg" || -з "$inbound" || "$cfg" == "null" || "$inbound" == "null" ]]; then
+    if [[ -z "$cfg" || -z "$inbound" || "$cfg" == "null" || "$inbound" == "null" ]]; then
         err "API вернуло кривые UUID для config profile/inbound (панель)."
         log "panel create_config_profile response: $resp"
         return 1
@@ -463,6 +463,7 @@ services:
     restart: always
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
 
   remnawave-subscription-page:
     image: remnawave/subscription-page:latest
@@ -560,6 +561,200 @@ SUPERADMIN_PASSWORD=$superadmin_password
 EOL
 }
 
+# --- TLS для панели-only (ACME HTTP-01, Let's Encrypt) ---------
+
+# Переписываем nginx.conf под HTTPS для панели и страницы подписки.
+_remna_panel_write_nginx_tls() {
+    local panel_domain="$1"
+    local sub_domain="$2"
+
+    cat > /opt/remnawave/nginx.conf <<EOL
+upstream remnawave {
+    server 127.0.0.1:3000;
+}
+
+upstream json {
+    server 127.0.0.1:3010;
+}
+
+server {
+    listen 80;
+    server_name $panel_domain;
+
+    return 301 https://$panel_domain\$request_uri;
+}
+
+server {
+    listen 80;
+    server_name $sub_domain;
+
+    return 301 https://$sub_domain\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $panel_domain;
+
+    ssl_certificate     /etc/letsencrypt/live/$panel_domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$panel_domain/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $sub_domain;
+
+    ssl_certificate     /etc/letsencrypt/live/$panel_domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$panel_domain/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://json;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+    }
+}
+EOL
+}
+
+# renew_hook + cron для автопродления сертификата панели/подписки
+_remna_panel_setup_tls_renew() {
+    local panel_domain="$1"
+    local renewal_conf="/etc/letsencrypt/renewal/$panel_domain.conf"
+
+    if [[ ! -f "$renewal_conf" ]]; then
+        warn "Не нашёл $renewal_conf — не на что вешать renew_hook для панели. Пропускаю авто-настройку."
+        return 1
+    fi
+
+    local hook
+    hook="renew_hook = sh -c 'cd /opt/remnawave && docker compose down remnawave-nginx && docker compose up -d remnawave-nginx'"
+
+    if grep -q '^renew_hook' "$renewal_conf"; then
+        run_cmd sed -i "s|^renew_hook.*|$hook|" "$renewal_conf" || return 1
+    else
+        echo "$hook" | run_cmd tee -a "$renewal_conf" >/dev/null || return 1
+    fi
+
+    ok "renew_hook для панели прописан в $renewal_conf."
+
+    # Простейший cron на certbot renew раз в день в 05:00, если ещё нет никакого
+    if ! crontab -u root -l 2>/dev/null | grep -q '/usr/bin/certbot renew'; then
+        info "Вешаю cron-задачу на certbot renew для сертификатов панели."
+        local current
+        current=$(crontab -u root -l 2>/dev/null || true)
+        printf '%s\n%s\n' "$current" "0 5 * * * /usr/bin/certbot renew --quiet" | run_cmd crontab -u root - || {
+            warn "Не получилось прописать cron для certbot renew. Проверь crontab вручную."
+        }
+    else
+        info "cron с certbot renew уже есть — не трогаю его."
+    fi
+
+    return 0
+}
+
+# Основной ACME-флоу для панели-only
+_remna_panel_setup_tls_acme() {
+    local panel_domain="$1"
+    local sub_domain="$2"
+
+    info "Сейчас можем включить HTTPS (TLS) для панели и страницы подписки."
+    info "TLS = тот самый 'https://' и замочек в браузере: шифрует трафик и убирает красные предупреждения."
+    info "Я выпишу бесплатные сертификаты Let's Encrypt для доменов: $panel_domain и $sub_domain."
+    echo
+
+    if ! command -v certbot >/dev/null 2>&1; then
+        info "Не вижу certbot, попробую аккуратно установить пакет..."
+        if ! ensure_package certbot; then
+            err "Не смог установить certbot. TLS для панели пока пропускаем."
+            return 1
+        fi
+    fi
+
+    local email
+    email=$(safe_read "Email для Let's Encrypt (уведомления о сертификатах, можно пустой): " "")
+
+    local -a certbot_args
+    certbot_args=(certbot certonly --standalone -d "$panel_domain" -d "$sub_domain" --agree-tos --non-interactive --http-01-port 80 --key-type ecdsa --elliptic-curve secp384r1)
+    if [[ -n "$email" ]]; then
+        certbot_args+=(--email "$email")
+    else
+        certbot_args+=(--register-unsafely-without-email)
+    fi
+
+    # Если есть ufw — временно откроем 80 порт под challenge
+    if command -v ufw >/dev/null 2>&1; then
+        run_cmd ufw allow 80/tcp comment 'reshala remnawave panel-only acme http-01' || true
+    fi
+
+    info "Останавливаю временно nginx-контейнер, чтобы освободить порт 80 для certbot..."
+    if ( cd /opt/remnawave && run_cmd docker compose down remnawave-nginx ); then
+        :
+    else
+        warn "Не получилось корректно остановить remnawave-nginx. Продолжаю, но certbot может упасть, если порт 80 занят."
+    fi
+
+    if ! run_cmd "${certbot_args[@]}"; then
+        err "certbot не смог выписать сертификаты для $panel_domain и $sub_domain."
+        if command -v ufw >/dev/null 2>&1; then
+            run_cmd ufw delete allow 80/tcp || true
+            run_cmd ufw reload || true
+        fi
+        info "Поднимаю remnawave-nginx обратно..."
+        ( cd /opt/remnawave && run_cmd docker compose up -d remnawave-nginx ) || warn "Не удалось заново поднять remnawave-nginx, проверь docker compose вручную."
+        return 1
+    fi
+
+    if command -v ufw >/dev/null 2>&1; then
+        run_cmd ufw delete allow 80/tcp || true
+        run_cmd ufw reload || true
+    fi
+
+    if [[ ! -d "/etc/letsencrypt/live/$panel_domain" ]]; then
+        err "Каталог /etc/letsencrypt/live/$panel_domain не появился после certbot. TLS пропускаем."
+        ( cd /opt/remnawave && run_cmd docker compose up -d remnawave-nginx ) || true
+        return 1
+    fi
+
+    if ! _remna_panel_write_nginx_tls "$panel_domain" "$sub_domain"; then
+        err "Не удалось переписать nginx.conf под HTTPS (панель-only)."
+        ( cd /opt/remnawave && run_cmd docker compose up -d remnawave-nginx ) || true
+        return 1
+    fi
+
+    info "Поднимаю remnawave-nginx уже в HTTPS-конфигурации..."
+    if ! ( cd /opt/remnawave && run_cmd docker compose up -d remnawave-nginx ); then
+        warn "Не удалось поднять remnawave-nginx после настройки TLS. Проверь docker compose вручную."
+    fi
+
+    _remna_panel_setup_tls_renew "$panel_domain" || warn "renew_hook/cron для TLS-панели не удалось настроить автоматически, смотри /etc/letsencrypt/renewal/$panel_domain.conf."
+
+    ok "TLS для панели и подписки включён. Теперь можно ходить по https://$panel_domain и https://$sub_domain."
+    return 0
+}
+
 _remna_panel_install_wizard() {
     clear
     menu_header "Remnawave: только панель"
@@ -572,7 +767,7 @@ _remna_panel_install_wizard() {
     SUB_DOMAIN=$(safe_read "Домен подписки (sub.example.com): " "")
     SUPERADMIN_USERNAME=$(safe_read "Логин суперадмина панели: " "boss")
 
-    if [[ -з "$PANEL_DOMAIN" || -з "$SUB_DOMAIN" ]]; then
+    if [[ -z "$PANEL_DOMAIN" || -z "$SUB_DOMAIN" ]]; then
         err "Без доменов панели и подписки никуда."
         return 1
     fi
@@ -653,35 +848,40 @@ _remna_panel_install_wizard() {
 
     ok "Панель Remnawave поднята, настроена и готова принимать ноды."
     echo
-    info "Адрес панели: https://$PANEL_DOMAIN (пока без TLS, ставь Cloudflare/прокси или добавим cert'ы позже)"
+
+    info "Теперь про HTTPS (TLS-сертификат)."
+    info "TLS = тот самый 'https://' и замочек в браузере: шифрует трафик и убирает красные предупреждения."
+    info "Я могу сейчас выписать бесплатные сертификаты Let's Encrypt для панели и страницы подписки."
+    echo
+
+    local enable_tls
+    local tls_enabled=false
+    enable_tls=$(safe_read "Включить HTTPS (TLS-сертификаты Let's Encrypt) для панели/подписки прямо сейчас? (Y/n): " "Y")
+    if [[ "$enable_tls" == "Y" || "$enable_tls" == "y" ]]; then
+        if _remna_panel_setup_tls_acme "$PANEL_DOMAIN" "$SUB_DOMAIN"; then
+            tls_enabled=true
+        else
+            warn "TLS не удалось настроить автоматически. Оставляем HTTP, можно будет разобраться вручную."
+        fi
+    else
+        info "Ок, HTTPS сейчас не трогаем. Всегда можно будет докрутить сертификаты позже."
+    fi
+
+    echo
+    if [[ "$tls_enabled" == true ]]; then
+        ok "Панель и подписка уже доступны по HTTPS:"
+        info "Панель:   https://$PANEL_DOMAIN"
+        info "Подписка: https://$SUB_DOMAIN"
+    else
+        info "Панель (HTTP):   http://$PANEL_DOMAIN"
+        info "Подписка (HTTP): http://$SUB_DOMAIN"
+        warn "HTTPS для панели/подписки пока не настроен. Можно использовать Cloudflare/прокси или запустить установку повторно с TLS."
+    fi
+
+    echo
     info "Логин суперадмина: $SUPERADMIN_USERNAME"
     info "Пароль суперадмина: $SUPERADMIN_PASSWORD"
     echo
-    wait_for_enter
-}
-
-_remna_panel_install_wizard() {
-    clear
-    menu_header "Remnawave: только панель"
-    echo
-    echo "   Ставим только панель, ноды потом можно раскидать через Skynet."
-    echo
-
-    local PANEL_DOMAIN SUB_DOMAIN SUPERADMIN_USERNAME
-    PANEL_DOMAIN=$(safe_read "Домен панели (panel.example.com): " "")
-    SUB_DOMAIN=$(safe_read "Домен подписки (sub.example.com): " "")
-    SUPERADMIN_USERNAME=$(safe_read "Логин суперадмина панели: " "boss")
-
-    if [[ -z "$PANEL_DOMAIN" || -z "$SUB_DOMAIN" ]]; then
-        err "Без доменов панели и подписки никуда."
-        return 1
-    fi
-    if [[ "$PANEL_DOMAIN" == "$SUB_DOMAIN" ]]; then
-        err "Домен панели и подписки должны отличаться."
-        return 1
-    fi
-
-    info "Каркас мастера панели готов. Тяжёлая логика из донора ещё не перенесена."
     wait_for_enter
 }
 
