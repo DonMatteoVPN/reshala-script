@@ -212,7 +212,7 @@ fi
 CORES=$(nproc 2>/dev/null || echo "?")
 LOAD=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | cut -d',' -f1 | xargs)
 
-if [ -з "$LOAD" ]; then
+if [ -z "$LOAD" ]; then
   echo "Нагрузка : нет данных"
 else
   echo "Нагрузка : $LOAD (ядер: $CORES)"
@@ -229,7 +229,7 @@ fi
 # Показывает количество активных интерактивных сессий.
 
 COUNT=$(who 2>/dev/null | wc -l | xargs)
-if [ -з "$COUNT" ]; then
+if [ -z "$COUNT" ]; then
   echo "Сессии SSH : нет данных"
 else
   echo "Сессии SSH : $COUNT"
@@ -249,7 +249,7 @@ LINE=$(df -h / 2>/dev/null | awk 'NR==2')
 USED=$(echo "$LINE" | awk '{print $3 "/" $2}')
 PERC=$(echo "$LINE" | awk '{print $5}')
 
-if [ -з "$USED" ]; then
+if [ -z "$USED" ]; then
   echo "Диск / : нет данных"
 else
   echo "Диск / : $USED ($PERC)"
