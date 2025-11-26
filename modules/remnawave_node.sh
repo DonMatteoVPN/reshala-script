@@ -804,21 +804,36 @@ _remna_node_api_add_inbound_to_squad() {
     return 0
 }
 
+# Нормализуем ввод API панели: убираем http(s):// и добавляем порт 3000 при необходимости
+_remna_node_normalize_panel_api() {
+    local api="$1"
+    api=${api#http://}
+    api=${api#https://}
+    if [[ "$api" != *:* ]]; then
+        api="$api:3000"
+    fi
+    echo "$api"
+}
+
 # Простая проверка доступности API панели по адресу host:port
+# Здесь нас интересует именно Доступность, а не бизнес-логика кода ответа.
 _remna_node_check_panel_api() {
-    local panel_api="$1"   # host:port
+    local panel_api_raw="$1"   # может быть с http(s)://
+    local panel_api
+    panel_api=$(_remna_node_normalize_panel_api "$panel_api_raw")
     local url="http://$panel_api/api/auth/status"
 
     info "Проверяю доступность API панели по адресу $url..."
     local http_code
     http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 "$url" 2>/dev/null || echo "000")
 
-    # При нормальной работе ждём 200 (OK) или 401 (нет токена)
-    if [[ "$http_code" != "200" && "$http_code" != "401" ]]; then
-        err "Панель по адресу $panel_api не отвечает на /api/auth/status (HTTP $http_code). Проверь домен/IP, порт и файрвол."
+    if [[ "$http_code" == "000" ]]; then
+        err "Не смог подключиться к панели по адресу $panel_api_raw (curl вернул HTTP 000). Проверь DNS/IP, порт и файрвол."
         return 1
     fi
 
+    info "API панели отвечает (HTTP $http_code) — двигаемся дальше."
+    echo "$panel_api"
     return 0
 }
 
@@ -852,10 +867,9 @@ _remna_node_install_local_wizard() {
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME
     PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return 130
-    if ! _remna_node_check_panel_api "$PANEL_API"; then
-        wait_for_enter
-        return 1
-    fi
+    local normalized
+    normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return 1; }
+    PANEL_API="$normalized"
     PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return 130
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return 130
     NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return 130
@@ -961,10 +975,9 @@ _remna_node_install_skynet_one() {
 
     local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME NODE_PORT CERT_MODE
     PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000") || return
-    if ! _remna_node_check_panel_api "$PANEL_API"; then
-        wait_for_enter
-        return
-    fi
+    local normalized
+    normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return; }
+    PANEL_API="$normalized"
     PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return
     if ! _remna_node_check_domain_dns "$SELFSTEAL_DOMAIN"; then
@@ -1089,10 +1102,9 @@ _remna_node_install_skynet_many() {
 
     local PANEL_API PANEL_API_TOKEN NODE_PORT CERT_MODE
     PANEL_API=$(safe_read "API панели (host:port, по умолчанию 127.0.0.1:3000): " "127.0.0.1:3000")
-    if ! _remna_node_check_panel_api "$PANEL_API"; then
-        wait_for_enter
-        return
-    fi
+    local normalized
+    normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return; }
+    PANEL_API="$normalized"
     PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
     NODE_PORT=$(safe_read "Порт нод (по умолчанию 2222, общий для всех): " "2222")
 
