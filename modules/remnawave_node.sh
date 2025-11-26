@@ -837,6 +837,32 @@ _remna_node_check_panel_api() {
     return 0
 }
 
+# Проверка, что API + токен реально работают (используем internal-squads как простую пробу)
+_remna_node_check_panel_api_with_token() {
+    local panel_api="$1"   # уже host:port
+    local token="$2"
+
+    info "Проверяю токен панели через /api/internal-squads..."
+    local resp
+    resp=$(_remna_node_api_request "GET" "http://$panel_api/api/internal-squads" "$token") || true
+
+    if [[ -z "$resp" ]]; then
+        err "Панель вернула пустой ответ на /api/internal-squads. Скорее всего, токен или API введены неверно."
+        return 1
+    fi
+
+    local any
+    any=$(echo "$resp" | jq -r '.response.internalSquads[0].uuid // empty' 2>/dev/null || true)
+    if [[ -z "$any" || "$any" == "null" ]]; then
+        err "Не удалось получить список internal-squads. Проверь, что токен имеет роль API и введён правильно."
+        log "node token check response: $resp"
+        return 1
+    fi
+
+    ok "Токен панели принят, API отвечает корректно."
+    return 0
+}
+
 # Быстрая DNS‑проверка selfsteal‑домена (используется в Skynet‑сценариях)
 _remna_node_check_domain_dns() {
     local domain="$1"
@@ -871,6 +897,10 @@ _remna_node_install_local_wizard() {
     normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return 1; }
     PANEL_API="$normalized"
     PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return 130
+    if ! _remna_node_check_panel_api_with_token "$PANEL_API" "$PANEL_API_TOKEN"; then
+        wait_for_enter
+        return 1
+    fi
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return 130
     NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || return 130
 
@@ -979,6 +1009,10 @@ _remna_node_install_skynet_one() {
     normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return; }
     PANEL_API="$normalized"
     PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || return
+    if ! _remna_node_check_panel_api_with_token "$PANEL_API" "$PANEL_API_TOKEN"; then
+        wait_for_enter
+        return
+    fi
     SELFSTEAL_DOMAIN=$(ask_non_empty "Selfsteal домен ноды (node.example.com): " "") || return
     if ! _remna_node_check_domain_dns "$SELFSTEAL_DOMAIN"; then
         wait_for_enter
@@ -1106,6 +1140,15 @@ _remna_node_install_skynet_many() {
     normalized=$(_remna_node_check_panel_api "$PANEL_API") || { wait_for_enter; return; }
     PANEL_API="$normalized"
     PANEL_API_TOKEN=$(safe_read "API токен панели (создай в разделе API Tokens): " "")
+    if [[ -z "$PANEL_API_TOKEN" ]]; then
+        err "Нужен API токен панели, без него я не могу создавать ноды через HTTP API."
+        wait_for_enter
+        return
+    fi
+    if ! _remna_node_check_panel_api_with_token "$PANEL_API" "$PANEL_API_TOKEN"; then
+        wait_for_enter
+        return
+    fi
     NODE_PORT=$(safe_read "Порт нод (по умолчанию 2222, общий для всех): " "2222")
 
     info "TLS на удалённых нодах = HTTPS-сертификаты для их selfsteal-доменов, шифруют трафик и выглядят как обычные https-сайты."
