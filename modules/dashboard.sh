@@ -11,10 +11,11 @@
 # ============================================================ #
 #          БЛОК СБОРА ИНФОРМАЦИИ О СИСТЕМЕ И ЖЕЛЕЗЕ           #
 # ============================================================ #
-# ... (весь блок _get_os_ver, _get_kernel и т.д. из предыдущего ответа)
-# ЭТА ЧАСТЬ НЕ МЕНЯЕТСЯ, ПРОСТО СКОПИРУЙ ЕЁ СЮДА КАК БЫЛА
+# Здесь собраны все функции, которые выдёргивают сырые данные
+# о системе и железе для дашборда. Не трогаем поведение без
+# серьёзной причины: на них завязаны почти все экраны.
 
-_get_os_ver() { grep -oP 'PRETTY_NAME="\K[^"]+' /etc/os-release 2>/dev/null || echo "Linux"; }
+_get_os_ver() { grep -oP 'PRETTY_NAME="\K[^\"]+' /etc/os-release 2>/dev/null || echo "Linux"; }
 _get_kernel() { uname -r | cut -d'-' -f1; }
 _get_uptime() { uptime -p | sed 's/up //;s/ hours\?,/ч/;s/ minutes\?/мин/;s/ days\?,/д/;s/ weeks\?,/нед/'; }
 _get_virt_type() {
@@ -70,7 +71,28 @@ _draw_bar() {
 }
 
 _get_cpu_load_visual() {
-    # Более честная оценка загрузки CPU через /proc/stat, работает и в режиме агента
+    # Для локального запуска считаем по /proc/stat, для SKYNET-агента — по loadavg, чтобы не мешать панели.
+    local cores; cores=$(nproc 2>/dev/null || echo 1)
+
+    # В режиме SKYNET_MODE=1 (агент на удалённом сервере) берём 1-минутный loadavg
+    # и приводим его к процентам относительно числа vCore.
+    if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
+        local load1
+        load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)
+        local perc
+        perc=$(awk -v l="$load1" -v c="$cores" 'BEGIN {
+            if (c <= 0) c = 1;
+            p = (l / c) * 100;
+            if (p < 0) p = 0;
+            if (p > 100) p = 100;
+            printf "%.0f", p;
+        }')
+        local bar; bar=$(_draw_bar "$perc")
+        echo "$bar (${perc}% / ${cores} vCore)"
+        return
+    fi
+
+    # Локальный режим: более честная оценка загрузки CPU через /proc/stat
     local cpu_line1 cpu_line2
     cpu_line1=$(grep '^cpu ' /proc/stat 2>/dev/null)
     sleep 0.2
@@ -106,7 +128,6 @@ _get_cpu_load_visual() {
     if [[ "$perc" -lt 0 ]]; then perc=0; fi
     if [[ "$perc" -gt 100 ]]; then perc=100; fi
 
-    local cores; cores=$(nproc 2>/dev/null || echo 1)
     local bar; bar=$(_draw_bar "$perc")
     echo "$bar (${perc}% / ${cores} vCore)"
 }

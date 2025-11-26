@@ -81,9 +81,14 @@ These flows are the primary way to verify that installation, update, and uninsta
   - Skynet defaults:
     - `SKYNET_MASTER_KEY_NAME`, `SKYNET_UNIQUE_KEY_PREFIX` – naming conventions for SSH keys.
     - `SKYNET_DEFAULT_USER`, `SKYNET_DEFAULT_PORT` – defaults used when adding new servers to the fleet.
+    - `SKYNET_AUTO_SSH_SCAN` – controls whether Skynet auto-probes SSH status for all fleet hosts (`on`/`off`).
+  - Dashboard and widgets:
+    - `DASHBOARD_LABEL_WIDTH` – **minimum** label width for the dashboard; the actual width is auto-detected from real labels.
+    - `DASHBOARD_CACHE_TTL` – base TTL for core metrics cache; multiplied by `DASHBOARD_LOAD_PROFILE` factor.
+    - `DASHBOARD_WIDGET_CACHE_TTL` – base TTL for widget cache; also scaled by the load profile.
+    - `DASHBOARD_LOAD_PROFILE` – `normal` / `light` / `ultra_light`, controls how aggressively the dashboard recomputes data.
   - Misc feature knobs:
     - `SPEEDTEST_DEFAULT_SERVER_ID` – default Ookla server for the Moscow speed test.
-    - `DASHBOARD_LABEL_WIDTH` – layout control for the dashboard labels.
 - New persistent settings should be wired through this config and manipulated via `set_config_var` / `get_config_var` (from `modules/common.sh`) instead of hard‑coding them inside modules.
 
 ### Shared utilities (`modules/common.sh`)
@@ -100,6 +105,8 @@ These flows are the primary way to verify that installation, update, and uninsta
 - User input and config helpers:
   - `safe_read` wraps `read -e` with default values.
   - `wait_for_enter` standardizes "press Enter to continue" prompts.
+  - `ask_yes_no`, `ask_non_empty`, `ask_number_in_range` implement unified "anti-fool" input validation for yes/no, required strings and numeric ranges.
+  - `enable_graceful_ctrlc` / `disable_graceful_ctrlc` provide a standard way to trap `CTRL+C` in menus and return back instead of killing the whole script.
   - `ensure_package` installs missing CLI tools via `apt-get` or `yum` when possible.
   - `set_config_var` / `get_config_var` provide a simple key/value store on top of `config/reshala.conf` and are used by higher‑level modules (e.g., widget management).
 
@@ -188,12 +195,16 @@ Each feature module lives under `modules/` and is intended to be sourced and inv
 This repo is designed to be extended primarily through plugins rather than modifying core modules for every small feature.
 
 - Dashboard widgets (`plugins/dashboard_widgets/*.sh`):
-  - Each executable script is expected to print one or more lines in the form `Label : Value`.
-  - `modules/dashboard.sh` reads and renders these under the `WIDGETS` section when the widget’s filename is present in `ENABLED_WIDGETS`.
-  - Example: `plugins/dashboard_widgets/01_crypto_price.sh` fetches the BTC price from the CoinGecko API and outputs `BTC Price : $XXXX`.
+  - Each executable script is expected to print one or more lines in the form `Label: Value` (spacing around `:` is not important; manual alignment is not needed).
+  - `modules/dashboard.sh` reads and renders these under the `WIDGETS` section when the widget’s filename is present in `ENABLED_WIDGETS`, auto-aligning labels to a common width.
+  - Widgets share the same cache and load profile mechanism as the core dashboard (see `DASHBOARD_CACHE_TTL`, `DASHBOARD_WIDGET_CACHE_TTL`, `DASHBOARD_LOAD_PROFILE`).
+  - Example: `plugins/dashboard_widgets/01_crypto_price.sh` fetches the BTC price from the CoinGecko API and outputs something like `Курс BTC: $XXXX / ₽YYYY`.
 
 - Skynet commands (`plugins/skynet_commands/*.sh`):
   - Each executable script is copied to and run on every server in the fleet by `_run_fleet_command`.
+  - Optional metadata at the top of the file:
+    - `# TITLE: Человекочитаемое имя` – label shown in the Skynet "[c]" commands menu.
+    - `# SKYNET_HIDDEN: true` – marks a system plugin that should not appear in the menu (used for internal Remnawave node installers, called programmatically with env vars).
   - Example plugins include:
     - `01_get_uptime.sh` – prints `uptime -p` on each server.
     - `02_update_system.sh` – runs `apt-get update && apt-get upgrade -y` on Debian‑based servers.
@@ -213,45 +224,45 @@ This section is a running log for AI agents (e.g., WARP assistants) so they imme
 
 ### Recent work on dashboard & widgets (late 2025)
 
-**Goal:** make the main dashboard fast, informative, and extensible via widgets, without hanging the UI.
+**Goal:** make the main dashboard fast, informative, and extensible via widgets, without hanging the UI, and allow tuning load for tiny VPS and big hosts.
 
 - Dashboard core (`modules/dashboard.sh`):
-  - Uses a small TTL-based cache for heavy system metrics (`DASHBOARD_CACHE_TTL`, default 3s) to avoid recomputing on every menu refresh.
-  - Introduced a dedicated widget cache directory `WIDGET_CACHE_DIR=/tmp/reshala_widgets_cache` with its own TTL (`DASHBOARD_WIDGET_CACHE_TTL`, configured in `config/reshala.conf`, currently 60s).
+  - Uses a TTL-based cache for heavy system metrics, with base TTL `DASHBOARD_CACHE_TTL` (default ~25s) and separate widget TTL `DASHBOARD_WIDGET_CACHE_TTL` (default ~60s).
+  - Introduced a dedicated widget cache directory `WIDGET_CACHE_DIR=/tmp/reshala_widgets_cache` with its own TTL; old cache files are refreshed in the background.
+  - Added `DASHBOARD_LOAD_PROFILE` (`normal` / `light` / `ultra_light`):
+    - The profile multiplies both TTLs (x1/x2/x4) so on LIGHT/ULTRA the dashboard recomputes data much less often.
   - Widget cache behaviour:
     - On render, dashboard **always** uses the latest cache file for each widget if it exists (so the UI never shows an empty line due to slow APIs).
-    - If a cache file is older than `DASHBOARD_WIDGET_CACHE_TTL`, a background job is spawned to rebuild it without blocking the UI.
-    - If a widget has no cache yet, the dashboard displays a placeholder like `"<TITLE> : загрузка..."` and kicks off background generation.
+    - If a cache file is older than the (profile-adjusted) widget TTL, a background job is spawned to rebuild it without blocking the UI.
+    - If a widget has no cache yet, the dashboard displays a placeholder like `"<TITLE>: загрузка..."` and kicks off background generation.
   - Widget output rendering:
     - Every line passes through normalization: strip `\r`, skip empty lines, split on the first `:`, trim whitespace.
-    - Labels are aligned using the same `label_width` logic as core dashboard rows, so `WIDGETS` visually matches `СИСТЕМА` / `ЖЕЛЕЗО` / `STATUS`.
+    - The **actual** label width is auto-detected from all enabled widgets (with `DASHBOARD_LABEL_WIDTH` as a floor), then the dashboard aligns everything to that width so `WIDGETS` visually matches `СИСТЕМА` / `ЖЕЛЕЗО` / `STATUS`.
 
 - Widget scripts (all under `plugins/dashboard_widgets/`):
   - **01_crypto_price.sh** – «Курс биткоина (BTC)»:
-    - Uses CoinGecko `simple/price` API with `curl` + `jq` and prints: `Курс BTC       : $<цена>`.
+    - Uses CoinGecko `simple/price` API with `curl` + `jq` and prints: `Курс BTC: $<цена_USD> / ₽<цена_RUB>`.
     - Robust to missing `curl`/`jq` or API failures (печатает человеко-понятную ошибку вместо падения).
   - **02_load_short.sh** – «Docker: мини-обзор»:
-    - Counts total/running/restarting/exited containers and prints: `Docker        : всего N, живых M, рестартится R, мёртвых E`.
-    - Старый вывод «Пульс сервера» полностью удалён из скрипта.
+    - Counts total/running/restarting/exited containers and prints: `Docker: всего N, живых M, рестартится R, мёртвых E`.
   - **03_online_users.sh** – «Сетевой движ (TCP)»:
     - Counts active TCP connections in ESTABLISHED state using `ss` or `netstat`.
-    - Prints: `TCP-сессии    : <N> активных`.
+    - Prints: `TCP-сессии: <N> активных`.
   - **04_root_disk.sh** – «Настроение сервера»:
     - Mixes uptime and relative CPU load per core to produce a human description ("новенький", "пинает балду", "пыхтит изо всех сил", etc.).
-    - Prints a single line: `Настроение     : <text> (аптайм: ..., load: .../cores)`.
+    - Prints a single line: `Настроение сервера: <text> (аптайм: ..., load: .../cores)`.
 
 - Widget manager (`modules/widget_manager.sh`):
-  - Now also documents its purpose at the top of the file.
   - Uses the shared `menu_header` helper (see below) to render a consistent header.
   - Adds explanations at the top of the menu about what the widget manager does.
-  - New helper `_clear_widget_cache`:
+  - Helper `_clear_widget_cache`:
     - Implements safe cache cleanup: `rm -rf /tmp/reshala_widgets_cache/*` wrapped with messaging.
-  - New key `[c]` in the widget menu:
+  - Key `[c]` in the widget menu:
     - "🧹 Очистить кеш виджетов (обновить данные дашборда)".
     - Clears widget cache and informs the user that the dashboard will rebuild data on the next draw.
 
 **Status:**
-- Widget rendering, caching, and toggling are stable and non-blocking.
+- Widget rendering, caching, alignment and load profiles are stable and non-blocking.
 - If you see stale/malformed widget data, first check `/tmp/reshala_widgets_cache` and the corresponding `.sh` in `plugins/dashboard_widgets`.
 
 ### Recent work on Docker diagnostics module
@@ -327,8 +338,8 @@ This section is a running log for AI agents (e.g., WARP assistants) so they imme
   - When touching any menu code, prefer switching to `menu_header "..."` and adding 1–2 explanatory lines under it (what this menu does, any dangers).
 
 - Input handling:
-  - The main menu and most submenus rely on `read -r -p` or `safe_read`.
-  - If users report "нужно много раз нажимать q/цифры", confirm that they are in the intended menu loop (not inside an interactive child process) and that `read` calls are not being shadowed by background jobs or traps.
+  - New flows should use `safe_read`, `ask_yes_no`, `ask_non_empty`, `ask_number_in_range` and wrap menu loops with `enable_graceful_ctrlc` / `disable_graceful_ctrlc` so `CTRL+C` returns to the previous menu.
+  - Some older code still relies on raw `read -r -p`; when touching those areas, migrate them to the unified helpers.
 
 - Widgets:
   - All current widgets are intentionally lightweight, but adding more (e.g., top processes, firewall status, SSH bruteforce detector) should continue to respect the widget cache pattern and avoid heavy synchronous work.
@@ -485,7 +496,11 @@ These are core conventions and contracts for «Решала». When you change o
   - Long-running views (e.g., `tail -f`, `docker logs -f`, `docker compose logs -f`) must exit on `CTRL+C` and return cleanly to their parent menu.
 - **Input helpers:**
   - Use `safe_read` instead of raw `read` where you want default values and readline editing.
-  - For simple yes/no confirmations, plain `read -p` is acceptable but keep prompts short and clear.
+  - For confirmations and numeric choices, prefer the shared helpers:
+    - `ask_yes_no` for all yes/no questions.
+    - `ask_non_empty` for required strings (domains, tokens, names).
+    - `ask_number_in_range` for menu indices and numeric ranges.
+  - Wrap non-main menus with `enable_graceful_ctrlc` / `disable_graceful_ctrlc` so `CTRL+C` cancels input and returns back instead of killing the whole script.
 
 ### 5. Widgets and plugin contracts
 
@@ -508,6 +523,11 @@ These are core conventions and contracts for «Решала». When you change o
   - Do not change field order or separator (`|`) without a **clear migration path** and back-compat.
 - **Key management:**
   - `SKYNET_MASTER_KEY_NAME` and `SKYNET_UNIQUE_KEY_PREFIX` govern SSH key naming – do not change them lightly; existing fleets depend on these values.
+- **SSH auto-scan:**
+  - `SKYNET_AUTO_SSH_SCAN` controls whether `show_fleet_menu` auto-probes all hosts and shows ON/OFF status (`on` by default, can be switched to `off` for huge fleets/low-power panels).
+- **Hidden system plugins for Remnawave:**
+  - Internal Skynet plugins used for Remnawave node install are marked with `# SKYNET_HIDDEN: true` and are not shown in the `[c]` commands menu.
+  - These plugins are invoked programmatically from Remnawave modules and receive a **narrow set** of env-vars: `SELFSTEAL_DOMAIN`, `NODE_PORT`, `NODE_SECRET_KEY`, `CERT_MODE` (all strictly for panel/node interaction).
 - **Remote agent:**
   - Skynet relies on being able to deploy and run the same `reshala.sh` on remote servers via `SCRIPT_URL_RAW`.
   - If you change the install/update protocol, update both local and remote sides (the bootstrap `install.sh`, `self_update.sh`, and the Skynet deployment logic) in sync.

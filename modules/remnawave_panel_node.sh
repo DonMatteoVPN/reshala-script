@@ -1139,7 +1139,10 @@ show_remnawave_panel_node_menu() {
                 ;;
             3)
                 # Все сценарии нод (этот сервер / один удалённый / несколько удалённых)
-                run_module remnawave_node show_remnawave_node_menu
+                if ! run_module remnawave_node show_remnawave_node_menu; then
+                    err "Модуль нод Remnawave сейчас не отработал. Обнови Решалу или проверь, что файл modules/remnawave_node.sh на месте."
+                    wait_for_enter || true
+                fi
                 ;;
             [bB])
                 break
