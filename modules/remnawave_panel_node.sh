@@ -9,6 +9,31 @@
 #
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1 # Защита от прямого запуска
 
+# Подключаем общий модуль работы с доменами и сертификатами Remnawave
+# (remna_extract_domain, remna_check_domain, remna_handle_certificates и др.).
+if [ -f "${SCRIPT_DIR}/modules/remnawave_certs.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_certs.sh"
+fi
+
+# Отдельный модуль с шаблонами .env для разных сценариев Remnawave
+if [ -f "${SCRIPT_DIR}/modules/remnawave_env.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_env.sh"
+fi
+
+# Шаблоны docker-compose стека для различных режимов
+if [ -f "${SCRIPT_DIR}/modules/remnawave_docker.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_docker.sh"
+fi
+
+# Шаблоны nginx-конфигов для разных сценариев Remnawave
+if [ -f "${SCRIPT_DIR}/modules/remnawave_nginx.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_nginx.sh"
+fi
+
 # === ВНУТРЕННИЕ ХЕЛПЕРЫ (будут дополняться) ==================
 
 # --- генерация служебных значений -----------------------------
@@ -43,110 +68,8 @@ _remna_prepare_dir() {
     return 0
 }
 
-# Проверка, что домен резолвится и указывает на этот сервер (по мотивам donor check_domain)
-_remna_check_domain() {
-    local domain="$1"
-    local show_warning="${2:-true}"
-    local allow_cf_proxy="${3:-true}"
-
-    local domain_ip=""
-    local server_ip=""
-
-    if command -v dig >/dev/null 2>&1; then
-        domain_ip=$(dig +short A "$domain" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
-    else
-        domain_ip=$(getent ahostsv4 "$domain" 2>/dev/null | awk 'NR==1 {print $1}')
-    fi
-
-    server_ip=$(curl -s -4 ifconfig.me || curl -s -4 api.ipify.org || curl -s -4 ipinfo.io/ip)
-
-    # 0  - всё ок
-    # 1  - есть проблема, но пользователь согласился продолжить
-    # 2  - пользователь решил прервать установку
-
-    if [[ -z "$domain_ip" || -z "$server_ip" ]]; then
-        if [[ "$show_warning" == true ]]; then
-            warn "Не смог определить IP домена '$domain' или IP этого сервера."
-            info "Проверь DNS: домен должен указывать на текущий сервер. Сейчас сервер видится как: ${server_ip:-\"не удалось определить\"}."
-            local confirm
-            confirm=$(safe_read "Продолжить установку, игнорируя эту проверку? (y/N): " "n")
-            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-                return 2
-            fi
-        fi
-        return 1
-    fi
-
-    local cf_ranges
-    local -a cf_array=()
-    cf_ranges=$(curl -s https://www.cloudflare.com/ips-v4 || true)
-    if [[ -n "$cf_ranges" ]]; then
-        mapfile -t cf_array <<<"$cf_ranges"
-    fi
-
-    local ip_in_cloudflare=false
-    local a b c d
-    local domain_ip_int
-    local IFS='.'
-    read -r a b c d <<<"$domain_ip"
-    domain_ip_int=$(( (a << 24) + (b << 16) + (c << 8) + d ))
-
-    if (( ${#cf_array[@]} > 0 )); then
-        local cidr network mask network_int mask_bits range_size min_ip_int max_ip_int
-        for cidr in "${cf_array[@]}"; do
-            [[ -z "$cidr" ]] && continue
-            network=${cidr%/*}
-            mask=${cidr#*/}
-            IFS='.' read -r a b c d <<<"$network"
-            network_int=$(( (a << 24) + (b << 16) + (c << 8) + d ))
-            mask_bits=$(( 32 - mask ))
-            range_size=$(( 1 << mask_bits ))
-            min_ip_int=$network_int
-            max_ip_int=$(( network_int + range_size - 1 ))
-
-            if (( domain_ip_int >= min_ip_int && domain_ip_int <= max_ip_int )); then
-                ip_in_cloudflare=true
-                break
-            fi
-        done
-    fi
-
-    if [[ "$domain_ip" == "$server_ip" ]]; then
-        return 0
-    elif [[ "$ip_in_cloudflare" == true ]]; then
-        if [[ "$allow_cf_proxy" == true ]]; then
-            return 0
-        fi
-
-        if [[ "$show_warning" == true ]]; then
-            warn "Домен '$domain' сейчас указывает на IP Cloudflare ($domain_ip), для selfsteal-домена так нельзя."
-            info "Выключи оранжевое облако (режим 'DNS only') для этого домена в Cloudflare, подожди обновление DNS и запусти установку ещё раз."
-            local confirm
-            confirm=$(safe_read "Всё равно продолжить установку? (y/N): " "n")
-            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-                return 1
-            else
-                return 2
-            fi
-        fi
-        return 1
-    else
-        if [[ "$show_warning" == true ]]; then
-            warn "Домен '$domain' указывает на IP $domain_ip, а текущий сервер видится как $server_ip."
-            info "Для нормальной работы Remnawave домен должен указывать именно на этот сервер."
-            local confirm
-            confirm=$(safe_read "Продолжить установку, игнорируя несовпадение IP? (y/N): " "n")
-            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-                return 1
-            else
-                return 2
-            fi
-        fi
-        return 1
-    fi
-
-    return 0
-}
+# Проверки доменов теперь живут в общем модуле remnawave_certs.sh
+# (remna_check_domain). Здесь отдельная обёртка не нужна.
 
 # --- HTTP API хелперы ----------------------------------------
 
@@ -168,7 +91,7 @@ _remna_api_request() {
     local token="${3:-}"
     local data="${4:-}"
 
-    # Имитация запроса через reverse‑proxy c HTTPS как в donor/make_api_request
+    # Имитация запроса через reverse‑proxy c HTTPS (как делает фронтовой nginx)
     local forwarded_for="$url"
     forwarded_for="${forwarded_for#http://}"
     forwarded_for="${forwarded_for#https://}"
@@ -501,6 +424,7 @@ _remna_write_env_and_compose() {
 
     local superadmin_username="$4"
     local superadmin_password="$5"
+    local stack_mode="${6:-cookie}"   # cookie | plain (по умолчанию cookie)
 
     local cookies_random1 cookies_random2 metrics_user metrics_pass
     cookies_random1=$(_remna_generate_user)
@@ -512,272 +436,24 @@ _remna_write_env_and_compose() {
     jwt_auth=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
     jwt_api=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
 
-    cat > /opt/remnawave/.env <<EOL
-### APP ###
-APP_PORT=3000
-METRICS_PORT=3001
+    # Полноценный .env собираем через отдельный модуль окружения
+    remna_env_write_panel_node \
+        "/opt/remnawave" \
+        "$panel_domain" \
+        "$sub_domain" \
+        "$selfsteal_domain" \
+        "$metrics_user" \
+        "$metrics_pass" \
+        "$jwt_auth" \
+        "$jwt_api" || return 1
 
-### API ###
-API_INSTANCES=1
+    # docker-compose.yml полностью формируем через модуль стека
+    remna_docker_write_panel_node "/opt/remnawave" || return 1
 
-### DATABASE ###
-DATABASE_URL="postgresql://postgres:postgres@remnawave-db:5432/postgres"
+    # nginx-конфиг (HTTP-вариант без TLS) формируем через отдельный модуль nginx
+    remna_nginx_write_panel_node_http "/opt/remnawave" "$panel_domain" "$sub_domain" "$selfsteal_domain" || return 1
 
-### REDIS ###
-REDIS_HOST=remnawave-redis
-REDIS_PORT=6379
-
-### JWT ###
-JWT_AUTH_SECRET=$jwt_auth
-JWT_API_TOKENS_SECRET=$jwt_api
-JWT_AUTH_LIFETIME=168
-
-### TELEGRAM NOTIFICATIONS ###
-IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
-TELEGRAM_BOT_TOKEN=change_me
-TELEGRAM_NOTIFY_USERS_CHAT_ID=change_me
-TELEGRAM_NOTIFY_NODES_CHAT_ID=change_me
-TELEGRAM_NOTIFY_CRM_CHAT_ID=change_me
-
-### FRONT_END ###
-FRONT_END_DOMAIN=$panel_domain
-
-### SUBSCRIPTION PUBLIC DOMAIN ###
-SUB_PUBLIC_DOMAIN=$sub_domain
-
-### SWAGGER ###
-SWAGGER_PATH=/docs
-SCALAR_PATH=/scalar
-IS_DOCS_ENABLED=false
-
-### PROMETHEUS ###
-METRICS_USER=$metrics_user
-METRICS_PASS=$metrics_pass
-
-### WEBHOOK ###
-WEBHOOK_ENABLED=false
-WEBHOOK_URL=https://webhook.site/placeholder
-WEBHOOK_SECRET_HEADER=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
-
-### HWID DEVICE DETECTION AND LIMITATION ###
-HWID_DEVICE_LIMIT_ENABLED=false
-HWID_FALLBACK_DEVICE_LIMIT=5
-HWID_MAX_DEVICES_ANNOUNCE="You have reached the maximum number of devices for your subscription."
-
-### Bandwidth usage reached notifications
-BANDWIDTH_USAGE_NOTIFICATIONS_ENABLED=false
-BANDWIDTH_USAGE_NOTIFICATIONS_THRESHOLD=[60, 80]
-
-### Database (для локального postgres-контейнера) ###
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_DB=postgres
-EOL
-
-    cat > /opt/remnawave/docker-compose.yml <<EOL
-services:
-  remnawave-db:
-    image: postgres:18
-    container_name: 'remnawave-db'
-    hostname: remnawave-db
-    restart: always
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_USER=\${POSTGRES_USER}
-      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
-      - POSTGRES_DB=\${POSTGRES_DB}
-      - TZ=UTC
-    ports:
-      - '127.0.0.1:6767:5432'
-    volumes:
-      - remnawave-db-data:/var/lib/postgresql
-    networks:
-      - remnawave-network
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}']
-      interval: 3s
-      timeout: 10s
-      retries: 3
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-
-  remnawave:
-    image: remnawave/backend:2
-    container_name: remnawave
-    hostname: remnawave
-    restart: always
-    env_file:
-      - .env
-    ports:
-      - '127.0.0.1:3000:3000'
-    networks:
-      - remnawave-network
-    healthcheck:
-      test: ['CMD-SHELL', 'curl -f http://localhost:\${METRICS_PORT:-3001}/health']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      remnawave-db:
-        condition: service_healthy
-      remnawave-redis:
-        condition: service_healthy
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-
-  remnawave-redis:
-    image: valkey/valkey:8.1.4-alpine
-    container_name: remnawave-redis
-    hostname: remnawave-redis
-    restart: always
-    networks:
-      - remnawave-network
-    volumes:
-      - remnawave-redis-data:/data
-    healthcheck:
-      test: ['CMD', 'valkey-cli', 'ping']
-      interval: 3s
-      timeout: 10s
-      retries: 3
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-
-  remnawave-nginx:
-    image: nginx:1.28
-    container_name: remnawave-nginx
-    hostname: remnawave-nginx
-    network_mode: host
-    restart: always
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - /var/www/html:/var/www/html:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-
-  remnawave-subscription-page:
-    image: remnawave/subscription-page:latest
-    container_name: remnawave-subscription-page
-    hostname: remnawave-subscription-page
-    restart: always
-    environment:
-      - REMNAWAVE_PANEL_URL=http://remnawave:3000
-      - APP_PORT=3010
-      - META_TITLE=Remnawave Subscription
-      - META_DESCRIPTION=page
-    ports:
-      - '127.0.0.1:3010:3010'
-    networks:
-      - remnawave-network
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-
-  remnanode:
-    image: remnawave/node:latest
-    container_name: remnanode
-    hostname: remnanode
-    restart: always
-    network_mode: host
-    environment:
-      - NODE_PORT=2222
-      # SECRET_KEY будет подставлен позже через API Remnawave
-    volumes:
-      - /dev/shm:/dev/shm:rw
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-
-networks:
-  remnawave-network:
-    name: remnawave-network
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.30.0.0/16
-    external: false
-
-volumes:
-  remnawave-db-data:
-    driver: local
-    external: false
-    name: remnawave-db-data
-  remnawave-redis-data:
-    driver: local
-    external: false
-    name: remnawave-redis-data
-EOL
-
-    # nginx-конфиг — пока БЕЗ TLS, только HTTP (TLS повесим позже/через Cloudflare)
-    cat > /opt/remnawave/nginx.conf <<EOL
-upstream remnawave {
-    server 127.0.0.1:3000;
-}
-
-upstream json {
-    server 127.0.0.1:3010;
-}
-
-server {
-    listen 80;
-    server_name $panel_domain;
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_pass http://remnawave;
-        proxy_set_header Host \$host;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Port \$server_port;
-    }
-}
-
-server {
-    listen 80;
-    server_name $sub_domain;
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_pass http://json;
-        proxy_set_header Host \$host;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Port \$server_port;
-    }
-}
-
-server {
-    listen 80;
-    server_name $selfsteal_domain;
-
-    root /var/www/html;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
-}
-EOL
-
-    # Сохраняем пару cookie-рандомов и креды админа в отдельный файлик-подсказку
+    # Сохраняем пару cookie-рандомов, режим стека и креды админа в отдельный файлик-подсказку
     cat > /opt/remnawave/INSTALL_INFO <<EOL
 PANEL_DOMAIN=$panel_domain
 SUB_DOMAIN=$sub_domain
@@ -786,6 +462,7 @@ SUPERADMIN_USERNAME=$superadmin_username
 SUPERADMIN_PASSWORD=$superadmin_password
 COOKIES_RANDOM1=$cookies_random1
 COOKIES_RANDOM2=$cookies_random2
+STACK_MODE=$stack_mode
 EOL
 }
 
@@ -798,15 +475,115 @@ _remna_panel_node_write_nginx_tls() {
     local sub_domain="$2"
     local selfsteal_domain="$3"
 
-    cat > /opt/remnawave/nginx.conf <<EOL
-upstream remnawave {
-    server 127.0.0.1:3000;
-}
+    # Определяем, из какого каталога брать сертификаты:
+    #  - если есть /etc/letsencrypt/live/<домена> — используем его;
+    #  - иначе пробуем базовый домен (поддержка wildcard *.base_domain).
+    local panel_cert_domain="$panel_domain"
+    local sub_cert_domain="$sub_domain"
+
+    if [[ ! -f "/etc/letsencrypt/live/$panel_domain/fullchain.pem" ]]; then
+        local base
+        base=$(remna_extract_domain "$panel_domain")
+        if [[ -n "$base" && -f "/etc/letsencrypt/live/$base/fullchain.pem" ]]; then
+            panel_cert_domain="$base"
+        fi
+    fi
+
+    if [[ ! -f "/etc/letsencrypt/live/$sub_domain/fullchain.pem" ]]; then
+        local base2
+        base2=$(remna_extract_domain "$sub_domain")
+        if [[ -n "$base2" && -f "/etc/letsencrypt/live/$base2/fullchain.pem" ]]; then
+            sub_cert_domain="$base2"
+        fi
+    fi
+
+    # Читаем cookie-рандомы из INSTALL_INFO, чтобы защита панели в nginx
+    # совпадала с выданной пользователю ссылкой входа.
+    local cookies_random1 cookies_random2
+    if [[ -f /opt/remnawave/INSTALL_INFO ]]; then
+        cookies_random1=$(grep '^COOKIES_RANDOM1=' /opt/remnawave/INSTALL_INFO | cut -d '=' -f2-)
+        cookies_random2=$(grep '^COOKIES_RANDOM2=' /opt/remnawave/INSTALL_INFO | cut -d '=' -f2-)
+    fi
+    if [[ -z "$cookies_random1" || -z "$cookies_random2" ]]; then
+        cookies_random1=$(_remna_generate_user)
+        cookies_random2=$(_remna_generate_user)
+        {
+            sed -i '/^COOKIES_RANDOM1=/d;/^COOKIES_RANDOM2=/d' /opt/remnawave/INSTALL_INFO 2>/dev/null || true
+            echo "COOKIES_RANDOM1=$cookies_random1" >> /opt/remnawave/INSTALL_INFO
+            echo "COOKIES_RANDOM2=$cookies_random2" >> /opt/remnawave/INSTALL_INFO
+        } || true
+    fi
+
+    # Определяем режим стека (cookie/plain) из INSTALL_INFO, по умолчанию cookie
+    local stack_mode="cookie"
+    if [[ -f /opt/remnawave/INSTALL_INFO ]]; then
+        local sm
+        sm=$(grep '^STACK_MODE=' /opt/remnawave/INSTALL_INFO | cut -d '=' -f2-)
+        if [[ "$sm" == "plain" || "$sm" == "cookie" ]]; then
+            stack_mode="$sm"
+        fi
+    fi
+
+    if [[ "$stack_mode" == "plain" ]]; then
+        remna_nginx_write_panel_node_tls_plain \
+            "/opt/remnawave" \
+            "$panel_domain" \
+            "$sub_domain" \
+            "$selfsteal_domain" \
+            "$panel_cert_domain" \
+            "$sub_cert_domain" || return 1
+    else
+        remna_nginx_write_panel_node_tls_cookie \
+            "/opt/remnawave" \
+            "$panel_domain" \
+            "$sub_domain" \
+            "$selfsteal_domain" \
+            "$panel_cert_domain" \
+            "$sub_cert_domain" \
+            "$cookies_random1" \
+            "$cookies_random2" || return 1
+    fi
 
 upstream json {
     server 127.0.0.1:3010;
 }
 
+# Управляем апгрейдом соединения (WebSocket и т.п.)
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    ""      close;
+}
+
+# Cookie-защита панели: вход только по спецссылке с "одноразовым ключом".
+map \$http_cookie \$auth_cookie {
+    default 0;
+    "~*${cookies_random1}=${cookies_random2}" 1;
+}
+
+map \$arg_${cookies_random1} \$auth_query {
+    default 0;
+    "${cookies_random2}" 1;
+}
+
+map "\$auth_cookie\$auth_query" \$authorized {
+    "~1" 1;
+    default 0;
+}
+
+map \$arg_${cookies_random1} \$set_cookie_header {
+    "${cookies_random2}" "${cookies_random1}=${cookies_random2}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000";
+    default "";
+}
+
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ecdh_curve X25519:prime256v1:secp384r1;
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
+ssl_prefer_server_ciphers on;
+ssl_session_timeout 1d;
+ssl_session_cache shared:MozSSL:10m;
+ssl_session_tickets off;
+
+# Перенаправляем HTTP-запросы панели и страницы подписки на HTTPS
 server {
     listen 80;
     server_name $panel_domain;
@@ -821,6 +598,7 @@ server {
     return 301 https://$sub_domain\$request_uri;
 }
 
+# Selfsteal-домен остаётся HTTP: маскировочный сайт
 server {
     listen 80;
     server_name $selfsteal_domain;
@@ -831,15 +609,21 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
     server_name $panel_domain;
+    listen 443 ssl http2;
 
-    ssl_certificate     /etc/letsencrypt/live/$panel_domain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$panel_domain/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
+    ssl_certificate "/etc/letsencrypt/live/$panel_cert_domain/fullchain.pem";
+    ssl_certificate_key "/etc/letsencrypt/live/$panel_cert_domain/privkey.pem";
+    ssl_trusted_certificate "/etc/letsencrypt/live/$panel_cert_domain/fullchain.pem";
+
+    add_header Set-Cookie \$set_cookie_header;
 
     location / {
+        error_page 418 = @unauthorized;
+        recursive_error_pages on;
+        if (\$authorized = 0) {
+            return 418;
+        }
         proxy_http_version 1.1;
         proxy_pass http://remnawave;
         proxy_set_header Host \$host;
@@ -850,17 +634,23 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port \$server_port;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    location @unauthorized {
+        root /var/www/html;
+        index index.html;
     }
 }
 
 server {
-    listen 443 ssl http2;
     server_name $sub_domain;
+    listen 443 ssl http2;
 
-    ssl_certificate     /etc/letsencrypt/live/$panel_domain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$panel_domain/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
+    ssl_certificate "/etc/letsencrypt/live/$sub_cert_domain/fullchain.pem";
+    ssl_certificate_key "/etc/letsencrypt/live/$sub_cert_domain/privkey.pem";
+    ssl_trusted_certificate "/etc/letsencrypt/live/$sub_cert_domain/fullchain.pem";
 
     location / {
         proxy_http_version 1.1;
@@ -873,81 +663,30 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port \$server_port;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_intercept_errors on;
+        error_page 400 404 500 502 @redirect;
     }
+
+    location @redirect {
+        return 404;
+    }
+}
+
+# Защита по умолчанию для прочих хостов: TLS-рукопожатие сразу режем
+server {
+    listen 443 ssl http2 default_server;
+    server_name _;
+    ssl_reject_handshake on;
 }
 EOL
 }
 
-# renew_hook + cron для автопродления сертификата панели/подписки
-_remna_panel_node_setup_tls_renew() {
-    local panel_domain="$1"
-    local renewal_conf="/etc/letsencrypt/renewal/$panel_domain.conf"
-
-    if [[ ! -f "$renewal_conf" ]]; then
-        warn "Не нашёл $renewal_conf — не на что вешать renew_hook для панели. Пропускаю авто-настройку."
-        return 1
-    fi
-
-    local hook
-    hook="renew_hook = sh -c 'cd /opt/remnawave && docker compose down remnawave-nginx && docker compose up -d remnawave-nginx'"
-
-    if grep -q '^renew_hook' "$renewal_conf"; then
-        run_cmd sed -i "s|^renew_hook.*|$hook|" "$renewal_conf" || return 1
-    else
-        echo "$hook" | run_cmd tee -a "$renewal_conf" >/dev/null || return 1
-    fi
-
-    ok "renew_hook для панели прописан в $renewal_conf."
-
-    # Простейший cron на certbot renew раз в день в 05:00, если ещё нет никакого
-    if ! crontab -u root -l 2>/dev/null | grep -q '/usr/bin/certbot renew'; then
-        info "Вешаю cron-задачу на certbot renew для сертификатов панели."
-        local current
-        current=$(crontab -u root -l 2>/dev/null || true)
-        printf '%s\n%s\n' "$current" "0 5 * * * /usr/bin/certbot renew --quiet" | run_cmd crontab -u root - || {
-            warn "Не получилось прописать cron для certbot renew. Проверь crontab вручную."
-        }
-    else
-        info "cron с certbot renew уже есть — не трогаю его."
-    fi
-
-    return 0
-}
-
-# Основной ACME-флоу для панели+подписки
-_remna_panel_node_setup_tls_acme() {
-    local panel_domain="$1"
-    local sub_domain="$2"
-    local selfsteal_domain="$3"  # пока только для nginx-конфига (HTTP-маскировка)
-
-    info "Сейчас можем включить HTTPS (TLS) для панели и страницы подписки."
-    info "TLS = тот самый 'https://' и замочек в браузере: шифрует трафик и убирает красные предупреждения."
-    info "Я выпишу бесплатные сертификаты Let's Encrypt для доменов: $panel_domain и $sub_domain."
-    echo
-
-    if ! command -v certbot >/dev/null 2>&1; then
-        info "Не вижу certbot, попробую аккуратно установить пакет..."
-        if ! ensure_package certbot; then
-            err "Не смог установить certbot. TLS для панели пока пропускаем."
-            return 1
-        fi
-    fi
-
-    local email
-    email=$(safe_read "Email для Let's Encrypt (уведомления о сертификатах, можно пустой): " "")
-
-    local -a certbot_args
-    certbot_args=(certbot certonly --standalone -d "$panel_domain" -d "$sub_domain" --agree-tos --non-interactive --http-01-port 80 --key-type ecdsa --elliptic-curve secp384r1)
-    if [[ -n "$email" ]]; then
-        certbot_args+=(--email "$email")
-    else
-        certbot_args+=(--register-unsafely-without-email)
-    fi
-
-    # Если есть ufw — временно откроем 80 порт под challenge
-    if command -v ufw >/dev/null 2>&1; then
-        run_cmd ufw allow 80/tcp comment 'reshala remnawave panel acme http-01' || true
-    fi
+# Старый ACME-флоу (_remna_panel_node_setup_tls_acme/_renew) больше не используется —
+# его заменила общая логика из remnawave_certs.sh (remna_handle_certificates +
+# remna_fix_letsencrypt_structure). Nginx мы переключаем на HTTPS через
+# _remna_panel_node_write_nginx_tls после успешной выдачи сертификатов.
 
     info "Останавливаю временно nginx-контейнер, чтобы освободить порт 80 для certbot..."
     if ( cd /opt/remnawave && run_cmd docker compose down remnawave-nginx ); then
@@ -1000,54 +739,70 @@ _remna_install_panel_and_node_wizard() {
     clear
     menu_header "Панель + Нода Remnawave на этот сервак"
     echo
-    echo "   Ща будем поднимать Remnawave панель и ноду на этот бокс."
-    echo "   С тебя — домены и логин админа, всё остальное я дожму сам."
+    echo "   Режим: поднимаем панель и ноду на один сервер с полной автоматизацией:"
+    echo "   1) собираем три домена (панель / подписка / selfsteal-нода);"
+    echo "   2) проверяем, что они смотрят на этот сервер и не конфликтуют;"
+    echo "   3) поднимаем Docker-стек панели+ноды;"
+    echo "   4) через API настраиваем суперадмина, конфиг, ноду и squad;"
+    echo "   5) по желанию сразу же выписываем сертификаты Let's Encrypt."
     echo
 
     local PANEL_DOMAIN SUB_DOMAIN SELFSTEAL_DOMAIN SUPERADMIN_USERNAME
 
-    PANEL_DOMAIN=$(safe_read "Домен панели (типа panel.example.com): " "")
-    SUB_DOMAIN=$(safe_read "Домен подписки (типа sub.example.com): " "")
-    SELFSTEAL_DOMAIN=$(safe_read "Selfsteal домен ноды (типа node.example.com): " "")
+    PANEL_DOMAIN=$(safe_read "Домен ПАНЕЛИ (например panel.example.com): " "")
+    SUB_DOMAIN=$(safe_read "Домен ПОДПИСКИ (например sub.example.com): " "")
+    SELFSTEAL_DOMAIN=$(safe_read "Selfsteal-домен НОДЫ (например node.example.com): " "")
     SUPERADMIN_USERNAME=$(safe_read "Логин суперадмина панели: " "boss")
 
     if [[ -z "$PANEL_DOMAIN" || -z "$SUB_DOMAIN" || -z "$SELFSTEAL_DOMAIN" ]]; then
-        err "Без доменов никуда. Заполни всё и приходи ещё раз."
+        err "Без всех трёх доменов (панель/подписка/selfsteal) установка невозможна."
+        disable_graceful_ctrlc
         return 1
     fi
 
     if [[ "$PANEL_DOMAIN" == "$SUB_DOMAIN" || "$PANEL_DOMAIN" == "$SELFSTEAL_DOMAIN" || "$SUB_DOMAIN" == "$SELFSTEAL_DOMAIN" ]]; then
-        err "Домены панели, подписки и ноды должны быть разными. Не мешай кашу." 
+        err "Домены панели, подписки и ноды должны быть РАЗНЫМИ."
+        disable_graceful_ctrlc
         return 1
     fi
 
-    info "Проверяю, что домены реально смотрят на этот сервер..."
+    info "Шаг 1/4. Проверяю, что домены реально смотрят на этот сервак..."
+    echo
+
     local rc
 
-    _remna_check_domain "$PANEL_DOMAIN" true true
+    info "Проверяю домен панели: $PANEL_DOMAIN"
+    remna_check_domain "$PANEL_DOMAIN" true true
     rc=$?
     if [[ $rc -eq 2 ]]; then
-        err "Установка прервана по твоему запросу на проверке домена панели."
+        err "Установка остановлена по твоему решению на проверке домена панели."
+        disable_graceful_ctrlc
         return 1
     fi
 
-    _remna_check_domain "$SUB_DOMAIN" true true
+    info "Проверяю домен подписки: $SUB_DOMAIN"
+    remna_check_domain "$SUB_DOMAIN" true true
     rc=$?
     if [[ $rc -eq 2 ]]; then
-        err "Установка прервана по твоему запросу на проверке домена подписки."
+        err "Установка остановлена по твоему решению на проверке домена подписки."
+        disable_graceful_ctrlc
         return 1
     fi
 
-    _remna_check_domain "$SELFSTEAL_DOMAIN" true false
+    info "Проверяю selfsteal-домен ноды: $SELFSTEAL_DOMAIN (Cloudflare-прокси здесь ЗАПРЕЩЁН)"
+    remna_check_domain "$SELFSTEAL_DOMAIN" true false
     rc=$?
     if [[ $rc -eq 2 ]]; then
-        err "Установка прервана по твоему запросу на проверке selfsteal-домена ноды."
+        err "Установка остановлена по твоему решению на проверке selfsteal-домена."
+        disable_graceful_ctrlc
         return 1
     fi
 
-    info "Готовлю рабочую директорию /opt/remnawave..."
+    echo
+    info "Шаг 2/4. Готовлю рабочую директорию /opt/remnawave и базовые файлы..."
     if ! _remna_prepare_dir; then
-        err "Не смог подготовить /opt/remnawave. Смотри логи."
+        err "Не смог подготовить /opt/remnawave. Смотри логи/права."
+        disable_graceful_ctrlc
         return 1
     fi
 
@@ -1056,21 +811,36 @@ _remna_install_panel_and_node_wizard() {
 
     log "Remnawave: установка панель+нода; panel=$PANEL_DOMAIN sub=$SUB_DOMAIN selfsteal=$SELFSTEAL_DOMAIN user=$SUPERADMIN_USERNAME"
 
+    echo
+    info "Как защитить вход в панель?"
+    echo "   [1] Секретная ссылка + куки-защита панели (рекомендуется)."
+    echo "   [2] Только логин/пароль без дополнительной куки-защиты."
+    local STACK_MODE
+    local sm_choice
+    sm_choice=$(safe_read "Твой выбор [1/2] (по умолчанию 1): " "1")
+    if [[ "$sm_choice" == "2" ]]; then
+        STACK_MODE="plain"
+    else
+        STACK_MODE="cookie"
+    fi
+
     info "Пишу .env, docker-compose.yml и nginx.conf под твои домены..."
-    _remna_write_env_and_compose "$PANEL_DOMAIN" "$SUB_DOMAIN" "$SELFSTEAL_DOMAIN" "$SUPERADMIN_USERNAME" "$SUPERADMIN_PASSWORD" || {
+    _remna_write_env_and_compose "$PANEL_DOMAIN" "$SUB_DOMAIN" "$SELFSTEAL_DOMAIN" "$SUPERADMIN_USERNAME" "$SUPERADMIN_PASSWORD" "$STACK_MODE" || {
         err "Не смог собрать файлы окружения Remnawave."
+        disable_graceful_ctrlc
         return 1
     }
 
-    info "Стартую Docker-композ Remnawave (это займет пару минут)..."
+    info "Шаг 3/4. Стартую Docker-стек Remnawave (панель, БД, Redis, nginx, страница подписки, нода)..."
     (
         cd /opt/remnawave && run_cmd docker compose up -d
     ) || {
-        err "docker compose up -d для Remnawave отработал с ошибкой. Смотри docker-логи."
+        err "docker compose up -d для Remnawave отработал с ошибкой. Проверь docker-логи контейнеров remnawave/*."
+        disable_graceful_ctrlc
         return 1
     }
 
-    info "Жду, пока панель поднимется и начнет отвечать по HTTP..."
+    info "Жду, пока панель поднимется и начнёт отвечать на /api/auth/status..."
     local domain_url="127.0.0.1:3000"
     local tries=30
     local ok_flag=0
@@ -1082,50 +852,84 @@ _remna_install_panel_and_node_wizard() {
         sleep 2
     done
     if (( ok_flag == 0 )); then
-        err "Панель так и не ответила на /api/auth/status."
+        err "Панель так и не ответила на /api/auth/status. Проверь docker compose ps и логи контейнера remnawave."
+        disable_graceful_ctrlc
         return 1
     fi
 
+    info "Шаг 4/4. Настраиваю панель через HTTP API."
+    echo
+
     info "Регистрирую суперадмина в панели..."
     local token
-    token=$(_remna_api_register_superadmin "$domain_url" "$SUPERADMIN_USERNAME" "$SUPERADMIN_PASSWORD") || return 1
+    token=$(_remna_api_register_superadmin "$domain_url" "$SUPERADMIN_USERNAME" "$SUPERADMIN_PASSWORD") || {
+        disable_graceful_ctrlc
+        return 1
+    }
 
     info "Генерю x25519-ключи для первого конфига..."
     local private_key
-    private_key=$(_remna_api_generate_x25519 "$domain_url" "$token") || return 1
+    private_key=$(_remna_api_generate_x25519 "$domain_url" "$token") || {
+        disable_graceful_ctrlc
+        return 1
+    }
 
-    info "Создаю базовый config-profile под selfsteal-домен ноды..."
+    info "Создаю базовый config-profile под selfsteal-домен ноды ($SELFSTEAL_DOMAIN)..."
     local cfg inbound
-    read -r cfg inbound < <(_remna_api_create_config_profile "$domain_url" "$token" "StealConfig" "$SELFSTEAL_DOMAIN" "$private_key") || return 1
+    if ! read -r cfg inbound < <(_remna_api_create_config_profile "$domain_url" "$token" "StealConfig" "$SELFSTEAL_DOMAIN" "$private_key"); then
+        disable_graceful_ctrlc
+        return 1
+    fi
 
     info "Регистрирую первую ноду и host в панели..."
-    _remna_api_create_node "$domain_url" "$token" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "StealNode" || return 1
-    _remna_api_create_host "$domain_url" "$token" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "StealHost" || return 1
+    _remna_api_create_node "$domain_url" "$token" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "StealNode" || {
+        disable_graceful_ctrlc
+        return 1
+    }
+    _remna_api_create_host "$domain_url" "$token" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "StealHost" || {
+        disable_graceful_ctrlc
+        return 1
+    }
 
     info "Прописываю inbound ноды в дефолтный squad..."
     local squad
-    squad=$(_remna_api_get_default_squad_uuid "$domain_url" "$token") || return 1
-    _remna_api_add_inbound_to_squad "$domain_url" "$token" "$squad" "$inbound" || return 1
+    squad=$(_remna_api_get_default_squad_uuid "$domain_url" "$token") || {
+        disable_graceful_ctrlc
+        return 1
+    }
+    _remna_api_add_inbound_to_squad "$domain_url" "$token" "$squad" "$inbound" || {
+        disable_graceful_ctrlc
+        return 1
+    }
 
-    ok "Панель и нода Remnawave подняты и зарегистрированы."
+    ok "Панель и нода Remnawave подняты и зарегистрированы. Базовая рабочая связка готова."
     echo
 
-    info "Теперь про HTTPS (TLS-сертификат)."
-    info "TLS = тот самый 'https://' и замочек в браузере: шифрует трафик и убирает красные предупреждения."
-    info "Я могу сейчас выписать бесплатные сертификаты Let's Encrypt для панели и страницы подписки."
+    info "Дополнительно можем сразу прикрутить HTTPS (TLS-сертификаты Let's Encrypt) для панели и подписки."
     echo
 
     local enable_tls
     local tls_enabled=false
-    enable_tls=$(safe_read "Включить HTTPS (TLS-сертификаты Let's Encrypt) для панели/подписки прямо сейчас? (Y/n): " "Y")
+    enable_tls=$(safe_read "Выписать и подключить сертификаты Let's Encrypt для доменов панели/подписки прямо сейчас? (Y/n): " "Y")
     if [[ "$enable_tls" == "Y" || "$enable_tls" == "y" ]]; then
-        if _remna_panel_node_setup_tls_acme "$PANEL_DOMAIN" "$SUB_DOMAIN" "$SELFSTEAL_DOMAIN"; then
-            tls_enabled=true
+        # Выпрашиваем или используем уже имеющиеся сертификаты для всех трёх доменов
+        if remna_handle_certificates "$PANEL_DOMAIN $SUB_DOMAIN $SELFSTEAL_DOMAIN" 0; then
+            info "Переключаю nginx.conf Remnawave на HTTPS-конфигурацию..."
+            if _remna_panel_node_write_nginx_tls "$PANEL_DOMAIN" "$SUB_DOMAIN" "$SELFSTEAL_DOMAIN"; then
+                info "Перезапускаю только фронтовой nginx-контейнер remnawave-nginx..."
+                if ( cd /opt/remnawave && run_cmd docker compose down remnawave-nginx && run_cmd docker compose up -d remnawave-nginx ); then
+                    tls_enabled=true
+                else
+                    warn "Не удалось корректно перезапустить remnawave-nginx. Проверь docker compose вручную."
+                fi
+            else
+                err "Не удалось собрать nginx.conf под HTTPS. Оставляю HTTP-конфигурацию."
+            fi
         else
-            warn "TLS не удалось настроить автоматически. Оставляем HTTP, можно будет разобраться вручную."
+            warn "Сертификаты выписать не удалось. Панель останется на HTTP (можно будет повторить позже)."
         fi
     else
-        info "Ок, HTTPS сейчас не трогаем. Всегда можно будет докрутить сертификаты позже."
+        info "Ок, HTTPS сейчас не трогаем. Можно оставить HTTP и прикрутить TLS позже."
     fi
 
     echo
@@ -1133,17 +937,17 @@ _remna_install_panel_and_node_wizard() {
         ok "Панель и подписка уже доступны по HTTPS:"
         info "Панель:      https://$PANEL_DOMAIN"
         info "Подписка:    https://$SUB_DOMAIN"
-        info "Selfsteal:   http://$SELFSTEAL_DOMAIN (маскировочный сайт, можно повесить свой TLS отдельно)"
+        info "Selfsteal:   http://$SELFSTEAL_DOMAIN (маскировочный сайт, TLS можно навесить отдельно при желании)"
     else
         info "Панель (HTTP):      http://$PANEL_DOMAIN"
         info "Подписка (HTTP):    http://$SUB_DOMAIN"
         info "Selfsteal (HTTP):   http://$SELFSTEAL_DOMAIN"
-        warn "HTTPS для панели/подписки пока не настроен. Можно использовать Cloudflare/прокси или запустить установку повторно с TLS."
+        warn "HTTPS для панели/подписки пока не настроен. Можно использовать Cloudflare/прокси или зайти в Remnawave-меню сертификатов и прикрутить TLS позже."
     fi
 
     echo
-    info "Логин суперадмина: $SUPERADMIN_USERNAME"
-    info "Пароль суперадмина: $SUPERADMIN_PASSWORD"
+    info "Логин суперадмина панели:  $SUPERADMIN_USERNAME"
+    info "Пароль суперадмина панели: $SUPERADMIN_PASSWORD"
     echo
     wait_for_enter || true
     disable_graceful_ctrlc
@@ -1151,48 +955,7 @@ _remna_install_panel_and_node_wizard() {
 
 # === ГЛАВНОЕ МЕНЮ МОДУЛЯ =====================================
 
-show_remnawave_panel_node_menu() {
-    enable_graceful_ctrlc
-    while true; do
-        clear
-        menu_header "Remnawave: Панель и Ноды (High-Load)"
-        echo
-        echo "   Тут ставим Remnawave под нагрузку: панель, панель+нода и отдельные ноды."
-        echo "   Ноды можно ставить как на этот сервер, так и на удалённые через Skynet."
-        echo
-        echo "   [1] Установить ТОЛЬКО панель на этот сервак"
-        echo "   [2] Установить ПАНЕЛЬ + НОДУ на этот сервак"
-        echo "   [3] Установить / раздать НОДЫ Remnawave (локально или через Skynet)"
-        echo
-        echo "   [b] 🔙 Назад"
-        echo "------------------------------------------------------"
-
-        local choice
-        choice=$(safe_read "Твой выбор: " "") || break
-
-        case "$choice" in
-            1)
-                # Панель-only установка на этот сервер (с TLS-флагом внутри мастера)
-                run_module remnawave_panel _remna_panel_install_wizard
-                ;;
-            2)
-                # Панель + нода на этот сервер (мастер из этого же модуля)
-                _remna_install_panel_and_node_wizard
-                ;;
-            3)
-                # Все сценарии нод (этот сервер / один удалённый / несколько удалённых)
-                if ! run_module remnawave_node show_remnawave_node_menu; then
-                    err "Модуль нод Remnawave сейчас не отработал. Обнови Решалу или проверь, что файл modules/remnawave_node.sh на месте."
-                    wait_for_enter || true
-                fi
-                ;;
-            [bB])
-                break
-                ;;
-            *)
-                err "Нет такого пункта, смотри внимательнее, босс."
-                ;;
-        esac
-    done
-    disable_graceful_ctrlc
-}
+# Ранее этот модуль содержал собственное меню panel+node. Сейчас точка
+# входа для Remnawave одна — `remnawave_menu.sh`, а установка
+# панель+нода вызывается напрямую через `_remna_install_panel_and_node_wizard`
+# из модуля `remnawave_install.sh`. Тут больше нет публичных меню.

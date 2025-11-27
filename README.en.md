@@ -8,12 +8,16 @@
 
 ![Reshala logo](https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/main/assets/reshala-logo.jpg)
 
-### WHAT IS THIS THING?
+### WHAT IS THIS TOOL?
 
-If you are tired of copy-pasting commands, digging through logs and guessing why the server is choking – meet **Reshala**.
-It is a Bash TUI framework that turns your VPN / server farm into something you control from one place instead of babysitting each box.
+Reshala is a simple console control panel that helps you keep your servers and fleet under control instead of fighting them one by one.
 
-Now with **SKYNET** fleet mode and **dashboard widgets**.
+It:
+- prepares a server “from zero to ready” (cleans junk, fixes the system, tunes basic network settings);
+- shows a clear dashboard with CPU/RAM/disk and channel usage;
+- has a **Skynet** mode to control many servers from a single screen;
+- installs and maintains the **Remnawave panel and its nodes** on one or many servers;
+- supports lightweight widgets and plugins so you can add your own tricks.
 
 ---
 
@@ -45,12 +49,12 @@ Skynet plugins live in `plugins/skynet_commands/*.sh` (see `GUIDE_SKYNET_WIDGETS
 
 #### [1] 🔧 SERVICE MENU (local maintenance)
 
-Everything that keeps the box fast and healthy:
+Everything that keeps the server stable and responsive:
 
-* **🚑 EOL rescue / upgrade:** fixes Ubuntu EOL mirrors (404) by switching to `old-releases.ubuntu.com`.
-* **🚀 Network "Turbo" (BBR + CAKE):** applies a tuned TCP stack via `/etc/sysctl.d/99-reshala-boost.conf`.
-* **🌐 IPv6 control:** enable/disable IPv6 cleanly via small sysctl snippets.
-* **⚡ Moscow speedtest:** runs official Ookla CLI and stores results so the dashboard can show node capacity.
+* **🚑 System fix / update:** helps revive older Ubuntu versions and gently repairs package issues.
+* **🚀 Network boost:** applies a ready-made set of network tweaks for smoother pings and better throughput.
+* **🌐 Extra network protocol control:** lets you safely turn an extra IP protocol on or off if it only causes trouble.
+* **⚡ Channel check to Moscow:** measures real bandwidth and roughly estimates how many users this server can handle.
 
 #### [2] 📜 QUICK LOGS
 
@@ -72,27 +76,22 @@ Docker loves to eat disk. This menu keeps it on a leash:
   * `docker inspect` and `docker stats --no-stream`,
   * manage networks, volumes and images.
 
-#### [4] 💿 INSTALL REMNAWAVE PANEL (High-Load)
+#### [4] 💿 REMNAWAVE: INSTALL & CONTROL
 
-This entry opens the **Remnawave hub**:
+This section groups all Remnawave workflows in one place.
 
-- **[1] Panel only** – installs Remnawave panel on this server, registers superadmin, creates a base config-profile and can immediately enable **HTTPS (TLS, Let’s Encrypt)** for panel + subscription domains.
-- **[2] Panel + Node** – installs panel and a first node on the same host:
-  - asks for three domains (panel, subscription, selfsteal node);
-  - validates DNS (with Cloudflare proxy checks; selfsteal must be DNS-only);
-  - brings up Docker stack, drives the panel via HTTP API (superadmin, config-profile, node, host, squad);
-  - can immediately enable **TLS for panel/subscription (ACME HTTP-01)**;
-  - selfsteal domain gets a masking site and can run HTTP or HTTPS.
-- **[3] Remnawave nodes** – module `remnawave_node.sh`:
-  - installs a node **on this server** for an existing panel;
-  - installs a node **on ONE remote server** via Skynet;
-  - distributes nodes **to MULTIPLE fleet servers** via Skynet;
-  - uses a **hidden Skynet plugin** for remote installs so users cannot call it directly from the generic fleet menu.
-- **[4] Manage local Remnawave install** – interactive menu:
-  - show Docker status;
-  - restart the stack;
-  - stream logs (`docker compose logs -f` with clean `CTRL+C` exit);
-  - show INSTALL_INFO (domains, superadmin login/password, service vars).
+- **[1] Panel only** – installs the Remnawave panel on this server, creates an admin account and can immediately enable secure https access.
+- **[2] Panel + node** – installs the panel and the first node on the same host: you enter three domains, Reshala checks they point to the right place, starts all services and prepares comfortable access to the panel and subscription page.
+- **[3] Remnawave nodes** – a dedicated wizard for nodes:
+  - a node **on this server** for an existing panel;
+  - a node **on ONE remote server** in the fleet via Skynet;
+  - nodes **on SEVERAL servers at once** in one go.
+  In every scenario you can choose how to attach the node to the panel’s internal squads: only to one “main” squad or to all of them at once.
+- **[4] Manage local Remnawave install** – a simple menu to:
+  - see service status;
+  - restart everything with one action;
+  - watch logs (with clean `CTRL+C` return);
+  - remind key data: domains, admin login/password and service info.
 
 #### [5] 🤖 INSTALL BEDALAGA BOT
 
@@ -158,18 +157,18 @@ apt update && apt install -y sudo && sudo reshala
 
 ---
 
-## 🧩 FOR DEVELOPERS
+## 🧩 IF YOU WANT TO HACK ON THE CODE
 
-If you want to extend the tool instead of just pressing buttons:
+This README is focused on users. If you are a developer and want to extend Reshala,
+check the docs in the `docs/` folder:
 
-- Start with `WARP.md` – it describes the architecture and **Project standards (do not break)**.
-- For writing new modules, read:
-  - `GUIDE_MODULES.md` – how to structure `modules/*.sh`, integrate menus, use `run_module`, `menu_header`, `info/ok/warn/err`, config helpers and logging.
-- For widgets and Skynet plugins, read:
-  - `GUIDE_SKYNET_WIDGETS.md` – how to write safe dashboard widgets and fleet commands.
-- Treat colors, `run_cmd` logic, `FLEET_DATABASE_FILE` format, `config/reshala.conf` layout and `self_update` behaviour as **contracts**. If you change them, update code and docs together.
+- `WARP.md` – overall architecture and project standards;
+- `GUIDE_MODULES.md` – how to write new menu modules properly;
+- `GUIDE_SKYNET_WIDGETS.md` – how to build your own widgets and Skynet commands;
+- `REMNAWAVE_INTERFACE.md` – how the Remnawave integration is wired inside the script.
 
-Short version of standards lives in the Russian README under **«📏 СТАНДАРТЫ (КРАТКО ДЛЯ КОНТРИБЬЮТОРОВ)»**.
+A short reminder of standards lives in the Russian README under
+**«📏 СТАНДАРТЫ (КРАТКО ДЛЯ КОНТРИБЬЮТОРОВ)»**.
 
 ---
 

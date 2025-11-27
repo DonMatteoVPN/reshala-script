@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.4445 - Skynet Framework    == #
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v2.4446 - Все еще тест    == #
 # ============================================================ #
 #
 # Точка входа. Этот скрипт — прораб. Он только отдаёт команды
@@ -17,7 +17,7 @@ while [ -h "$SOURCE" ]; do # Раскручиваем все симлинки
 done
 readonly SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
-readonly VERSION="v2.4445" # Версия фреймворка
+readonly VERSION="v2.4446" # Версия фреймворка
 
 # ============================================================ #
 #              ПОДГОТОВКА И ЗАГРУЗКА КОМПОНЕНТОВ               #
@@ -90,8 +90,8 @@ show_main_menu() {
         # [3] Управление Docker
         printf "   [3] 🐳 %b\n" "УПРАВЛЕНИЕ DOCKER ${C_GRAY}(Мусорка, Инфо)${C_RESET}"
         echo ""
-        # [4] Установка Панели
-        printf "   [4] 💿 %b\n" "УСТАНОВИТЬ ПАНЕЛЬ REMNAWAVE ${C_GRAY}(High-Load)${C_RESET}"
+        # [4] Remnawave: полный центр управления
+        printf "   [4] 💿 %b\n" "REMNAWAVE: УСТАНОВКА И УПРАВЛЕНИЕ ${C_GRAY}(Панель, Ноды, Шаблоны)${C_RESET}"
         # [5] Установка Бота
         printf "   [5] 🤖 %b\n" "УСТАНОВИТЬ БОТА BEDALAGA ${C_GRAY}(Coming Soon)${C_RESET}"
         echo ""
@@ -123,7 +123,7 @@ show_main_menu() {
             1) run_module local_care show_maintenance_menu ;;
             2) run_module diagnostics show_diagnostics_menu ;;
             3) run_module diagnostics show_docker_menu ;; # Теперь отдельное докер-меню
-            4) run_module remnawave_panel_node show_remnawave_panel_node_menu ;;
+            4) run_module remnawave_menu show_remnawave_centre_menu ;;
             5) printf_warning "Модуль установки бота в разработке." && sleep 2 ;;
             w|W) run_module widget_manager show_widgets_menu ;; # НАША НОВАЯ ФИЧА
             u|U) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_module self_update run_update; else printf_error "Обновлений нет."; fi ;;

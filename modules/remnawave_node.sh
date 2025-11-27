@@ -10,13 +10,27 @@
 #
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1
 
+# Подключаем общий модуль доменов/сертификатов Remnawave (если есть)
+if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/modules/remnawave_certs.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_certs.sh"
+fi
+
+# Шаблоны nginx-конфигов для разных сценариев Remnawave (ноды)
+if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/modules/remnawave_nginx.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_nginx.sh"
+fi
+
+# Шаблоны docker-compose для нод Remnawave
+if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/modules/remnawave_docker.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/modules/remnawave_docker.sh"
+fi
+
 # === ВНУТРЕННИЕ ХЕЛПЕРЫ (будут заполняться по плану) =========
 
-# Проверка, что домен резолвится и указывает на этот сервер (по мотивам donor check_domain)
-_remna_node_check_domain() {
-    local domain="$1"
-    local show_warning="${2:-true}"
-    local allow_cf_proxy="${3:-true}"
+# --- HTTP API хелперы для работы с панелью ---------------------
 
     local domain_ip=""
     local server_ip=""
@@ -125,7 +139,7 @@ _remna_node_api_request() {
     local token="${3:-}"
     local data="${4:-}"
 
-    # Имитация запроса через reverse‑proxy c HTTPS как в donor/make_api_request
+    # Имитация запроса через reverse‑proxy c HTTPS (как делает фронтовой nginx)
     local forwarded_for="$url"
     forwarded_for="${forwarded_for#http://}"
     forwarded_for="${forwarded_for#https://}"
@@ -446,53 +460,10 @@ _remna_node_write_runtime_compose_and_nginx() {
     local selfsteal_domain="$1"
 
     # docker-compose.yml для локальной ноды (HTTP-вариант, без TLS)
-    cat > /opt/remnanode/docker-compose.yml <<EOL
-services:
-  remnanode:
-    image: remnawave/node:latest
-    container_name: remnanode
-    hostname: remnanode
-    restart: always
-    network_mode: host
-    environment:
-      - NODE_PORT=2222
-      - SECRET_KEY="PUBLIC KEY FROM REMNAWAVE-PANEL"
-    volumes:
-      - /dev/shm:/dev/shm:rw
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
+    remna_docker_write_node_only "/opt/remnanode" "2222" || return 1
 
-  remnanode-nginx:
-    image: nginx:1.28
-    container_name: remnanode-nginx
-    hostname: remnanode-nginx
-    network_mode: host
-    restart: always
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - /var/www/html:/var/www/html:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    logging:
-      driver: 'json-file'
-      options:
-        max-size: '30m'
-        max-file: '5'
-EOL
-
-    # nginx.conf: пока только HTTP-маскировка на 80 порту
-    cat > /opt/remnanode/nginx.conf <<EOL
-server {
-    listen 80;
-    server_name $selfsteal_domain;
-
-    root /var/www/html;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
-}
-EOL
+    # nginx.conf для ноды (HTTP-маскировка) формируем через общий модуль nginx
+    remna_nginx_write_node_http "/opt/remnanode" "$selfsteal_domain" || return 1
 
     # Базовый маскировочный сайт, если ещё ничего нет
     if [[ ! -f /var/www/html/index.html ]]; then
@@ -639,39 +610,27 @@ EOF
     return 0
 }
 
-# --- TLS для локальной ноды (упрощённый ACME HTTP-01) ----------
+# --- TLS для локальной ноды ------------------------------------
 
 # Переписывает nginx.conf под HTTPS (Let's Encrypt cert в /etc/letsencrypt)
+# Учитываем, что сертификат может быть как под сам selfsteal-домен,
+# так и wildcard на базовый домен.
 _remna_node_write_nginx_tls() {
     local selfsteal_domain="$1"
 
-    cat > /opt/remnanode/nginx.conf <<EOL
-server {
-    listen 80;
-    server_name $selfsteal_domain;
+    local cert_domain="$selfsteal_domain"
+    if [[ ! -f "/etc/letsencrypt/live/$selfsteal_domain/fullchain.pem" ]]; then
+        local base
+        base=$(remna_extract_domain "$selfsteal_domain")
+        if [[ -n "$base" && -f "/etc/letsencrypt/live/$base/fullchain.pem" ]]; then
+            cert_domain="$base"
+        fi
+    fi
 
-    return 301 https://$selfsteal_domain\$request_uri;
+    remna_nginx_write_node_tls "/opt/remnanode" "$selfsteal_domain" "$cert_domain" || return 1
 }
 
-server {
-    listen 443 ssl http2;
-    server_name $selfsteal_domain;
-
-    ssl_certificate     /etc/letsencrypt/live/$selfsteal_domain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$selfsteal_domain/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-
-    root /var/www/html;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
-}
-EOL
-}
-
-# Запрос сертификата Let's Encrypt (ACME HTTP-01, certbot --standalone)
-_remna_node_setup_tls_acme() {
-    local selfsteal_domain="$1"
+# --- TLS renew hook для локальной ноды -------------------------
 
     info "Готовлю TLS-сертификат Let's Encrypt для selfsteal-домена $selfsteal_domain (ACME HTTP-01)..."
 
@@ -790,6 +749,7 @@ _remna_node_api_get_default_squad_uuid() {
     echo "$uuid"
 }
 
+# Привязка inbound к ОДНОМУ internal squad (текущая логика Решалы)
 _remna_node_api_add_inbound_to_squad() {
     local base_url="$1"   # Базовый URL панели
     local token="$2"
@@ -820,7 +780,7 @@ _remna_node_api_add_inbound_to_squad() {
     body=$(jq -n --arg uuid "$squad_uuid" --argjson inb "$merged" '{uuid:$uuid,inbounds:$inb}')
 
     local upd
-    upd=$(_remna_node_api_request "PATCH" "http://$domain_url/api/internal-squads" "$token" "$body") || true
+    upd=$(_remna_node_api_request "PATCH" "$base_url/api/internal-squads" "$token" "$body") || true
     if [[ -z "$upd" ]] || ! echo "$upd" | jq -e '.response.uuid' >/dev/null 2>&1; then
         err "Не удалось обновить squad (привязать inbound) в нодовом модуле."
         log "node update_squad response: $upd"
@@ -828,6 +788,88 @@ _remna_node_api_add_inbound_to_squad() {
     fi
 
     return 0
+}
+
+# Привязка inbound ко ВСЕМ internal squad (как в оригинальном add_node_to_panel)
+_remna_node_api_add_inbound_to_all_squads() {
+    local base_url="$1"   # Базовый URL панели
+    local token="$2"
+    local inbound_uuid="$3"
+
+    base_url="${base_url%/}"
+
+    local resp
+    resp=$(_remna_node_api_request "GET" "$base_url/api/internal-squads" "$token") || true
+    if [[ -z "$resp" ]]; then
+        err "Пустой ответ от /api/internal-squads (нодовый модуль, all squads)."
+        return 1
+    fi
+
+    local squads_raw
+    squads_raw=$(echo "$resp" | jq -r '.response.internalSquads[]?.uuid // empty' 2>/dev/null || true)
+    if [[ -z "$squads_raw" ]]; then
+        err "Не нашёл ни одной внутренней группы (internal squad) в панели (режим all squads)."
+        log "node internal-squads response (all): $resp"
+        return 1
+    fi
+
+    local updated_any=false
+    local squad_uuid existing existing_json merged body upd
+
+    while IFS= read -r squad_uuid; do
+        [[ -z "$squad_uuid" ]] && continue
+
+        existing=$(echo "$resp" | jq -r --arg uuid "$squad_uuid" '.response.internalSquads[] | select(.uuid == $uuid) | .inbounds[].uuid' 2>/dev/null || true)
+        if [[ -z "$existing" ]]; then
+            merged=$(jq -n --arg inb "$inbound_uuid" '[$inb]')
+        else
+            existing_json=$(echo "$existing" | jq -R . | jq -s .)
+            merged=$(jq -n --argjson ex "$existing_json" --arg inb "$inbound_uuid" '$ex + [$inb] | unique')
+        fi
+
+        body=$(jq -n --arg uuid "$squad_uuid" --argjson inb "$merged" '{uuid:$uuid,inbounds:$inb}')
+        upd=$(_remna_node_api_request "PATCH" "$base_url/api/internal-squads" "$token" "$body") || true
+        if [[ -z "$upd" ]] || ! echo "$upd" | jq -e '.response.uuid' >/dev/null 2>&1; then
+            warn "Не удалось обновить внутреннюю группу (internal squad) $squad_uuid при привязке inbound ко всем. Продолжаю со следующими."
+            log "node update_squad (all) response: $upd"
+            continue
+        fi
+
+        updated_any=true
+    done <<< "$squads_raw"
+
+    if [[ "$updated_any" != true ]]; then
+        err "Не удалось привязать inbound ни к одной внутренней группе (режим all squads)."
+        return 1
+    fi
+
+    return 0
+}
+
+# Унифицированный выбор: только одна служебная группа или все группы панели
+_remna_node_bind_inbound_with_choice() {
+    local base_url="$1"   # Базовый URL панели
+    local token="$2"
+    local inbound_uuid="$3"
+
+    base_url="${base_url%/}"
+
+    echo
+    echo "   Как подключить эту ноду к вашим внутренним сквадам в панели?"
+    echo "   [1] Аккуратный вариант: добавить ноду только в один внутренний сквад \"по умолчанию\" (подойдёт большинству)."
+    echo "   [2] Расширенный вариант: добавить ноду сразу во все внутренние сквады панели (нода будет видна везде)."
+    local mode
+    mode=$(safe_read "Твой выбор [1/2] (по умолчанию 1): " "1") || return 130
+
+    if [[ "$mode" == "2" ]]; then
+        info "Подключаю inbound этой ноды ко всем внутренним сквадам панели..."
+        _remna_node_api_add_inbound_to_all_squads "$base_url" "$token" "$inbound_uuid"
+    else
+        info "Подключаю inbound этой ноды только в один внутренний сквад по умолчанию..."
+        local squad
+        squad=$(_remna_node_api_get_default_squad_uuid "$base_url" "$token") || return 1
+        _remna_node_api_add_inbound_to_squad "$base_url" "$token" "$squad" "$inbound_uuid"
+    fi
 }
 
 # Нормализуем ввод API панели: принимаем URL или host[:port] и приводим к базовому URL
@@ -949,6 +991,116 @@ _remna_node_check_domain_dns() {
 # Мастер‑визард установки локальной ноды на этот сервер
 _remna_node_install_local_wizard() {
     menu_header "Нода Remnawave на этот сервак"
+}
+
+# Мастер‑визард: добавить НОДУ только в панель (без установки контейнеров)
+_remna_node_add_to_panel_wizard() {
+    enable_graceful_ctrlc
+    clear
+    menu_header "Добавить НОДУ в уже существующую панель"
+    echo
+    echo "   Этот режим НИЧЕГО не ставит на сервер, где запущена Решала."
+    echo "   Я только создам ноду через HTTP API панели и выдам SECRET_KEY,"
+    echo "   который потом нужно использовать на самом сервере-ноды."
+    echo
+
+    local PANEL_API PANEL_API_TOKEN SELFSTEAL_DOMAIN NODE_NAME
+    PANEL_API=$(safe_read "API панели (URL или host:port, например https://panel.example.com или 127.0.0.1:3000): " "127.0.0.1:3000") || {
+        disable_graceful_ctrlc
+        return 130
+    }
+
+    local base_url
+    base_url=$(_remna_node_check_panel_api "$PANEL_API") || {
+        disable_graceful_ctrlc
+        return 1
+    }
+    PANEL_API="$base_url"
+
+    PANEL_API_TOKEN=$(ask_non_empty "API токен панели (создай в разделе API Tokens): " "") || {
+        disable_graceful_ctrlc
+        return 130
+    }
+    if ! _remna_node_check_panel_api_with_token "$PANEL_API" "$PANEL_API_TOKEN"; then
+        disable_graceful_ctrlc
+        return 1
+    fi
+
+    SELFSTEAL_DOMAIN=$(ask_non_empty "Домен/адрес ноды (обычно selfsteal-домен, например node.example.com): " "") || {
+        disable_graceful_ctrlc
+        return 130
+    }
+    NODE_NAME=$(ask_non_empty "Имя ноды в панели (например Germany-1): " "") || {
+        disable_graceful_ctrlc
+        return 130
+    }
+
+    info "Проверяю, что домен хотя бы резолвится в IP..."
+    if ! _remna_node_check_domain_dns "$SELFSTEAL_DOMAIN"; then
+        disable_graceful_ctrlc
+        return 1
+    fi
+
+    info "Проверяю, что в панели ещё нет ноды с адресом $SELFSTEAL_DOMAIN..."
+    if ! _remna_node_api_check_node_domain "$PANEL_API" "$PANEL_API_TOKEN" "$SELFSTEAL_DOMAIN"; then
+        disable_graceful_ctrlc
+        return 1
+    fi
+
+    info "Генерю x25519-ключи для этой ноды через панель..."
+    local private_key
+    private_key=$(_remna_node_api_generate_x25519 "$PANEL_API" "$PANEL_API_TOKEN") || {
+        disable_graceful_ctrlc
+        return 1
+    }
+
+    info "Создаю config-profile под домен ноды..."
+    local cfg inbound
+    if ! read -r cfg inbound < <(_remna_node_api_create_config_profile "$PANEL_API" "$PANEL_API_TOKEN" "Node-$NODE_NAME" "$SELFSTEAL_DOMAIN" "$private_key"); then
+        disable_graceful_ctrlc
+        return 1
+    fi
+
+    info "Создаю НОДУ и host в панели..."
+    if ! _remna_node_api_create_node "$PANEL_API" "$PANEL_API_TOKEN" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "$NODE_NAME"; then
+        disable_graceful_ctrlc
+        return 1
+    fi
+    if ! _remna_node_api_create_host "$PANEL_API" "$PANEL_API_TOKEN" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "$NODE_NAME"; then
+        disable_graceful_ctrlc
+        return 1
+    fi
+
+    # Выбор: только одна служебная группа или все группы панели
+    if ! _remna_node_bind_inbound_with_choice "$PANEL_API" "$PANEL_API_TOKEN" "$inbound"; then
+        disable_graceful_ctrlc
+        return 1
+    fi
+
+    info "Получаю SECRET_KEY для этой ноды (для docker-compose/окружения на сервере-ноды)..."
+    local pubkey
+    pubkey=$(_remna_node_api_get_public_key "$PANEL_API" "$PANEL_API_TOKEN") || {
+        disable_graceful_ctrlc
+        return 1
+    }
+
+    ok "Нода успешно добавлена в панель Remnawave."
+    echo
+    info "Адрес ноды в панели:   $SELFSTEAL_DOMAIN"
+    info "Имя ноды в панели:     $NODE_NAME"
+    echo
+    info "SECRET_KEY для ноды (вставь в окружение/compose на самом сервере-ноды):"
+    echo "   $pubkey"
+    echo
+    info "Дальше на самом сервере-ноды нужно развернуть контейнеры Remnawave-ноды,"
+    info "указав домен $SELFSTEAL_DOMAIN и прописав SECRET_KEY именно этим значением."
+    echo
+    wait_for_enter || true
+    disable_graceful_ctrlc
+}
+
+_remna_node_install_local_wizard() {
+    menu_header "Нода Remnawave на этот сервак"
     echo
     echo "   Ставим НОДУ для уже существующей панели."
     echo "   Панель может быть тут или на другом сервере."
@@ -978,7 +1130,7 @@ _remna_node_install_local_wizard() {
 
     info "Проверяю, что selfsteal-домен ноды реально смотрит на этот сервер..."
     local rc
-    _remna_node_check_domain "$SELFSTEAL_DOMAIN" true false
+    remna_check_domain "$SELFSTEAL_DOMAIN" true false
     rc=$?
     if [[ $rc -eq 2 ]]; then
         err "Установка ноды прервана по твоему запросу на проверке домена."
@@ -1002,10 +1154,10 @@ _remna_node_install_local_wizard() {
     _remna_node_api_create_node "$domain_url" "$PANEL_API_TOKEN" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "$NODE_NAME" || return 1
     _remna_node_api_create_host "$domain_url" "$PANEL_API_TOKEN" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "$NODE_NAME" || return 1
 
-    info "Прописываю inbound ноды в дефолтный squad..."
-    local squad
-    squad=$(_remna_node_api_get_default_squad_uuid "$domain_url" "$PANEL_API_TOKEN") || return 1
-    _remna_node_api_add_inbound_to_squad "$domain_url" "$PANEL_API_TOKEN" "$squad" "$inbound" || return 1
+    # Выбор: только одна служебная группа или все группы панели
+    if ! _remna_node_bind_inbound_with_choice "$domain_url" "$PANEL_API_TOKEN" "$inbound"; then
+        return 1
+    fi
 
     ok "Нода зарегистрирована в панели Remnawave."
 
@@ -1028,10 +1180,23 @@ _remna_node_install_local_wizard() {
     local tls_choice
     tls_choice=$(safe_read "Включить HTTPS (TLS-сертификат Let's Encrypt) для этого домена прямо сейчас? (Y/n): " "y")
     if [[ "$tls_choice" == "y" || "$tls_choice" == "Y" ]]; then
-        if _remna_node_setup_tls_acme "$SELFSTEAL_DOMAIN"; then
-            ok "TLS для ноды получен, nginx сконфигурен на 443."
+        # Для локальной ноды форсируем HTTP-01 под конкретный selfsteal-домен,
+        # без wildcard, чтобы сертификат чётко привязывался к этой ноде.
+        if remna_handle_certificates "$SELFSTEAL_DOMAIN" 2; then
+            info "Переключаю nginx локальной ноды на HTTPS-конфигурацию..."
+            if _remna_node_write_nginx_tls "$SELFSTEAL_DOMAIN"; then
+                info "Перезапускаю nginx-контейнер ноды remnanode-nginx..."
+                if ( cd /opt/remnanode && run_cmd docker compose down remnanode-nginx && run_cmd docker compose up -d remnanode-nginx ); then
+                    _remna_node_setup_tls_renew "$SELFSTEAL_DOMAIN" || warn "Не удалось автоматически настроить renew_hook/cron для TLS-ноды, проверь /etc/letsencrypt/renewal/$SELFSTEAL_DOMAIN.conf."
+                    ok "TLS для ноды получен, nginx слушает 443 с сертификатом Let's Encrypt."
+                else
+                    warn "Не удалось корректно перезапустить remnanode-nginx. Проверь docker compose вручную."
+                fi
+            else
+                err "Не удалось собрать nginx.conf под HTTPS для ноды, оставляю HTTP-вариант."
+            fi
         else
-            warn "TLS для ноды получить не удалось, оставляю HTTP-режим. Можно будет заняться позже вручную."
+            warn "TLS для ноды получить не удалось (certbot/Let's Encrypt). Оставляю HTTP-режим, можно будет повторить позже."
         fi
     else
         warn "Ок, оставляем пока только HTTP без сертификата. Если что, https://$SELFSTEAL_DOMAIN можно будет докрутить позже."
@@ -1123,10 +1288,11 @@ _remna_node_install_skynet_one() {
     _remna_node_api_create_node "$domain_url" "$PANEL_API_TOKEN" "$cfg" "$inbound" "$SELFSTEAL_DOMAIN" "$NODE_NAME" || { wait_for_enter; return; }
     _remna_node_api_create_host "$domain_url" "$PANEL_API_TOKEN" "$inbound" "$SELFSTEAL_DOMAIN" "$cfg" "$NODE_NAME" || { wait_for_enter; return; }
 
-    info "Прописываю inbound ноды в дефолтный squad..."
-    local squad
-    squad=$(_remna_node_api_get_default_squad_uuid "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
-    _remna_node_api_add_inbound_to_squad "$domain_url" "$PANEL_API_TOKEN" "$squad" "$inbound" || { wait_for_enter; return; }
+    # Выбор: только одна служебная группа или все группы панели
+    if ! _remna_node_bind_inbound_with_choice "$domain_url" "$PANEL_API_TOKEN" "$inbound"; then
+        wait_for_enter
+        return
+    fi
 
     ok "Нода зарегистрирована в панели Remnawave (HTTP-конфиг готов). Теперь получим ключ и выберем удалённый сервак из флота."
 
@@ -1230,9 +1396,18 @@ _remna_node_install_skynet_many() {
 
     local domain_url="$PANEL_API"
 
-    info "Читаю дефолтный squad в панели один раз, чтобы вешать туда все новые ноды."
-    local squad
-    squad=$(_remna_node_api_get_default_squad_uuid "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
+    echo
+    info "Как подключать ВСЕ создаваемые ниже ноды к внутренним сквадам в панели?"
+    echo "   [1] Аккуратный вариант: каждая нода только в один внутренний сквад \"по умолчанию\"."
+    echo "   [2] Расширенный вариант: каждую ноду сразу во все внутренние сквады панели."
+    local MULTI_SQUAD_MODE
+    MULTI_SQUAD_MODE=$(safe_read "Твой выбор для всех нод [1/2] (по умолчанию 1): " "1") || { wait_for_enter; return; }
+
+    local squad=""
+    if [[ "$MULTI_SQUAD_MODE" != "2" ]]; then
+        info "Читаю внутренний сквад по умолчанию в панели один раз, чтобы вешать туда все новые ноды."
+        squad=$(_remna_node_api_get_default_squad_uuid "$domain_url" "$PANEL_API_TOKEN") || { wait_for_enter; return; }
+    fi
 
     # Рисуем список серваков из флота
     local servers=()
@@ -1326,10 +1501,18 @@ _remna_node_install_skynet_many() {
             continue
         fi
 
-        info "Прописываю inbound ноды '$NODE_NAME' в дефолтный squad..."
-        if ! _remna_node_api_add_inbound_to_squad "$domain_url" "$PANEL_API_TOKEN" "$squad" "$inbound"; then
-            warn "Не смог привязать inbound к squad для '$name', пропускаю."
-            continue
+        if [[ "$MULTI_SQUAD_MODE" == "2" ]]; then
+            info "Подключаю inbound ноды '$NODE_NAME' ко всем внутренним сквадам панели..."
+            if ! _remna_node_api_add_inbound_to_all_squads "$domain_url" "$PANEL_API_TOKEN" "$inbound"; then
+                warn "Не смог привязать inbound ко всем группам для '$name', пропускаю."
+                continue
+            fi
+        else
+            info "Подключаю inbound ноды '$NODE_NAME' к одному внутреннему скваду по умолчанию..."
+            if ! _remna_node_api_add_inbound_to_squad "$domain_url" "$PANEL_API_TOKEN" "$squad" "$inbound"; then
+                warn "Не смог привязать inbound к служебной группе для '$name', пропускаю."
+                continue
+            fi
         fi
 
         info "Тяну публичный ключ ноды из панели (SECRET_KEY) для '$name'..."

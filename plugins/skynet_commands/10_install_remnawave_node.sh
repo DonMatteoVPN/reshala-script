@@ -354,7 +354,8 @@ main() {
     fi
     local node_port secret_key
     node_port="${NODE_PORT:-2222}"
-    secret_key="${NODE_SECRET_KEY:- PUBLIC KEY FROM REMNAWAVE-PANEL}"
+    # Если ключ не передан, используем тот же плейсхолдер, что и в локальном шаблоне ноды
+    secret_key="${NODE_SECRET_KEY:-PUBLIC KEY FROM REMNAWAVE-PANEL}"
 
     log_info "Готовлю /opt/remnanode на удалённом сервере для домена ${SELFSTEAL_DOMAIN} (HTTP-режим)..."
     write_runtime_files "$SELFSTEAL_DOMAIN" "$node_port" "$secret_key"
