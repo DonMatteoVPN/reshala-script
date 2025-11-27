@@ -26,7 +26,7 @@ It:
 When you start the script you get a **control panel**, not a black hole:
 
 * **Visuals:** CPU / RAM / Disk usage bars so you instantly see bottlenecks.
-* **Honest math:** can run official Ookla speedtest and **estimate how many real users your node can handle**. In agent mode (SKYNET_MODE=1) CPU load is also calculated correctly (no more “stuck at 100%”).
+* **Honest math:** can run official Ookla speedtest and **estimate how many real users your node can handle**. In agent mode (SKYNET_MODE=1) CPU load is also calculated correctly.
 * **Status:** kernel version, virtualization, ping, country, panel/node/bot status.
 * **WIDGETS:** small, toggleable widgets (BTC price, Docker state, network activity, "server mood"), rendered from `plugins/dashboard_widgets/*`.
 
